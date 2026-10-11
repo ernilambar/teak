@@ -14,8 +14,8 @@ use crate::{
     CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, GoToLine, Hide,
     HideOthers, InsertLineAbove, InsertLineBelow, JumpToTab, MoveLineDown, MoveLineUp, NewFile,
     NextTab, OpenFile, OpenSettings, PreviousTab, Quit, Refresh, ReopenClosedTab, RevealInFinder,
-    SaveAll, SaveFile, SaveFileAs, SelectLine, ToggleLineComment, ToggleSidebar, ToggleWhitespace,
-    ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    SaveAll, SaveFile, SaveFileAs, SelectLine, ToggleLineComment, ToggleMarkdownPreview,
+    ToggleSidebar, ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -54,6 +54,7 @@ fn app_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd--", ZoomOut, None),
         KeyBinding::new("cmd-0", ZoomReset, None),
         KeyBinding::new("alt-cmd-i", ToggleWhitespace, None),
+        KeyBinding::new("cmd-shift-v", ToggleMarkdownPreview, None),
         KeyBinding::new("cmd-shift-t", ReopenClosedTab, None),
         KeyBinding::new("cmd-shift-]", NextTab, None),
         KeyBinding::new("cmd-shift-[", PreviousTab, None),
@@ -134,7 +135,7 @@ mod tests {
     fn every_binding_parses() {
         // `KeyBinding::new` panics on an invalid keystroke, so building the
         // lists is itself the assertion that every chord is well-formed.
-        assert_eq!(app_bindings().len(), 35);
+        assert_eq!(app_bindings().len(), 36);
         assert_eq!(editor_bindings().len(), 15);
     }
 
@@ -156,6 +157,7 @@ mod tests {
         // it also fires while an editor has focus.
         for (keys, action) in [
             ("alt-cmd-i", "ToggleWhitespace"),
+            ("cmd-shift-v", "ToggleMarkdownPreview"),
             ("alt-cmd-w", "CloseAllFolders"),
             ("alt-cmd-r", "RevealInFinder"),
             ("alt-cmd-c", "CopyFilePath"),

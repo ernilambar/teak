@@ -6,10 +6,11 @@
 //! reading the entity there would re-enter its borrow. The set closures capture
 //! a `WeakEntity` and run on interaction, when the entity is free to update.
 //!
-//! Word wrap and whitespace need a `Window` to push their new state onto the
-//! editors that are already open, so those two are built with a custom field
-//! whose render closure is handed one. Everything else persists through the
-//! window-free setters and reports a write failure in an inline banner.
+//! Word wrap, whitespace and the other editor display switches need a `Window`
+//! to push their new state onto the editors that are already open, so they are
+//! built with a custom field whose render closure is handed one. Everything
+//! else persists through the window-free setters and reports a write failure in
+//! an inline banner.
 
 use std::rc::Rc;
 
@@ -24,10 +25,10 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::settings::{
-    DEFAULT_FONT_WEIGHT, DEFAULT_ICON_STYLE, DEFAULT_TAB_SIZE, DEFAULT_THEME, MAX_FONT_SIZE,
-    MIN_FONT_SIZE, save_font_family, save_font_size, save_font_weight, save_hard_tabs,
-    save_icon_color, save_show_whitespace, save_soft_wrap, save_tab_icons, save_tab_size,
-    save_theme,
+    DEFAULT_FONT_WEIGHT, DEFAULT_ICON_STYLE, DEFAULT_TAB_SIZE, DEFAULT_THEME, EditorSettings,
+    MAX_FONT_SIZE, MIN_FONT_SIZE, save_font_family, save_font_size, save_font_weight,
+    save_hard_tabs, save_icon_color, save_show_whitespace, save_soft_wrap, save_tab_icons,
+    save_tab_size, save_theme,
 };
 
 use super::TinytextApp;
@@ -199,6 +200,83 @@ impl TinytextApp {
         )
         .description("Render spaces and tabs as visible characters.");
 
+        let flag_item =
+            |label: &'static str,
+             description: &'static str,
+             id: &'static str,
+             key: &'static str,
+             checked: bool,
+             field: fn(&mut EditorSettings) -> &mut Option<bool>| {
+                SettingItem::new(
+                    label,
+                    window_switch(
+                        id,
+                        checked,
+                        weak.clone(),
+                        Rc::new(move |this, value, window, cx| {
+                            this.set_editor_flag(key, field, value, window, cx)
+                        }),
+                    ),
+                )
+                .description(description)
+            };
+        let line_numbers_item = flag_item(
+            "Line Numbers",
+            "Show line numbers in the gutter.",
+            "line-numbers-switch",
+            "line_numbers",
+            editor.line_numbers(),
+            |e| &mut e.line_numbers,
+        );
+        let indent_guides_item = flag_item(
+            "Indent Guides",
+            "Draw vertical lines at each indentation level.",
+            "indent-guides-switch",
+            "indent_guides",
+            editor.indent_guides(),
+            |e| &mut e.indent_guides,
+        );
+        let folding_item = flag_item(
+            "Code Folding",
+            "Show fold controls in the gutter.",
+            "folding-switch",
+            "folding",
+            editor.folding(),
+            |e| &mut e.folding,
+        );
+        let indent_wrapped_item = flag_item(
+            "Indent Wrapped Lines",
+            "Align wrapped lines with the start of the line.",
+            "indent-wrapped-lines-switch",
+            "indent_wrapped_lines",
+            editor.indent_wrapped_lines(),
+            |e| &mut e.indent_wrapped_lines,
+        );
+        let scroll_beyond_item = flag_item(
+            "Scroll Past Last Line",
+            "Allow scrolling the last line up the editor.",
+            "scroll-beyond-last-line-switch",
+            "scroll_beyond_last_line",
+            editor.scroll_beyond_last_line(),
+            |e| &mut e.scroll_beyond_last_line,
+        );
+        let auto_close_item = flag_item(
+            "Auto Close Brackets",
+            "Insert the closing bracket or quote as you type.",
+            "auto-close-switch",
+            "auto_close",
+            editor.auto_close(),
+            |e| &mut e.auto_close,
+        );
+        let smart_indent_item = flag_item(
+            "Smart Indent",
+            "Indent new lines based on the language.",
+            "smart-indent-switch",
+            "smart_indent",
+            editor.smart_indent(),
+            |e| &mut e.smart_indent,
+        );
+
         let theme_weak = weak.clone();
         let theme_value_owned = theme_value.clone();
         let theme_item = SettingItem::new(
@@ -259,12 +337,23 @@ impl TinytextApp {
                     font_size_item,
                     font_weight_item,
                 ]),
+                SettingGroup::new().title("Indentation").items(vec![
+                    tab_size_item,
+                    hard_tabs_item,
+                    smart_indent_item,
+                ]),
+                SettingGroup::new().title("Display").items(vec![
+                    soft_wrap_item,
+                    indent_wrapped_item,
+                    whitespace_item,
+                    line_numbers_item,
+                    indent_guides_item,
+                    folding_item,
+                    scroll_beyond_item,
+                ]),
                 SettingGroup::new()
-                    .title("Indentation")
-                    .items(vec![tab_size_item, hard_tabs_item]),
-                SettingGroup::new()
-                    .title("Display")
-                    .items(vec![soft_wrap_item, whitespace_item]),
+                    .title("Editing")
+                    .items(vec![auto_close_item]),
             ]),
             SettingPage::new("Appearance").groups(vec![
                 SettingGroup::new().title("Theme").items(vec![theme_item]),

@@ -13,9 +13,10 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _,
     command::CommandState,
-    input::{EditorState, TabSize},
+    input::{EditorState, TabSize, WrappingIndent},
     link::Link,
     notification::Notification,
+    text::TextViewState,
 };
 use gpui_kit::*;
 
@@ -24,14 +25,31 @@ use crate::paths::{DirEntry, read_dir};
 use crate::session::{SessionState, session_path};
 use crate::settings::{
     DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, font_family_issue,
-    load_settings, save_font_size, save_show_whitespace, save_soft_wrap, save_theme, settings_path,
+    load_settings, save_editor_flag, save_font_size, save_show_whitespace, save_soft_wrap,
+    save_theme, settings_path,
 };
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
 use crate::{
     About, CheckForUpdates, CopyFilePath, CopyRelativePath, InstallCli, JumpToTab, NextTab,
     OpenSettings, PreviousTab, Quit, Refresh, ReopenClosedTab, RevealInFinder, SetTheme,
-    ToggleSidebar, ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineNumbers, ToggleMarkdownPreview,
+    ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
+
+/// Maps `editor.indent_wrapped_lines` onto the engine's wrapping indent.
+pub(super) fn wrapping_indent(editor: &EditorSettings) -> WrappingIndent {
+    if editor.indent_wrapped_lines() {
+        WrappingIndent::Same
+    } else {
+        WrappingIndent::None
+    }
+}
+
+/// Maps `editor.scroll_beyond_last_line` onto the engine's trailing rows:
+/// `None` keeps its default space, `Some(0)` stops at the last line.
+pub(super) fn scroll_beyond_last_line(editor: &EditorSettings) -> Option<usize> {
+    (!editor.scroll_beyond_last_line()).then_some(0)
+}
 
 /// The app name shown in the window title, before the focused tab's path.
 pub(crate) const WINDOW_TITLE: &str = "Tinytext";
@@ -45,7 +63,20 @@ struct OpenTab {
     language_override: bool,
     dirty: bool,
     editor: Entity<EditorState>,
+    /// The rendered view shown in place of the editor while Markdown preview
+    /// is on. Kept in sync with the buffer by the change subscription.
+    preview: Option<Entity<TextViewState>>,
     _subscriptions: Vec<Subscription>,
+}
+
+impl OpenTab {
+    /// The preview to show instead of the editor. A tab whose language was
+    /// switched away from Markdown falls back to the editor.
+    fn previewing(&self) -> Option<&Entity<TextViewState>> {
+        self.preview
+            .as_ref()
+            .filter(|_| self.language.as_ref() == "Markdown")
+    }
 }
 
 /// A pending Cut/Copy of a single tree entry, applied on the next Paste.
@@ -498,6 +529,104 @@ impl TinytextApp {
         cx.notify();
     }
 
+    fn on_toggle_line_numbers(
+        &mut self,
+        _: &ToggleLineNumbers,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let enabled = !self.settings.editor.line_numbers();
+        self.set_editor_flag("line_numbers", |e| &mut e.line_numbers, enabled, window, cx);
+    }
+
+    fn on_toggle_indent_guides(
+        &mut self,
+        _: &ToggleIndentGuides,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let enabled = !self.settings.editor.indent_guides();
+        self.set_editor_flag(
+            "indent_guides",
+            |e| &mut e.indent_guides,
+            enabled,
+            window,
+            cx,
+        );
+    }
+
+    fn on_toggle_folding(
+        &mut self,
+        _: &ToggleFolding,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let enabled = !self.settings.editor.folding();
+        self.set_editor_flag("folding", |e| &mut e.folding, enabled, window, cx);
+    }
+
+    fn on_toggle_auto_close(
+        &mut self,
+        _: &ToggleAutoClose,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let enabled = !self.settings.editor.auto_close();
+        self.set_editor_flag("auto_close", |e| &mut e.auto_close, enabled, window, cx);
+    }
+
+    fn on_toggle_smart_indent(
+        &mut self,
+        _: &ToggleSmartIndent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let enabled = !self.settings.editor.smart_indent();
+        self.set_editor_flag("smart_indent", |e| &mut e.smart_indent, enabled, window, cx);
+    }
+
+    /// Swaps the active Markdown tab between its editor and a rendered preview.
+    /// Other languages are left alone.
+    fn on_toggle_markdown_preview(
+        &mut self,
+        _: &ToggleMarkdownPreview,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ix) = self.active_tab else {
+            return;
+        };
+        let Some(tab) = self.tabs.get_mut(ix) else {
+            return;
+        };
+        if tab.previewing().is_some() {
+            tab.preview = None;
+        } else if tab.language.as_ref() == "Markdown" {
+            let text = tab.editor.read(cx).value();
+            tab.preview = Some(cx.new(|cx| TextViewState::markdown(&text, cx)));
+        } else {
+            return;
+        }
+        self.focus_tab(ix, window, cx);
+        cx.notify();
+    }
+
+    /// Sets the on/off editor option `editor.<key>`, pushes it onto open
+    /// editors, and persists it.
+    pub(super) fn set_editor_flag(
+        &mut self,
+        key: &str,
+        field: fn(&mut EditorSettings) -> &mut Option<bool>,
+        enabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        *field(&mut self.settings.editor) = Some(enabled);
+        self.apply_editor_options_to_all(window, cx);
+        self.after_setting_write(save_editor_flag(key, enabled), window, cx);
+        cx.notify();
+    }
+
     /// Applies an appearance picked from the Appearance menu or the command
     /// palette, persisting it and refreshing the menu's check mark.
     fn on_set_theme(&mut self, action: &SetTheme, window: &mut Window, cx: &mut Context<Self>) {
@@ -626,22 +755,28 @@ impl TinytextApp {
         }
     }
 
-    /// Pushes the currently active settings' soft-wrap, whitespace and tab-size
-    /// onto every open editor, so a live toggle or a settings reload re-applies
-    /// without reopening any tab.
+    /// Pushes the currently active editor settings onto every open editor, so
+    /// a live toggle or a settings reload re-applies without reopening any tab.
     fn apply_editor_options_to_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let wrap = self.settings.editor.soft_wrap();
-        let whitespace = self.settings.editor.show_whitespace();
+        let editor = self.settings.editor.clone();
         let tab = TabSize {
-            tab_size: self.settings.editor.tab_size(),
-            hard_tabs: self.settings.editor.hard_tabs(),
+            tab_size: editor.tab_size(),
+            hard_tabs: editor.hard_tabs(),
         };
         let editors: Vec<_> = self.tabs.iter().map(|tab| tab.editor.clone()).collect();
-        for editor in editors {
-            editor.update(cx, |state, cx| {
-                state.set_soft_wrap(wrap, window, cx);
-                state.set_show_whitespaces(whitespace, window, cx);
+        for state in editors {
+            state.update(cx, |state, cx| {
+                state.set_soft_wrap(editor.soft_wrap(), window, cx);
+                state.set_show_whitespaces(editor.show_whitespace(), window, cx);
                 state.set_tab_size(tab, cx);
+                state.set_line_number(editor.line_numbers(), window, cx);
+                state.set_indent_guides(editor.indent_guides(), window, cx);
+                state.set_folding(editor.folding(), window, cx);
+                state.set_auto_close(editor.auto_close(), window, cx);
+                state.set_smart_indent(editor.smart_indent(), window, cx);
+                state.set_wrapping_indent(wrapping_indent(&editor), window, cx);
+                state.set_scroll_beyond_last_line(scroll_beyond_last_line(&editor), window, cx);
+                state.set_cursor_surrounding_lines(editor.cursor_surrounding_lines, window, cx);
             });
         }
     }
@@ -956,6 +1091,12 @@ impl Render for TinytextApp {
             .on_action(cx.listener(Self::on_zoom_reset))
             .on_action(cx.listener(Self::on_toggle_word_wrap))
             .on_action(cx.listener(Self::on_toggle_whitespace))
+            .on_action(cx.listener(Self::on_toggle_line_numbers))
+            .on_action(cx.listener(Self::on_toggle_indent_guides))
+            .on_action(cx.listener(Self::on_toggle_folding))
+            .on_action(cx.listener(Self::on_toggle_auto_close))
+            .on_action(cx.listener(Self::on_toggle_smart_indent))
+            .on_action(cx.listener(Self::on_toggle_markdown_preview))
             .on_action(cx.listener(Self::on_set_theme))
             .on_action(cx.listener(Self::on_next_tab))
             .on_action(cx.listener(Self::on_previous_tab))

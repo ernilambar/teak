@@ -40,11 +40,20 @@ impl TinytextApp {
                     tab_size: self.settings.editor.tab_size(),
                     hard_tabs: self.settings.editor.hard_tabs(),
                 })
+                .line_number(self.settings.editor.line_numbers())
+                .indent_guides(self.settings.editor.indent_guides())
+                .folding(self.settings.editor.folding())
+                .auto_close(self.settings.editor.auto_close())
+                .smart_indent(self.settings.editor.smart_indent())
+                .wrapping_indent(super::wrapping_indent(&self.settings.editor))
+                .scroll_beyond_last_line(super::scroll_beyond_last_line(&self.settings.editor))
+                .cursor_surrounding_lines(self.settings.editor.cursor_surrounding_lines)
         });
 
         let change_subscription = cx.subscribe(&editor, |this, editor, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.set_dirty(editor.entity_id(), true, cx);
+                this.sync_preview(&editor, cx);
             }
         });
         let cursor_subscription = cx.observe(&editor, |this, editor, cx| {
@@ -58,6 +67,7 @@ impl TinytextApp {
             language_override: false,
             dirty: false,
             editor: editor.clone(),
+            preview: None,
             _subscriptions: vec![change_subscription, cursor_subscription],
         });
         self.active_tab = Some(self.tabs.len() - 1);
@@ -95,7 +105,7 @@ impl TinytextApp {
         self.reveal_active_tab();
         if let Some(tab) = self.tabs.get(ix) {
             let editor = tab.editor.clone();
-            editor.update(cx, |state, cx| state.focus(window, cx));
+            self.focus_tab(ix, window, cx);
             let position = editor.read(cx).cursor_position();
             self.cursor_line = position.line as usize + 1;
             self.cursor_col = position.character as usize + 1;
@@ -140,8 +150,8 @@ impl TinytextApp {
         self.context_tab = self.context_tab.map(|ix| remap_moved_index(ix, from, to));
         self.reveal_active_tab();
 
-        if let Some(tab) = self.active_tab.and_then(|ix| self.tabs.get(ix)) {
-            tab.editor.update(cx, |state, cx| state.focus(window, cx));
+        if let Some(ix) = self.active_tab {
+            self.focus_tab(ix, window, cx);
         }
         self.save_session();
         cx.notify();
@@ -357,8 +367,8 @@ impl TinytextApp {
         };
         self.reveal_active_tab();
 
-        if let Some(tab) = self.active_tab.and_then(|ix| self.tabs.get(ix)) {
-            tab.editor.update(cx, |state, cx| state.focus(window, cx));
+        if let Some(ix) = self.active_tab {
+            self.focus_tab(ix, window, cx);
         } else {
             // The closed editor held focus; without it no window action (About,
             // Quit, New File…) is reachable from the menu bar.
@@ -366,6 +376,34 @@ impl TinytextApp {
         }
         self.save_session();
         cx.notify();
+    }
+
+    /// Focuses tab `ix`'s editor, or the window root while the tab shows a
+    /// preview: a focused editor that is not rendered leaves no window action
+    /// reachable.
+    pub(super) fn focus_tab(&self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(ix) else {
+            return;
+        };
+        if tab.previewing().is_some() {
+            self.focus_handle.focus(window, cx);
+        } else {
+            tab.editor.update(cx, |state, cx| state.focus(window, cx));
+        }
+    }
+
+    /// Pushes `editor`'s text into its tab's preview, if one is open.
+    fn sync_preview(&mut self, editor: &Entity<EditorState>, cx: &mut Context<Self>) {
+        let Some(preview) = self
+            .tabs
+            .iter()
+            .find(|tab| tab.editor.entity_id() == editor.entity_id())
+            .and_then(|tab| tab.preview.clone())
+        else {
+            return;
+        };
+        let text = editor.read(cx).value();
+        preview.update(cx, |state, cx| state.set_text(&text, cx));
     }
 
     pub(super) fn set_dirty(&mut self, id: EntityId, dirty: bool, cx: &mut Context<Self>) {
