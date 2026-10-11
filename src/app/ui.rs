@@ -18,6 +18,7 @@ use gpui_kit::component::{
     scroll::ScrollableElement as _,
     spinner::Spinner,
     status_bar::StatusBar,
+    text::TextView,
     tooltip::Tooltip,
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -811,7 +812,22 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        match ix.and_then(|ix| self.tabs.get(ix)) {
+        let tab = ix.and_then(|ix| self.tabs.get(ix));
+        if let Some(preview) = tab.and_then(|tab| tab.previewing()) {
+            return div()
+                .size_full()
+                .bg(cx.theme().background)
+                .child(
+                    TextView::new(preview)
+                        .scrollable(true)
+                        .selectable(true)
+                        .size_full()
+                        .px_6()
+                        .py_4(),
+                )
+                .into_any_element();
+        }
+        match tab {
             Some(tab) => {
                 let has_path = tab.path.is_some();
                 div()

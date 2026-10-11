@@ -20,8 +20,9 @@ use crate::{
     CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, GoToLine,
     InsertLineAbove, InsertLineBelow, MoveLineDown, MoveLineUp, NewFile, NextTab, OpenFile,
     OpenSettings, PreviousTab, Refresh, ReopenClosedTab, RevealInFinder, SaveAll, SaveFile,
-    SaveFileAs, SelectLine, SetTheme, ToggleLineComment, ToggleSidebar, ToggleWhitespace,
-    ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    SaveFileAs, SelectLine, SetTheme, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
+    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
+    ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 
 use super::TinytextApp;
@@ -78,6 +79,12 @@ fn palette_groups() -> Vec<CommandGroup> {
             item("Actual Size", Box::new(ZoomReset)),
             item("Toggle Word Wrap", Box::new(ToggleWordWrap)),
             item("Toggle Invisible Characters", Box::new(ToggleWhitespace)),
+            item("Toggle Line Numbers", Box::new(ToggleLineNumbers)),
+            item("Toggle Indent Guides", Box::new(ToggleIndentGuides)),
+            item("Toggle Code Folding", Box::new(ToggleFolding)),
+            item("Toggle Markdown Preview", Box::new(ToggleMarkdownPreview)),
+            item("Toggle Auto Close Brackets", Box::new(ToggleAutoClose)),
+            item("Toggle Smart Indent", Box::new(ToggleSmartIndent)),
             item("Next Tab", Box::new(NextTab)),
             item("Previous Tab", Box::new(PreviousTab)),
         ]),

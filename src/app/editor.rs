@@ -523,6 +523,10 @@ impl TinytextApp {
         let Some(tab) = self.active() else {
             return;
         };
+        // A previewing tab has no rendered editor to receive the action.
+        if tab.previewing().is_some() {
+            return;
+        }
         let editor = tab.editor.clone();
         editor.update(cx, |state, cx| state.focus(window, cx));
         window.dispatch_action(action, cx);

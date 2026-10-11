@@ -13,6 +13,7 @@ A fast, lightweight text editor for macOS.
   HTML, CSS, and PHP
 - File explorer sidebar for browsing a project folder
 - Command palette (`Cmd+Shift+P`) to search and run any command
+- Markdown preview (`Cmd+Shift+V`)
 - Reopens your tabs and folder where you left off
 - Warns before closing a file with unsaved changes
 - Cursor position, encoding, and language in the status bar

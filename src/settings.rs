@@ -72,6 +72,15 @@ pub(crate) struct EditorSettings {
     pub(crate) show_whitespace: Option<bool>,
     pub(crate) tab_size: Option<usize>,
     pub(crate) hard_tabs: Option<bool>,
+    pub(crate) line_numbers: Option<bool>,
+    pub(crate) indent_guides: Option<bool>,
+    pub(crate) folding: Option<bool>,
+    pub(crate) auto_close: Option<bool>,
+    pub(crate) smart_indent: Option<bool>,
+    pub(crate) indent_wrapped_lines: Option<bool>,
+    pub(crate) scroll_beyond_last_line: Option<bool>,
+    /// `None` keeps the engine's default margin.
+    pub(crate) cursor_surrounding_lines: Option<usize>,
 }
 
 impl EditorSettings {
@@ -99,6 +108,34 @@ impl EditorSettings {
 
     pub(crate) fn hard_tabs(&self) -> bool {
         self.hard_tabs.unwrap_or(false)
+    }
+
+    pub(crate) fn line_numbers(&self) -> bool {
+        self.line_numbers.unwrap_or(true)
+    }
+
+    pub(crate) fn indent_guides(&self) -> bool {
+        self.indent_guides.unwrap_or(true)
+    }
+
+    pub(crate) fn folding(&self) -> bool {
+        self.folding.unwrap_or(true)
+    }
+
+    pub(crate) fn auto_close(&self) -> bool {
+        self.auto_close.unwrap_or(true)
+    }
+
+    pub(crate) fn smart_indent(&self) -> bool {
+        self.smart_indent.unwrap_or(true)
+    }
+
+    pub(crate) fn indent_wrapped_lines(&self) -> bool {
+        self.indent_wrapped_lines.unwrap_or(true)
+    }
+
+    pub(crate) fn scroll_beyond_last_line(&self) -> bool {
+        self.scroll_beyond_last_line.unwrap_or(true)
     }
 }
 
@@ -262,6 +299,11 @@ pub(crate) fn save_show_whitespace(enabled: bool) -> Result<String, String> {
     )
 }
 
+/// Records an on/off editor option (`editor.<key>`).
+pub(crate) fn save_editor_flag(key: &str, enabled: bool) -> Result<String, String> {
+    save_setting("editor", key, Some(serde_json::Value::Bool(enabled)))
+}
+
 /// Records the zoom level (`editor.font_size`); `None` removes the override so
 /// the theme's default size applies again.
 pub(crate) fn save_font_size(size: Option<f32>) -> Result<String, String> {
@@ -405,6 +447,33 @@ mod tests {
         assert!(!settings.editor.show_whitespace());
         assert_eq!(settings.editor.tab_size(), DEFAULT_TAB_SIZE);
         assert!(!settings.editor.hard_tabs());
+        assert!(settings.editor.line_numbers());
+        assert!(settings.editor.indent_guides());
+        assert!(settings.editor.folding());
+        assert!(settings.editor.auto_close());
+        assert!(settings.editor.smart_indent());
+        assert!(settings.editor.indent_wrapped_lines());
+        assert!(settings.editor.scroll_beyond_last_line());
+        assert_eq!(settings.editor.cursor_surrounding_lines, None);
+    }
+
+    #[test]
+    fn parses_editor_display_options() {
+        let settings = parse_settings(
+            r#"{"editor": {"line_numbers": false, "indent_guides": false, "folding": false,
+                "auto_close": false, "smart_indent": false, "indent_wrapped_lines": false,
+                "scroll_beyond_last_line": false, "cursor_surrounding_lines": 5}}"#,
+        )
+        .unwrap();
+
+        assert!(!settings.editor.line_numbers());
+        assert!(!settings.editor.indent_guides());
+        assert!(!settings.editor.folding());
+        assert!(!settings.editor.auto_close());
+        assert!(!settings.editor.smart_indent());
+        assert!(!settings.editor.indent_wrapped_lines());
+        assert!(!settings.editor.scroll_beyond_last_line());
+        assert_eq!(settings.editor.cursor_surrounding_lines, Some(5));
     }
 
     #[test]
