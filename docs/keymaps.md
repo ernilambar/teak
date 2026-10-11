@@ -34,8 +34,20 @@
 
 The usual macOS editing shortcuts also work: `⌘Z` / `⌘⇧Z` (undo / redo),
 `⌘X` / `⌘C` / `⌘V`, `⌘A`, `⌘F` (find and replace), word and line navigation,
-indent, and multi-cursor editing. Add a cursor above or below with `⌘⌥↑` / `⌘⌥↓`
-(`Cmd + Option + Up` / `Cmd + Option + Down`).
+and indent.
+
+## Multi-cursor
+
+| Shortcut | Keys | Action |
+| --- | --- | --- |
+| `⌘⌥↑` / `⌘⌥↓` | `Cmd + Option + Up` / `Cmd + Option + Down` | Add Cursor Above / Below |
+| `⌃⌥↑` / `⌃⌥↓` | `Ctrl + Option + Up` / `Ctrl + Option + Down` | Add Cursor Above / Below (alternate) |
+| `⌥` + click | `Option` + click | Add a cursor at the click |
+| `⇧⌥` + drag | `Shift + Option` + drag | Column (block) selection |
+
+Once more than one cursor is active, typing, deleting, pasting, and undo or redo
+apply to every cursor at once. Add cursors by name from the Edit menu, the
+editor's context menu, or the command palette.
 
 ## View & window
 

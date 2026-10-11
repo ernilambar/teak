@@ -16,12 +16,12 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::{
-    About, AddFolder, CheckForUpdates, CloseAllFolders, CloseTab, CommandPalette, CopyFilePath,
-    CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, GoToLine, InsertLineAbove,
-    InsertLineBelow, MoveLineDown, MoveLineUp, NewFile, NextTab, OpenFile, OpenSettings,
-    PreviousTab, Refresh, ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs,
-    SelectLine, SetTheme, ToggleLineComment, ToggleSidebar, ToggleWhitespace, ToggleWordWrap,
-    ZoomIn, ZoomOut, ZoomReset,
+    About, AddCursorAbove, AddCursorBelow, AddFolder, CheckForUpdates, CloseAllFolders, CloseTab,
+    CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, GoToLine,
+    InsertLineAbove, InsertLineBelow, MoveLineDown, MoveLineUp, NewFile, NextTab, OpenFile,
+    OpenSettings, PreviousTab, Refresh, ReopenClosedTab, RevealInFinder, SaveAll, SaveFile,
+    SaveFileAs, SelectLine, SetTheme, ToggleLineComment, ToggleSidebar, ToggleWhitespace,
+    ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 
 use super::TinytextApp;
@@ -65,6 +65,8 @@ fn palette_groups() -> Vec<CommandGroup> {
                 .label("Go to Line…")
                 .keywords(["goto"])
                 .action(Box::new(GoToLine)),
+            item("Add Cursor Above", Box::new(AddCursorAbove)),
+            item("Add Cursor Below", Box::new(AddCursorBelow)),
             item("Copy Path", Box::new(CopyFilePath)),
             item("Copy Relative Path", Box::new(CopyRelativePath)),
         ]),

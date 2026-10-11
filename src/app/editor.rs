@@ -8,6 +8,9 @@
 
 use std::ops::Range;
 
+use gpui_kit::base::input::{
+    AddCursorAbove as EngineAddCursorAbove, AddCursorBelow as EngineAddCursorBelow,
+};
 use gpui_kit::component::{
     WindowExt as _,
     input::{Input, InputState, Position, RopeExt as _},
@@ -15,8 +18,8 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::{
-    CopyLineDown, CopyLineUp, DeleteLine, GoToLine, InsertLineAbove, InsertLineBelow, MoveLineDown,
-    MoveLineUp, SelectLine, ToggleLineComment,
+    AddCursorAbove, AddCursorBelow, CopyLineDown, CopyLineUp, DeleteLine, GoToLine,
+    InsertLineAbove, InsertLineBelow, MoveLineDown, MoveLineUp, SelectLine, ToggleLineComment,
 };
 
 use super::TinytextApp;
@@ -503,6 +506,44 @@ impl TinytextApp {
             let range = select_line_range(&LineBuffer::new(&text), &state.selected_range());
             state.set_selected_range(range, cx);
         });
+    }
+
+    /// Dispatches an engine action at the focused editor.
+    ///
+    /// The engine's add-cursor listeners live on the editor element, so the
+    /// editor has to own focus before the action is sent. `Window::dispatch_action`
+    /// reads the focused element at call time, and `Window::focus` sets it
+    /// synchronously, so focusing first is enough.
+    fn dispatch_to_editor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        action: Box<dyn Action>,
+    ) {
+        let Some(tab) = self.active() else {
+            return;
+        };
+        let editor = tab.editor.clone();
+        editor.update(cx, |state, cx| state.focus(window, cx));
+        window.dispatch_action(action, cx);
+    }
+
+    pub(super) fn on_add_cursor_above(
+        &mut self,
+        _: &AddCursorAbove,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_to_editor(window, cx, Box::new(EngineAddCursorAbove));
+    }
+
+    pub(super) fn on_add_cursor_below(
+        &mut self,
+        _: &AddCursorBelow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_to_editor(window, cx, Box::new(EngineAddCursorBelow));
     }
 
     pub(super) fn on_go_to_line(
