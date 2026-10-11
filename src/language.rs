@@ -2,7 +2,7 @@ use std::path::Path;
 
 use gpui_kit::SharedString;
 
-pub(crate) const LANGUAGES: [&str; 11] = [
+pub(crate) const LANGUAGES: [&str; 12] = [
     "Plain Text",
     "Rust",
     "TOML",
@@ -14,6 +14,7 @@ pub(crate) const LANGUAGES: [&str; 11] = [
     "HTML",
     "CSS",
     "PHP",
+    "SVG",
 ];
 
 pub(crate) fn language_for(path: &Path) -> SharedString {
@@ -32,6 +33,7 @@ pub(crate) fn language_for(path: &Path) -> SharedString {
         Some("html") | Some("htm") => "HTML".into(),
         Some("css") | Some("scss") => "CSS".into(),
         Some("php") | Some("phtml") => "PHP".into(),
+        Some("svg") => "SVG".into(),
         _ => "Plain Text".into(),
     }
 }
@@ -48,6 +50,8 @@ pub(crate) fn editor_language_id(language: &str) -> &'static str {
         "HTML" => "html",
         "CSS" => "css",
         "PHP" => "php",
+        // No XML grammar is bundled; HTML highlights SVG markup well enough.
+        "SVG" => "html",
         _ => "plaintext",
     }
 }
@@ -72,6 +76,7 @@ mod tests {
             ("style.scss", "CSS"),
             ("index.php", "PHP"),
             ("view.phtml", "PHP"),
+            ("icon.svg", "SVG"),
         ];
         for (file, language) in cases {
             assert_eq!(language_for(Path::new(file)), language, "{file}");

@@ -19,6 +19,21 @@ pub(crate) fn file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+/// A byte count for display, in the largest unit that keeps it at or above 1.
+pub(crate) fn format_size(bytes: usize) -> String {
+    const UNITS: [&str; 3] = ["KB", "MB", "GB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut size = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    format!("{size:.1} {}", UNITS[unit])
+}
+
 /// The path for display, with the home directory shortened to `~`.
 pub(crate) fn display_path(path: &Path) -> String {
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -216,6 +231,13 @@ pub(crate) fn duplicate_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_size_picks_unit() {
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(1536), "1.5 KB");
+        assert_eq!(format_size(3 * 1024 * 1024), "3.0 MB");
+    }
 
     #[test]
     fn file_name_returns_last_component() {

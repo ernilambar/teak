@@ -82,7 +82,7 @@ fn palette_groups() -> Vec<CommandGroup> {
             item("Toggle Line Numbers", Box::new(ToggleLineNumbers)),
             item("Toggle Indent Guides", Box::new(ToggleIndentGuides)),
             item("Toggle Code Folding", Box::new(ToggleFolding)),
-            item("Toggle Markdown Preview", Box::new(ToggleMarkdownPreview)),
+            item("Toggle Preview", Box::new(ToggleMarkdownPreview)),
             item("Toggle Auto Close Brackets", Box::new(ToggleAutoClose)),
             item("Toggle Smart Indent", Box::new(ToggleSmartIndent)),
             item("Next Tab", Box::new(NextTab)),

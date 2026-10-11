@@ -356,7 +356,7 @@ pub(crate) fn app_menus(theme: &str) -> Vec<Menu> {
             MenuItem::action("Toggle Line Numbers", ToggleLineNumbers),
             MenuItem::action("Toggle Indent Guides", ToggleIndentGuides),
             MenuItem::action("Toggle Code Folding", ToggleFolding),
-            MenuItem::action("Toggle Markdown Preview", ToggleMarkdownPreview),
+            MenuItem::action("Toggle Preview", ToggleMarkdownPreview),
             MenuItem::separator(),
             MenuItem::action("Next Tab", NextTab),
             MenuItem::action("Previous Tab", PreviousTab),

@@ -11,7 +11,8 @@ use crate::CloseTab;
 use crate::language::{editor_language_id, language_for};
 use crate::paths::file_name;
 
-use super::{ClosedTab, MAX_CLOSED_TABS, OpenTab, TinytextApp};
+use super::files::FileContent;
+use super::{ClosedTab, MAX_CLOSED_TABS, OpenTab, Preview, TinytextApp};
 
 impl TinytextApp {
     pub(super) fn add_tab(
@@ -68,6 +69,7 @@ impl TinytextApp {
             dirty: false,
             editor: editor.clone(),
             preview: None,
+            raster: false,
             _subscriptions: vec![change_subscription, cursor_subscription],
         });
         self.active_tab = Some(self.tabs.len() - 1);
@@ -79,6 +81,28 @@ impl TinytextApp {
         self.cursor_col = position.character as usize + 1;
         self.save_session();
         cx.notify();
+    }
+
+    /// Opens a tab for a file read from disk: an editor for text, or a
+    /// view-only preview for a raster image.
+    pub(super) fn add_file_tab(
+        &mut self,
+        path: PathBuf,
+        content: FileContent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match content {
+            FileContent::Text(text) => self.add_tab(Some(path), text, window, cx),
+            FileContent::Image(image) => {
+                self.add_tab(Some(path), String::new(), window, cx);
+                let ix = self.tabs.len() - 1;
+                let tab = &mut self.tabs[ix];
+                tab.raster = true;
+                tab.preview = Some(Preview::Image(image));
+                self.focus_tab(ix, window, cx);
+            }
+        }
     }
 
     pub(super) fn on_close_tab(
@@ -356,7 +380,9 @@ impl TinytextApp {
             }
         }
 
-        self.tabs.remove(ix);
+        if let Some(preview) = self.tabs.remove(ix).preview {
+            preview.release(cx);
+        }
 
         self.active_tab = if self.tabs.is_empty() {
             None
@@ -394,16 +420,27 @@ impl TinytextApp {
 
     /// Pushes `editor`'s text into its tab's preview, if one is open.
     fn sync_preview(&mut self, editor: &Entity<EditorState>, cx: &mut Context<Self>) {
-        let Some(preview) = self
+        let Some(tab) = self
             .tabs
-            .iter()
+            .iter_mut()
             .find(|tab| tab.editor.entity_id() == editor.entity_id())
-            .and_then(|tab| tab.preview.clone())
         else {
             return;
         };
+        if tab.raster {
+            return;
+        }
         let text = editor.read(cx).value();
-        preview.update(cx, |state, cx| state.set_text(&text, cx));
+        match &tab.preview {
+            Some(Preview::Markdown(view)) => view.update(cx, |state, cx| state.set_text(&text, cx)),
+            Some(Preview::Image(_)) => {
+                let next = Preview::for_text("SVG", &text, cx);
+                if let Some(old) = std::mem::replace(&mut tab.preview, next) {
+                    old.release(cx);
+                }
+            }
+            None => {}
+        }
     }
 
     pub(super) fn set_dirty(&mut self, id: EntityId, dirty: bool, cx: &mut Context<Self>) {
