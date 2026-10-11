@@ -107,6 +107,46 @@ impl TinytextApp {
         cx.notify();
     }
 
+    /// Moves the tab with `id` to the gap `gap` (an index in `0..=tabs.len()`,
+    /// "insert before this index"). A no-op when the tab already sits at that
+    /// gap. Remaps `active_tab`/`context_tab`, then reveals and persists the new
+    /// order so it survives a relaunch.
+    pub(super) fn move_tab(
+        &mut self,
+        id: EntityId,
+        gap: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(from) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.editor.entity_id() == id)
+        else {
+            return;
+        };
+        let gap = gap.min(self.tabs.len());
+        // Dropping into the tab's own slot, before or after itself, moves nothing.
+        if gap == from || gap == from + 1 {
+            cx.notify();
+            return;
+        }
+
+        let to = if gap > from { gap - 1 } else { gap };
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+
+        self.active_tab = self.active_tab.map(|ix| remap_moved_index(ix, from, to));
+        self.context_tab = self.context_tab.map(|ix| remap_moved_index(ix, from, to));
+        self.reveal_active_tab();
+
+        if let Some(tab) = self.active_tab.and_then(|ix| self.tabs.get(ix)) {
+            tab.editor.update(cx, |state, cx| state.focus(window, cx));
+        }
+        self.save_session();
+        cx.notify();
+    }
+
     pub(super) fn close_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some((id, dirty, title)) = self
             .tabs
@@ -357,5 +397,42 @@ impl TinytextApp {
         self.cursor_line = position.line as usize + 1;
         self.cursor_col = position.character as usize + 1;
         cx.notify();
+    }
+}
+
+/// The new index of an element after the element at `from` is moved to `to`
+/// (both final-array indices). Remaps `active_tab`/`context_tab` so they keep
+/// pointing at the same tab after a reorder.
+fn remap_moved_index(index: usize, from: usize, to: usize) -> usize {
+    if index == from {
+        return to;
+    }
+    let index = if index > from { index - 1 } else { index };
+    if index >= to { index + 1 } else { index }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remap_moved_index;
+
+    #[test]
+    fn remaps_indices_when_moving_a_tab_to_the_front() {
+        // [A, B, C, D] with C (2) moved to index 0.
+        let moved = |ix| remap_moved_index(ix, 2, 0);
+        assert_eq!([moved(0), moved(1), moved(2), moved(3)], [1, 2, 0, 3]);
+    }
+
+    #[test]
+    fn remaps_indices_when_moving_a_tab_to_the_back() {
+        // [A, B, C, D] with A (0) moved to index 2.
+        let moved = |ix| remap_moved_index(ix, 0, 2);
+        assert_eq!([moved(0), moved(1), moved(2), moved(3)], [2, 0, 1, 3]);
+    }
+
+    #[test]
+    fn remaps_indices_when_moving_a_tab_rightwards() {
+        // [A, B, C, D] with B (1) moved to index 3.
+        let moved = |ix| remap_moved_index(ix, 1, 3);
+        assert_eq!([moved(0), moved(1), moved(2), moved(3)], [0, 3, 1, 2]);
     }
 }

@@ -46,6 +46,36 @@ const TAB_TOOLTIP_DELAY: Duration = Duration::from_millis(800);
 /// Group name shared by every tab, so its close button can react to hover.
 const TAB_GROUP: &str = "tab";
 
+/// Payload carried while a tab is dragged. It holds the editor's stable id, not
+/// an index, so the drop resolves to the right tab even if the `Vec` shifted.
+#[derive(Clone)]
+struct DragTab {
+    id: EntityId,
+    title: SharedString,
+}
+
+/// The floating chip that follows the cursor while a tab is dragged. GPUI
+/// positions this entity at the pointer; it only draws its own appearance.
+struct TabDragPreview {
+    title: SharedString,
+}
+
+impl Render for TabDragPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .h(TAB_HEIGHT)
+            .flex()
+            .items_center()
+            .bg(cx.theme().secondary)
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded(px(4.))
+            .text_sm()
+            .child(self.title.clone())
+    }
+}
+
 /// A tab's status dot, drawn in the close button's slot and hidden on hover so
 /// the button shows through.
 fn status_dot(visible: bool, color: Hsla) -> Div {
@@ -225,6 +255,25 @@ impl TinytextApp {
                     )
                     .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
                     .tooltip_show_delay(TAB_TOOLTIP_DELAY)
+                    .on_drag(
+                        DragTab {
+                            id: tab.editor.entity_id(),
+                            title: tab.title.clone(),
+                        },
+                        move |drag: &DragTab, _offset, _window, cx| {
+                            cx.new(|_| TabDragPreview {
+                                title: drag.title.clone(),
+                            })
+                        },
+                    )
+                    // Dropping onto a tab inserts the dragged tab before it; the
+                    // border on the tab's left edge marks that gap.
+                    .drag_over::<DragTab>(move |this, _, _, _cx| {
+                        this.border_l_2().border_r_0().border_color(accent)
+                    })
+                    .on_drop::<DragTab>(cx.listener(move |this, drag: &DragTab, window, cx| {
+                        this.move_tab(drag.id, ix, window, cx);
+                    }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_tab(ix, window, cx);
                     }))
@@ -333,7 +382,26 @@ impl TinytextApp {
                     .overflow_x_scroll()
                     .lock_scroll_axis()
                     .track_scroll(&self.tab_scroll)
-                    .children(tabs),
+                    .children(tabs)
+                    // The empty area right of the last tab. Dropping here moves the
+                    // dragged tab to the end; the border marks that final gap. It is
+                    // the last child, so it never disturbs `reveal_active_tab`'s
+                    // index into the tabs.
+                    .child(
+                        div()
+                            .id("tab-strip-tail")
+                            .relative()
+                            .flex_1()
+                            .h_full()
+                            .min_w(px(16.))
+                            .drag_over::<DragTab>(move |this, _, _, _cx| {
+                                this.border_l_2().border_color(accent)
+                            })
+                            .on_drop::<DragTab>(cx.listener(|this, drag: &DragTab, window, cx| {
+                                let end = this.tabs.len();
+                                this.move_tab(drag.id, end, window, cx);
+                            })),
+                    ),
             )
             .child(
                 div().flex_none().px_1().child(
