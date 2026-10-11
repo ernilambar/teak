@@ -65,6 +65,8 @@ gpui_kit::actions!(
         InsertLineBelow,
         SelectLine,
         GoToLine,
+        AddCursorAbove,
+        AddCursorBelow,
     ]
 );
 
@@ -315,6 +317,9 @@ pub(crate) fn app_menus(theme: &str) -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Indent", input::Indent),
             MenuItem::action("Outdent", input::Outdent),
+            MenuItem::separator(),
+            MenuItem::action("Add Cursor Above", AddCursorAbove),
+            MenuItem::action("Add Cursor Below", AddCursorBelow),
             MenuItem::separator(),
             MenuItem::action("Toggle Line Comment", ToggleLineComment),
             MenuItem::action("Delete Line", DeleteLine),

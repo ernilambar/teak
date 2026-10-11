@@ -10,11 +10,12 @@
 use gpui_kit::*;
 
 use crate::{
-    AddFolder, CloseAllFolders, CloseTab, CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp,
-    CopyRelativePath, DeleteLine, GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow,
-    JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextTab, OpenFile, OpenSettings, PreviousTab,
-    Quit, Refresh, ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine,
-    ToggleLineComment, ToggleSidebar, ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    AddCursorAbove, AddCursorBelow, AddFolder, CloseAllFolders, CloseTab, CommandPalette,
+    CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, GoToLine, Hide,
+    HideOthers, InsertLineAbove, InsertLineBelow, JumpToTab, MoveLineDown, MoveLineUp, NewFile,
+    NextTab, OpenFile, OpenSettings, PreviousTab, Quit, Refresh, ReopenClosedTab, RevealInFinder,
+    SaveAll, SaveFile, SaveFileAs, SelectLine, ToggleLineComment, ToggleSidebar, ToggleWhitespace,
+    ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -70,10 +71,14 @@ fn app_bindings() -> Vec<KeyBinding> {
 
 /// VS Code's macOS editing chords, scoped to the focused editor.
 ///
-/// Because these are registered after the engine's own `"Input"` bindings, two
-/// of them deliberately shadow engine defaults:
+/// Because these are registered after the engine's own `"Input"` bindings, a
+/// few of them deliberately shadow engine defaults:
 /// - `shift-alt-up` / `shift-alt-down` — VS Code copies the line, replacing the
-///   engine's alternate add-cursor chord (`cmd-alt-up`/`down` still adds one).
+///   engine's alternate add-cursor chord.
+/// - `cmd-alt-up` / `cmd-alt-down` (and the `ctrl-alt-*` alternate) — the engine
+///   binds these to its own add-cursor actions; the app binds the same chords to
+///   its `AddCursorAbove` / `AddCursorBelow` so the menu and palette share one
+///   path (the handler re-dispatches the engine action at the editor).
 /// - `cmd-enter` — VS Code inserts a line below; the engine maps
 ///   `secondary-enter` to a plain newline on macOS, so this is the useful one.
 fn editor_bindings() -> Vec<KeyBinding> {
@@ -85,6 +90,10 @@ fn editor_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("alt-down", MoveLineDown, Some(EDITOR)),
         KeyBinding::new("shift-alt-up", CopyLineUp, Some(EDITOR)),
         KeyBinding::new("shift-alt-down", CopyLineDown, Some(EDITOR)),
+        KeyBinding::new("cmd-alt-up", AddCursorAbove, Some(EDITOR)),
+        KeyBinding::new("cmd-alt-down", AddCursorBelow, Some(EDITOR)),
+        KeyBinding::new("ctrl-alt-up", AddCursorAbove, Some(EDITOR)),
+        KeyBinding::new("ctrl-alt-down", AddCursorBelow, Some(EDITOR)),
         KeyBinding::new("cmd-enter", InsertLineBelow, Some(EDITOR)),
         KeyBinding::new("cmd-shift-enter", InsertLineAbove, Some(EDITOR)),
         KeyBinding::new("cmd-g", GoToLine, Some(EDITOR)),
@@ -98,7 +107,10 @@ mod tests {
     // macro and shadow the built-in one.
     use super::{app_bindings, editor_bindings};
     use crate::{MoveLineDown, MoveLineUp};
-    use gpui_kit::{KeyBinding, KeyContext, Keymap, Keystroke};
+    use gpui_kit::base::input::{
+        AddCursorAbove as EngineAddCursorAbove, AddCursorBelow as EngineAddCursorBelow,
+    };
+    use gpui_kit::{Action as _, KeyBinding, KeyContext, Keymap, Keystroke};
 
     /// Action names that would win for `keys` typed in `contexts`, best first.
     fn resolve(keymap: &Keymap, keys: &str, contexts: &[&str]) -> Vec<String> {
@@ -123,7 +135,7 @@ mod tests {
         // `KeyBinding::new` panics on an invalid keystroke, so building the
         // lists is itself the assertion that every chord is well-formed.
         assert_eq!(app_bindings().len(), 35);
-        assert_eq!(editor_bindings().len(), 11);
+        assert_eq!(editor_bindings().len(), 15);
     }
 
     #[test]
@@ -164,11 +176,29 @@ mod tests {
             KeyBinding::new("shift-alt-up", MoveLineUp, Some("Input")),
             KeyBinding::new("shift-alt-down", MoveLineDown, Some("Input")),
             KeyBinding::new("secondary-enter", MoveLineUp, Some("Input")),
+            // The engine's own add-cursor chords. The app now binds the same
+            // chords to its actions, so the later registration must still win.
+            KeyBinding::new("cmd-alt-up", EngineAddCursorAbove, Some("Input")),
+            KeyBinding::new("cmd-alt-down", EngineAddCursorBelow, Some("Input")),
         ]);
         keymap.add_bindings(editor_bindings());
 
         assert!(resolve(&keymap, "shift-alt-up", &["Input"])[0].ends_with("CopyLineUp"));
         assert!(resolve(&keymap, "shift-alt-down", &["Input"])[0].ends_with("CopyLineDown"));
         assert!(resolve(&keymap, "cmd-enter", &["Input"])[0].ends_with("InsertLineBelow"));
+        // The app's action wins over the engine's identically-named one.
+        assert_eq!(
+            resolve(&keymap, "cmd-alt-up", &["Input"])[0],
+            crate::AddCursorAbove.name()
+        );
+        assert_eq!(
+            resolve(&keymap, "cmd-alt-down", &["Input"])[0],
+            crate::AddCursorBelow.name()
+        );
+        // The alternate chord is app-only; nothing shadows it.
+        assert_eq!(
+            resolve(&keymap, "ctrl-alt-up", &["Input"])[0],
+            crate::AddCursorAbove.name()
+        );
     }
 }

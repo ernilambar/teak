@@ -842,6 +842,17 @@ impl TinytextApp {
         .detach();
     }
 
+    /// Re-renders while a modifier is held so the status bar can hint at the
+    /// Option-click and Option-drag multi-cursor gestures.
+    fn on_modifiers_changed(
+        &mut self,
+        _: &ModifiersChangedEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+    }
+
     fn on_about(&mut self, _: &About, window: &mut Window, cx: &mut Context<Self>) {
         window.open_alert_dialog(cx, |alert, _, cx| {
             alert
@@ -909,6 +920,8 @@ impl Render for TinytextApp {
             .clone()
             .map(|state| self.render_palette(&state, cx));
         let settings_overlay = self.settings_open.then(|| self.render_settings(cx));
+        // Only worth hinting while an editor is open; other panes have no carets.
+        let alt_held = window.modifiers().alt && self.active().is_some();
 
         let root = div()
             .id("tinytext-root")
@@ -919,6 +932,7 @@ impl Render for TinytextApp {
             .text_color(cx.theme().foreground)
             .text_sm()
             .track_focus(&self.focus_handle)
+            .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
             .on_action(cx.listener(Self::on_new_file))
             .on_action(cx.listener(Self::on_open_file))
             .on_action(cx.listener(Self::on_add_folder))
@@ -957,9 +971,11 @@ impl Render for TinytextApp {
             .on_action(cx.listener(Self::on_insert_line_below))
             .on_action(cx.listener(Self::on_select_line))
             .on_action(cx.listener(Self::on_go_to_line))
+            .on_action(cx.listener(Self::on_add_cursor_above))
+            .on_action(cx.listener(Self::on_add_cursor_below))
             .on_action(cx.listener(Self::on_command_palette))
             .child(self.render_workspace(window, cx))
-            .child(self.render_status_bar(cx));
+            .child(self.render_status_bar(alt_held, cx));
 
         let root = match palette {
             Some(overlay) => root.child(overlay),

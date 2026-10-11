@@ -82,6 +82,7 @@ the latest release.
 | `Cmd+W` | Close tab |
 | `Cmd+B` | Show or hide the sidebar |
 | `Cmd+Shift+P` | Open the command palette |
+| `Cmd+Option+↑` / `Cmd+Option+↓` | Add a cursor above / below |
 | `Cmd+,` | Open settings |
 | `Cmd+Q` | Quit |
 

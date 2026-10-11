@@ -27,7 +27,10 @@ use crate::file_icons::{file_icon, folder_icon};
 use crate::language::{LANGUAGES, editor_language_id};
 use crate::paths::{display_path, file_name};
 use crate::settings::IconStyle;
-use crate::{AddFolder, CopyFilePath, CopyRelativePath, NewFile, OpenFile, RevealInFinder};
+use crate::{
+    AddCursorAbove, AddCursorBelow, AddFolder, CopyFilePath, CopyRelativePath, NewFile, OpenFile,
+    RevealInFinder,
+};
 
 use super::TinytextApp;
 
@@ -837,6 +840,9 @@ impl TinytextApp {
                                     .separator()
                                     .menu("Select All", Box::new(input::SelectAll))
                                     .separator()
+                                    .menu("Add Cursor Above", Box::new(AddCursorAbove))
+                                    .menu("Add Cursor Below", Box::new(AddCursorBelow))
+                                    .separator()
                                     .menu_with_disabled(
                                         "Reveal in Finder",
                                         !has_path,
@@ -895,7 +901,11 @@ impl TinytextApp {
         }
     }
 
-    pub(super) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_status_bar(
+        &self,
+        alt_held: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let entity = cx.entity();
         let language = self.active_language();
         let dirty = self.active_dirty();
@@ -958,6 +968,16 @@ impl TinytextApp {
                     .gap_2()
                     .child(Spinner::new().with_size(Size::XSmall))
                     .child(label),
+            );
+        }
+        if alt_held {
+            status = status.left(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("⌥ Click adds a cursor · ⌥⇧ Drag selects a column"),
             );
         }
 
