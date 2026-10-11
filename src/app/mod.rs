@@ -63,19 +63,53 @@ struct OpenTab {
     language_override: bool,
     dirty: bool,
     editor: Entity<EditorState>,
-    /// The rendered view shown in place of the editor while Markdown preview
-    /// is on. Kept in sync with the buffer by the change subscription.
-    preview: Option<Entity<TextViewState>>,
+    /// The rendered view shown in place of the editor while preview is on.
+    /// Kept in sync with the buffer by the change subscription.
+    preview: Option<Preview>,
+    /// A binary image opened view-only: it always shows its preview, its
+    /// editor stays empty, and it is never saved.
+    raster: bool,
     _subscriptions: Vec<Subscription>,
+}
+
+enum Preview {
+    Markdown(Entity<TextViewState>),
+    /// An SVG rendered from the buffer, or a raster image read from disk.
+    Image(Arc<Image>),
+}
+
+impl Preview {
+    /// Builds the preview for `text` in `language`, if that language has one.
+    fn for_text(language: &str, text: &str, cx: &mut App) -> Option<Self> {
+        match language {
+            "Markdown" => Some(Self::Markdown(
+                cx.new(|cx| TextViewState::markdown(text, cx)),
+            )),
+            "SVG" => Some(Self::Image(Arc::new(Image::from_bytes(
+                ImageFormat::Svg,
+                text.as_bytes().to_vec(),
+            )))),
+            _ => None,
+        }
+    }
+
+    /// Drops a decoded image from GPUI's asset cache, which otherwise keeps
+    /// every rendered SVG revision for the life of the app.
+    fn release(self, cx: &mut App) {
+        if let Self::Image(image) = self {
+            ImageSource::Image(image).remove_asset(cx);
+        }
+    }
 }
 
 impl OpenTab {
     /// The preview to show instead of the editor. A tab whose language was
-    /// switched away from Markdown falls back to the editor.
-    fn previewing(&self) -> Option<&Entity<TextViewState>> {
-        self.preview
-            .as_ref()
-            .filter(|_| self.language.as_ref() == "Markdown")
+    /// switched away from the previewed one falls back to the editor.
+    fn previewing(&self) -> Option<&Preview> {
+        self.preview.as_ref().filter(|preview| match preview {
+            Preview::Markdown(_) => self.language.as_ref() == "Markdown",
+            Preview::Image(_) => self.raster || self.language.as_ref() == "SVG",
+        })
     }
 }
 
@@ -259,12 +293,12 @@ impl TinytextApp {
                     .background_executor()
                     .spawn({
                         let path = path.clone();
-                        async move { std::fs::read_to_string(path) }
+                        async move { files::read_file(&path) }
                     })
                     .await;
                 if let Ok(content) = read {
                     this.update_in(cx, |this, window, cx| {
-                        this.add_tab(Some(path), content, window, cx);
+                        this.add_file_tab(path, content, window, cx);
                     })
                     .ok();
                 }
@@ -386,6 +420,14 @@ impl TinytextApp {
         self.active()
             .map(|tab| tab.language.clone())
             .unwrap_or_else(|| "Plain Text".into())
+    }
+
+    /// The image shown by the active tab when it is a view-only raster tab.
+    fn active_raster(&self) -> Option<&Arc<Image>> {
+        match self.active().filter(|tab| tab.raster)?.preview.as_ref()? {
+            Preview::Image(image) => Some(image),
+            Preview::Markdown(_) => None,
+        }
     }
 
     fn active_dirty(&self) -> bool {
@@ -585,8 +627,8 @@ impl TinytextApp {
         self.set_editor_flag("smart_indent", |e| &mut e.smart_indent, enabled, window, cx);
     }
 
-    /// Swaps the active Markdown tab between its editor and a rendered preview.
-    /// Other languages are left alone.
+    /// Swaps the active Markdown or SVG tab between its editor and a rendered
+    /// preview. Other languages and raster images are left alone.
     fn on_toggle_markdown_preview(
         &mut self,
         _: &ToggleMarkdownPreview,
@@ -599,13 +641,20 @@ impl TinytextApp {
         let Some(tab) = self.tabs.get_mut(ix) else {
             return;
         };
-        if tab.previewing().is_some() {
-            tab.preview = None;
-        } else if tab.language.as_ref() == "Markdown" {
-            let text = tab.editor.read(cx).value();
-            tab.preview = Some(cx.new(|cx| TextViewState::markdown(&text, cx)));
-        } else {
+        if tab.raster {
             return;
+        }
+        let next = if tab.previewing().is_some() {
+            None
+        } else {
+            let text = tab.editor.read(cx).value();
+            match Preview::for_text(&tab.language, &text, cx) {
+                Some(preview) => Some(preview),
+                None => return,
+            }
+        };
+        if let Some(old) = std::mem::replace(&mut tab.preview, next) {
+            old.release(cx);
         }
         self.focus_tab(ix, window, cx);
         cx.notify();

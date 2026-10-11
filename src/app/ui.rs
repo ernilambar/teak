@@ -26,14 +26,14 @@ use gpui_kit::*;
 
 use crate::file_icons::{file_icon, folder_icon};
 use crate::language::{LANGUAGES, editor_language_id};
-use crate::paths::{display_path, file_name};
+use crate::paths::{display_path, file_name, format_size};
 use crate::settings::IconStyle;
 use crate::{
     AddCursorAbove, AddCursorBelow, AddFolder, CopyFilePath, CopyRelativePath, NewFile, OpenFile,
     RevealInFinder,
 };
 
-use super::TinytextApp;
+use super::{Preview, TinytextApp};
 
 const SIDEBAR_WIDTH: Pixels = px(240.);
 /// Floor on a tab's width. Tabs size to their full titles while the strip has
@@ -197,7 +197,7 @@ impl TinytextApp {
                     .flex_shrink(1.)
                     .min_w(TAB_MIN_WIDTH)
                     .h(TAB_HEIGHT)
-                    .px_3()
+                    .px_2()
                     .gap_1()
                     .text_sm()
                     // A trailing rule separates adjacent tabs; on the active tab
@@ -813,19 +813,45 @@ impl TinytextApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tab = ix.and_then(|ix| self.tabs.get(ix));
-        if let Some(preview) = tab.and_then(|tab| tab.previewing()) {
-            return div()
-                .size_full()
-                .bg(cx.theme().background)
-                .child(
-                    TextView::new(preview)
-                        .scrollable(true)
-                        .selectable(true)
-                        .size_full()
-                        .px_6()
-                        .py_4(),
-                )
-                .into_any_element();
+        match tab.and_then(|tab| tab.previewing()) {
+            Some(Preview::Markdown(view)) => {
+                return div()
+                    .size_full()
+                    .bg(cx.theme().background)
+                    .child(
+                        TextView::new(view)
+                            .scrollable(true)
+                            .selectable(true)
+                            .size_full()
+                            .px_6()
+                            .py_4(),
+                    )
+                    .into_any_element();
+            }
+            Some(Preview::Image(image)) => {
+                let muted = cx.theme().muted_foreground;
+                return div()
+                    .size_full()
+                    .p_6()
+                    .bg(cx.theme().background)
+                    .child(
+                        img(ImageSource::Image(image.clone()))
+                            .size_full()
+                            .object_fit(ObjectFit::ScaleDown)
+                            .with_fallback(move || {
+                                div()
+                                    .size_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_color(muted)
+                                    .child("Cannot display image")
+                                    .into_any_element()
+                            }),
+                    )
+                    .into_any_element();
+            }
+            None => {}
         }
         match tab {
             Some(tab) => {
@@ -976,6 +1002,13 @@ impl TinytextApp {
         };
 
         let mut status = StatusBar::new();
+        if let Some(image) = self.active_raster() {
+            return status.left(div().child(format!(
+                "{} · {}",
+                image.format.extension().to_ascii_uppercase(),
+                format_size(image.bytes.len())
+            )));
+        }
         if let Some(label) = self.busy.clone() {
             status = status.left(
                 div()

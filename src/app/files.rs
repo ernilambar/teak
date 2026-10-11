@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gpui_kit::component::{
     WindowExt as _,
@@ -16,6 +17,52 @@ use crate::paths::{
 use crate::{AddFolder, CloseAllFolders, NewFile, OpenFile, SaveAll, SaveFile, SaveFileAs};
 
 use super::{FileClipboard, TinytextApp};
+
+/// A file read for a new tab: text for the editor, or a raster image to view.
+pub(super) enum FileContent {
+    Text(String),
+    Image(Arc<Image>),
+}
+
+/// The raster format GPUI decodes for `path`'s extension. SVG is absent on
+/// purpose: it opens as text and previews from the buffer.
+fn raster_format(path: &Path) -> Option<ImageFormat> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => Some(ImageFormat::Png),
+        "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+        "gif" => Some(ImageFormat::Gif),
+        "webp" => Some(ImageFormat::Webp),
+        "bmp" => Some(ImageFormat::Bmp),
+        "tif" | "tiff" => Some(ImageFormat::Tiff),
+        "ico" => Some(ImageFormat::Ico),
+        _ => None,
+    }
+}
+
+/// Reads `path` for a new tab. Raster images load as raw bytes; everything
+/// else must be UTF-8 text.
+pub(super) fn read_file(path: &Path) -> std::io::Result<FileContent> {
+    match raster_format(path) {
+        Some(format) => {
+            let bytes = std::fs::read(path)?;
+            Ok(FileContent::Image(Arc::new(Image::from_bytes(
+                format, bytes,
+            ))))
+        }
+        None => std::fs::read_to_string(path).map(FileContent::Text),
+    }
+}
+
+/// The notification shown when a file the user asked for cannot be opened.
+fn open_error(path: &Path, error: &std::io::Error) -> String {
+    let filename = file_name(path);
+    if error.kind() == std::io::ErrorKind::InvalidData {
+        format!("Could not open {filename}: not a UTF-8 text file")
+    } else {
+        format!("Could not open {filename}: {error}")
+    }
+}
 
 /// Copy for the single-field name prompt shared by create and rename.
 struct NamePrompt {
@@ -51,15 +98,16 @@ impl TinytextApp {
                 .background_executor()
                 .spawn({
                     let path = path.clone();
-                    async move { std::fs::read_to_string(path) }
+                    async move { read_file(&path) }
                 })
                 .await;
-            if let Ok(content) = read {
-                this.update_in(cx, |this, window, cx| {
-                    this.add_tab(Some(path), content, window, cx);
-                })
-                .ok();
-            }
+            this.update_in(cx, |this, window, cx| match read {
+                Ok(content) => this.add_file_tab(path, content, window, cx),
+                Err(error) => {
+                    window.push_notification(Notification::error(open_error(&path, &error)), cx)
+                }
+            })
+            .ok();
         })
         .detach();
     }
@@ -88,15 +136,15 @@ impl TinytextApp {
                         .background_executor()
                         .spawn({
                             let path = path.clone();
-                            async move { std::fs::read_to_string(path) }
+                            async move { read_file(&path) }
                         })
                         .await;
-                    if let Ok(content) = read {
-                        this.update_in(cx, |this, window, cx| {
-                            this.add_tab(Some(path), content, window, cx);
-                        })
-                        .ok();
-                    }
+                    this.update_in(cx, |this, window, cx| match read {
+                        Ok(content) => this.add_file_tab(path, content, window, cx),
+                        Err(error) => window
+                            .push_notification(Notification::error(open_error(&path, &error)), cx),
+                    })
+                    .ok();
                 }
             }
         })
@@ -242,6 +290,9 @@ impl TinytextApp {
         let Some(tab) = self.tabs.get(ix) else {
             return;
         };
+        if tab.raster {
+            return;
+        }
         let id = tab.editor.entity_id();
         let suggested = tab
             .path
@@ -296,6 +347,10 @@ impl TinytextApp {
         let Some(tab) = self.tabs.iter().find(|tab| tab.editor.entity_id() == id) else {
             return;
         };
+        // A raster tab's editor is empty; writing it would wipe the image.
+        if tab.raster {
+            return;
+        }
         let text = tab.editor.read(cx).text().to_string();
         let filename = file_name(&path);
 
@@ -864,5 +919,22 @@ impl TinytextApp {
             Err(error) => window
                 .push_notification(Notification::error(format!("Could not paste: {error}")), cx),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use gpui_kit::ImageFormat;
+
+    use super::raster_format;
+
+    #[test]
+    fn raster_format_maps_image_extensions() {
+        assert_eq!(raster_format(Path::new("a.PNG")), Some(ImageFormat::Png));
+        assert_eq!(raster_format(Path::new("a.jpeg")), Some(ImageFormat::Jpeg));
+        assert_eq!(raster_format(Path::new("icon.svg")), None);
+        assert_eq!(raster_format(Path::new("notes.txt")), None);
     }
 }
