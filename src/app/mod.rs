@@ -31,9 +31,10 @@ use crate::settings::{
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
 use crate::{
     About, CheckForUpdates, CopyFilePath, CopyRelativePath, InstallCli, JumpToTab, NextTab,
-    OpenSettings, PreviousTab, Quit, Refresh, ReopenClosedTab, RevealInFinder, SetTheme,
-    ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineNumbers, ToggleMarkdownPreview,
-    ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    OpenSettings, OpenThemesFolder, PreviousTab, Quit, Refresh, ReopenClosedTab, RevealInFinder,
+    SetTheme, ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineNumbers,
+    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
+    ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// Maps `editor.indent_wrapped_lines` onto the engine's wrapping indent.
@@ -701,21 +702,25 @@ impl TinytextApp {
         cx.notify();
     }
 
-    /// Applies the current `ui.theme` choice to the live theme and refreshes the
-    /// Appearance menu so its check mark matches.
+    /// Applies the current appearance and color scheme to the live theme and
+    /// refreshes the Appearance menu so its check mark matches.
     fn apply_theme_choice(
         &self,
         choice: &str,
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        let base_weight = self
-            .settings
-            .editor
-            .font_weight()
-            .unwrap_or(DEFAULT_FONT_WEIGHT);
-        crate::apply_theme(choice, base_weight, window, cx);
+        crate::theme::apply(&self.settings, window, cx);
         cx.set_menus(crate::app_menus(choice));
+    }
+
+    /// Re-applies the current appearance and color scheme without a window, used
+    /// after the themes directory finishes loading so a scheme named in settings
+    /// that only just became available takes effect.
+    pub(super) fn reapply_theme(&mut self, cx: &mut Context<Self>) {
+        let choice = self.settings.ui.theme().to_string();
+        self.apply_theme_choice(&choice, None, cx);
+        cx.notify();
     }
 
     /// Applies the outcome of a settings write: on success, mirrors the new file
@@ -939,6 +944,20 @@ impl TinytextApp {
         cx.notify();
     }
 
+    /// Reveals the user themes directory in Finder so installed color schemes
+    /// are easy to find and add to.
+    fn on_open_themes_folder(
+        &mut self,
+        _: &OpenThemesFolder,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(dir) = crate::theme::themes_dir() {
+            crate::theme::ensure_dir(&dir);
+            cx.reveal_path(&dir);
+        }
+    }
+
     /// Opens `settings.json` as a text tab, creating a starter file on first
     /// use. Reached from the Settings overlay for direct edits.
     pub(super) fn open_settings_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1132,6 +1151,7 @@ impl Render for TinytextApp {
             .on_action(cx.listener(Self::on_check_for_updates))
             .on_action(cx.listener(Self::on_about))
             .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_open_themes_folder))
             .on_action(cx.listener(Self::on_reveal_in_finder))
             .on_action(cx.listener(Self::on_copy_file_path))
             .on_action(cx.listener(Self::on_copy_relative_path))

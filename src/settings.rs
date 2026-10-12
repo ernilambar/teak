@@ -14,6 +14,13 @@ pub(crate) const DEFAULT_TAB_SIZE: usize = 4;
 /// Theme used when `ui.theme` is unset. Kept as a plain string so settings.rs
 /// stays free of GPUI types.
 pub(crate) const DEFAULT_THEME: &str = "dark";
+/// Color scheme applied in the light appearance when `ui.color_scheme_light` is
+/// unset. Names the built-in theme gpui-kit registers, so leaving it unset keeps
+/// the exact palette the app had before color schemes existed.
+pub(crate) const DEFAULT_LIGHT_SCHEME: &str = "Default Light";
+/// Color scheme applied in the dark appearance when `ui.color_scheme_dark` is
+/// unset.
+pub(crate) const DEFAULT_DARK_SCHEME: &str = "Default Dark";
 
 /// File-icon style that keeps each type's own colors (the Material Icon Theme
 /// palette). The default, and the `ui.icon_color` value it maps to.
@@ -143,7 +150,12 @@ impl EditorSettings {
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct UiSettings {
+    /// The appearance mode: `light`, `dark`, or `system`.
     pub(crate) theme: Option<String>,
+    /// Color scheme applied in the light appearance, by theme name.
+    pub(crate) color_scheme_light: Option<String>,
+    /// Color scheme applied in the dark appearance, by theme name.
+    pub(crate) color_scheme_dark: Option<String>,
     pub(crate) tab_icons: Option<bool>,
     pub(crate) icon_color: Option<String>,
 }
@@ -151,6 +163,20 @@ pub(crate) struct UiSettings {
 impl UiSettings {
     pub(crate) fn theme(&self) -> &str {
         self.theme.as_deref().unwrap_or(DEFAULT_THEME)
+    }
+
+    /// The color scheme for the light appearance, falling back to the built-in.
+    pub(crate) fn light_scheme(&self) -> &str {
+        self.color_scheme_light
+            .as_deref()
+            .unwrap_or(DEFAULT_LIGHT_SCHEME)
+    }
+
+    /// The color scheme for the dark appearance, falling back to the built-in.
+    pub(crate) fn dark_scheme(&self) -> &str {
+        self.color_scheme_dark
+            .as_deref()
+            .unwrap_or(DEFAULT_DARK_SCHEME)
     }
 
     pub(crate) fn tab_icons(&self) -> bool {
@@ -278,6 +304,24 @@ pub(crate) fn save_theme(theme: &str) -> Result<String, String> {
         "ui",
         "theme",
         Some(serde_json::Value::String(theme.to_string())),
+    )
+}
+
+/// Records the light-appearance color scheme (`ui.color_scheme_light`).
+pub(crate) fn save_color_scheme_light(name: &str) -> Result<String, String> {
+    save_setting(
+        "ui",
+        "color_scheme_light",
+        Some(serde_json::Value::String(name.to_string())),
+    )
+}
+
+/// Records the dark-appearance color scheme (`ui.color_scheme_dark`).
+pub(crate) fn save_color_scheme_dark(name: &str) -> Result<String, String> {
+    save_setting(
+        "ui",
+        "color_scheme_dark",
+        Some(serde_json::Value::String(name.to_string())),
     )
 }
 
@@ -482,6 +526,35 @@ mod tests {
 
         let settings = parse_settings(r#"{"ui": {"theme": "light"}}"#).unwrap();
         assert_eq!(settings.ui.theme(), "light");
+    }
+
+    #[test]
+    fn ui_color_schemes_default_and_parse() {
+        let settings = Settings::default();
+        assert_eq!(settings.ui.light_scheme(), DEFAULT_LIGHT_SCHEME);
+        assert_eq!(settings.ui.dark_scheme(), DEFAULT_DARK_SCHEME);
+
+        let settings = parse_settings(
+            r#"{"ui": {"color_scheme_light": "Nord Light", "color_scheme_dark": "Nord"}}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.ui.light_scheme(), "Nord Light");
+        assert_eq!(settings.ui.dark_scheme(), "Nord");
+    }
+
+    #[test]
+    fn color_scheme_round_trips_through_set_setting() {
+        let json = set_setting(
+            r#"{"ui": {"theme": "system"}}"#,
+            "ui",
+            "color_scheme_dark",
+            text("Dracula"),
+        )
+        .unwrap();
+        let settings = parse_settings(&json).unwrap();
+
+        assert_eq!(settings.ui.dark_scheme(), "Dracula");
+        assert_eq!(settings.ui.theme(), "system");
     }
 
     #[test]
