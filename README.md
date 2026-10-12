@@ -19,7 +19,7 @@ A fast, lightweight text editor for macOS.
 - Cursor position, encoding, and language in the status bar
 - `tinytext` command to open files from the terminal
 - Shows up in Finder's "Open With" menu for text files
-- Light, dark, and system-following themes
+- Light, dark, and system-following themes ([color schemes](docs/themes.md))
 
 ## Requirements
 
@@ -86,6 +86,8 @@ the latest release.
 | `Cmd+Option+↑` / `Cmd+Option+↓` | Add a cursor above / below |
 | `Cmd+,` | Open settings |
 | `Cmd+Q` | Quit |
+
+See [docs/keymaps.md](docs/keymaps.md) for the full list.
 
 Open a folder in the sidebar with **File → Open Folder…**.
 
