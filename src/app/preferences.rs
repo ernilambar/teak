@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _,
+    ActiveTheme as _, Sizable as _, ThemeMode,
     button::{Button, ButtonVariants as _},
     input::TabSize,
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
@@ -25,10 +25,11 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::settings::{
-    DEFAULT_FONT_WEIGHT, DEFAULT_ICON_STYLE, DEFAULT_TAB_SIZE, DEFAULT_THEME, EditorSettings,
-    MAX_FONT_SIZE, MIN_FONT_SIZE, save_font_family, save_font_size, save_font_weight,
-    save_hard_tabs, save_icon_color, save_show_whitespace, save_soft_wrap, save_tab_icons,
-    save_tab_size, save_theme,
+    DEFAULT_DARK_SCHEME, DEFAULT_FONT_WEIGHT, DEFAULT_ICON_STYLE, DEFAULT_LIGHT_SCHEME,
+    DEFAULT_TAB_SIZE, DEFAULT_THEME, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE,
+    save_color_scheme_dark, save_color_scheme_light, save_font_family, save_font_size,
+    save_font_weight, save_hard_tabs, save_icon_color, save_show_whitespace, save_soft_wrap,
+    save_tab_icons, save_tab_size, save_theme,
 };
 
 use super::TinytextApp;
@@ -83,6 +84,8 @@ impl TinytextApp {
         let theme_value = ui.theme().to_string();
         let tab_icons = ui.tab_icons();
         let icon_color: SharedString = ui.icon_color().into();
+        let light_schemes = crate::theme::schemes(ThemeMode::Light, cx);
+        let dark_schemes = crate::theme::schemes(ThemeMode::Dark, cx);
 
         let family_weak = weak.clone();
         let family_value = font_family.clone();
@@ -280,7 +283,7 @@ impl TinytextApp {
         let theme_weak = weak.clone();
         let theme_value_owned = theme_value.clone();
         let theme_item = SettingItem::new(
-            "Theme",
+            "Mode",
             SettingField::dropdown(
                 crate::THEME_CHOICES
                     .iter()
@@ -294,7 +297,52 @@ impl TinytextApp {
                 },
             )
             .default_value(SharedString::from(DEFAULT_THEME)),
-        );
+        )
+        .description("Follow the system appearance, or force Light or Dark.");
+
+        let light_scheme_weak = weak.clone();
+        let light_scheme_value = SharedString::from(ui.light_scheme());
+        let light_scheme_item = SettingItem::new(
+            "Light Theme",
+            SettingField::dropdown(
+                light_schemes
+                    .iter()
+                    .map(|name| (name.clone(), name.clone()))
+                    .collect::<Vec<_>>(),
+                move |_cx| light_scheme_value.clone(),
+                move |value, cx| {
+                    light_scheme_weak
+                        .update(cx, |this, cx| {
+                            this.set_ui_color_scheme_light(value.to_string(), cx)
+                        })
+                        .ok();
+                },
+            )
+            .default_value(SharedString::from(DEFAULT_LIGHT_SCHEME)),
+        )
+        .description("Color scheme used while the appearance is light.");
+
+        let dark_scheme_weak = weak.clone();
+        let dark_scheme_value = SharedString::from(ui.dark_scheme());
+        let dark_scheme_item = SettingItem::new(
+            "Dark Theme",
+            SettingField::dropdown(
+                dark_schemes
+                    .iter()
+                    .map(|name| (name.clone(), name.clone()))
+                    .collect::<Vec<_>>(),
+                move |_cx| dark_scheme_value.clone(),
+                move |value, cx| {
+                    dark_scheme_weak
+                        .update(cx, |this, cx| {
+                            this.set_ui_color_scheme_dark(value.to_string(), cx)
+                        })
+                        .ok();
+                },
+            )
+            .default_value(SharedString::from(DEFAULT_DARK_SCHEME)),
+        )
+        .description("Color scheme used while the appearance is dark.");
 
         let tab_icons_weak = weak.clone();
         let tab_icons_item = SettingItem::new(
@@ -356,7 +404,12 @@ impl TinytextApp {
                     .items(vec![auto_close_item]),
             ]),
             SettingPage::new("Appearance").groups(vec![
-                SettingGroup::new().title("Theme").items(vec![theme_item]),
+                SettingGroup::new()
+                    .title("Appearance")
+                    .items(vec![theme_item]),
+                SettingGroup::new()
+                    .title("Color Scheme")
+                    .items(vec![light_scheme_item, dark_scheme_item]),
                 SettingGroup::new()
                     .title("Interface")
                     .items(vec![tab_icons_item, icon_color_item]),
@@ -470,6 +523,25 @@ impl TinytextApp {
         self.settings.ui.theme = Some(theme.clone());
         self.apply_theme_choice(&theme, None, cx);
         self.record_write(save_theme(&theme), cx);
+    }
+
+    fn set_ui_color_scheme_light(&mut self, name: String, cx: &mut Context<Self>) {
+        self.settings.ui.color_scheme_light = Some(name.clone());
+        self.apply_after_scheme_change(cx);
+        self.record_write(save_color_scheme_light(&name), cx);
+    }
+
+    fn set_ui_color_scheme_dark(&mut self, name: String, cx: &mut Context<Self>) {
+        self.settings.ui.color_scheme_dark = Some(name.clone());
+        self.apply_after_scheme_change(cx);
+        self.record_write(save_color_scheme_dark(&name), cx);
+    }
+
+    /// Re-applies the theme after a color-scheme change while keeping the
+    /// Appearance menu's check mark on the current mode.
+    fn apply_after_scheme_change(&self, cx: &mut Context<Self>) {
+        let choice = self.settings.ui.theme().to_string();
+        self.apply_theme_choice(&choice, None, cx);
     }
 
     fn set_ui_tab_icons(&mut self, enabled: bool, cx: &mut Context<Self>) {

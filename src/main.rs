@@ -7,20 +7,19 @@ mod markdown;
 mod paths;
 mod session;
 mod settings;
+mod theme;
 mod update;
 
 use std::path::PathBuf;
 
-use gpui_kit::component::{Theme, ThemeMode, WindowExt as _, input, notification::Notification};
+use gpui_kit::component::{ThemeMode, WindowExt as _, input, notification::Notification};
 use gpui_kit::*;
 
 use app::{TinytextApp, WINDOW_TITLE};
 use cli::{CliCommand, parse_args, print_help};
 use paths::path_from_file_url;
 use session::load_session;
-use settings::{
-    DEFAULT_FONT_WEIGHT, DEFAULT_THEME, ICON_STYLE_COLORFUL, ICON_STYLE_MONOCHROME, load_settings,
-};
+use settings::{ICON_STYLE_COLORFUL, ICON_STYLE_MONOCHROME, load_settings};
 
 gpui_kit::actions!(
     tinytext,
@@ -43,6 +42,7 @@ gpui_kit::actions!(
         CheckForUpdates,
         About,
         OpenSettings,
+        OpenThemesFolder,
         RevealInFinder,
         CopyFilePath,
         CopyRelativePath,
@@ -128,15 +128,13 @@ fn main() {
     application.run(move |cx| {
         gpui_kit::init(cx);
         let settings = load_settings();
-        let base_weight = settings
-            .as_ref()
-            .map(|settings| settings.editor.font_weight().unwrap_or(DEFAULT_FONT_WEIGHT))
-            .unwrap_or(DEFAULT_FONT_WEIGHT);
-        let theme_choice = settings
-            .as_ref()
-            .map(|settings| settings.ui.theme().to_string())
-            .unwrap_or_else(|_| DEFAULT_THEME.to_string());
-        apply_theme(&theme_choice, base_weight, None, cx);
+        // Apply the saved appearance and color scheme now. User-installed themes
+        // load asynchronously from the themes directory (below), so a scheme the
+        // settings name but that is not registered yet falls back to the
+        // built-in palette and is re-applied once the load finishes.
+        let resolved = settings.clone().unwrap_or_default();
+        theme::apply(&resolved, None, cx);
+        let theme_choice = resolved.ui.theme().to_string();
 
         // Positional arguments are the folders to open at launch. Passing any
         // of them defines the initial root set, so the saved session is skipped.
@@ -192,6 +190,15 @@ fn main() {
                 app.update(cx, |this, cx| this.restore_session(session, window, cx));
             }
             app.update(cx, |this, cx| this.check_font_family(window, cx));
+            // Watch the user themes directory so installed color schemes load
+            // and hot-reload. The initial load is asynchronous, so re-apply the
+            // scheme once it finishes to pick up one the settings named.
+            if let Some(dir) = theme::themes_dir() {
+                let weak = app.downgrade();
+                theme::watch(dir, cx, move |cx| {
+                    weak.update(cx, |this, cx| this.reapply_theme(cx)).ok();
+                });
+            }
             // Re-render whenever the window is (de)activated so a file deleted
             // while the app was in the background is reflected in its tab.
             app.update(cx, |_this, cx| {
@@ -248,30 +255,13 @@ pub(crate) const ICON_STYLE_CHOICES: [(&str, &str); 2] = [
 ];
 
 /// Maps an explicit string form of `ui.theme` (kept GPUI-free in settings.rs) to
-/// a `ThemeMode`. `system` is resolved by [`apply_theme`] and never reaches
+/// a `ThemeMode`. `system` is resolved by [`theme::apply`] and never reaches
 /// here; unknown values fall back to dark.
 pub(crate) fn theme_mode_from(theme: &str) -> ThemeMode {
     match theme {
         "light" => ThemeMode::Light,
         _ => ThemeMode::Dark,
     }
-}
-
-/// Applies `choice` to the live theme: `system` follows the OS appearance, while
-/// `light` and `dark` are explicit. Loading a theme resets the highlight theme,
-/// so the markdown emphasis is re-applied on top.
-pub(crate) fn apply_theme(
-    choice: &str,
-    base_weight: f32,
-    window: Option<&mut Window>,
-    cx: &mut App,
-) {
-    if choice == THEME_SYSTEM {
-        Theme::sync_system_appearance(window, cx);
-    } else {
-        Theme::change(theme_mode_from(choice), window, cx);
-    }
-    markdown::apply_emphasis(cx, base_weight);
 }
 
 pub(crate) fn app_menus(theme: &str) -> Vec<Menu> {
@@ -281,6 +271,7 @@ pub(crate) fn app_menus(theme: &str) -> Vec<Menu> {
             MenuItem::action("Check for Updates…", CheckForUpdates),
             MenuItem::separator(),
             MenuItem::action("Settings…", OpenSettings),
+            MenuItem::action("Open Themes Folder", OpenThemesFolder),
             MenuItem::separator(),
             MenuItem::action("Install Command Line Tool…", InstallCli),
             MenuItem::separator(),
