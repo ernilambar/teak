@@ -12,7 +12,9 @@ mod update;
 
 use std::path::PathBuf;
 
-use gpui_kit::component::{ThemeMode, WindowExt as _, input, notification::Notification};
+use gpui_kit::component::{
+    ThemeMode, ThemeRegistry, WindowExt as _, input, notification::Notification,
+};
 use gpui_kit::*;
 
 use app::{TinytextApp, WINDOW_TITLE};
@@ -199,6 +201,17 @@ fn main() {
                     weak.update(cx, |this, cx| this.reapply_theme(cx)).ok();
                 });
             }
+            // A reload of the themes directory re-applies the library's copy of
+            // the default palettes, which share the bundled names. Re-apply the
+            // scheme the settings select whenever the registry changes so the
+            // bundled palettes stay in effect.
+            let registry_weak = app.downgrade();
+            cx.observe_global::<ThemeRegistry>(move |cx| {
+                registry_weak
+                    .update(cx, |this, cx| this.reapply_theme(cx))
+                    .ok();
+            })
+            .detach();
             // Re-render whenever the window is (de)activated so a file deleted
             // while the app was in the background is reflected in its tab.
             app.update(cx, |_this, cx| {
