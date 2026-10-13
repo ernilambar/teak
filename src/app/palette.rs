@@ -19,11 +19,11 @@ use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
     CloseAllFolders, CloseTab, CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp,
     CopyRelativePath, DeleteLine, GoToLine, InsertLineAbove, InsertLineBelow, MoveLineDown,
-    MoveLineUp, NewFile, NextTab, OpenFile, OpenSettings, PreviousTab, Refresh, ReopenClosedTab,
-    RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, SplitSelectionIntoLines,
-    ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers,
-    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
-    ZoomIn, ZoomOut, ZoomReset,
+    MoveLineUp, NewFile, NextTab, OpenDefaultSettings, OpenFile, OpenSettings, PreviousTab,
+    Refresh, ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme,
+    SplitSelectionIntoLines, ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineComment,
+    ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace,
+    ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 
 use super::TinytextApp;
@@ -104,6 +104,10 @@ fn palette_groups() -> Vec<CommandGroup> {
                 .label("Settings…")
                 .keywords(["preferences", "config"])
                 .action(Box::new(OpenSettings)),
+            CommandItem::new()
+                .label("Default Settings")
+                .keywords(["defaults", "preferences", "reference"])
+                .action(Box::new(OpenDefaultSettings)),
             item("Check for Updates…", Box::new(CheckForUpdates)),
             item("About Tinytext", Box::new(About)),
         ]),

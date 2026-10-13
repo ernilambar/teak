@@ -24,17 +24,17 @@ use crate::cli::{app_bundle_path, install_cli};
 use crate::paths::{DirEntry, read_dir};
 use crate::session::{SessionState, session_path};
 use crate::settings::{
-    DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, font_family_issue,
-    load_settings, save_editor_flag, save_font_size, save_show_whitespace, save_soft_wrap,
-    save_theme, settings_path,
+    DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, defaults_document,
+    font_family_issue, load_settings, save_editor_flag, save_font_size, save_show_whitespace,
+    save_soft_wrap, save_theme, settings_path,
 };
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
 use crate::{
     About, CheckForUpdates, CopyFilePath, CopyRelativePath, InstallCli, JumpToTab, NextTab,
-    OpenSettings, OpenThemesFolder, PreviousTab, Quit, Refresh, ReopenClosedTab, RevealInFinder,
-    SetTheme, ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineNumbers,
-    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
-    ZoomIn, ZoomOut, ZoomReset,
+    OpenDefaultSettings, OpenSettings, OpenThemesFolder, PreviousTab, Quit, Refresh,
+    ReopenClosedTab, RevealInFinder, SetTheme, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
+    ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace,
+    ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// Maps `editor.indent_wrapped_lines` onto the engine's wrapping indent.
@@ -944,6 +944,22 @@ impl TinytextApp {
         cx.notify();
     }
 
+    /// Opens the generated "Default Settings" document: every key with the
+    /// value it takes when unset. The tab is an ordinary untitled document, so
+    /// nothing is written to disk and the session never restores it.
+    fn on_open_default_settings(
+        &mut self,
+        _: &OpenDefaultSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let document = defaults_document(
+            cx.theme().mono_font_family.as_ref(),
+            cx.theme().mono_font_size.as_f32(),
+        );
+        self.add_document_tab("Default Settings", "JSON", document, window, cx);
+    }
+
     /// Reveals the user themes directory in Finder so installed color schemes
     /// are easy to find and add to.
     fn on_open_themes_folder(
@@ -1151,6 +1167,7 @@ impl Render for TinytextApp {
             .on_action(cx.listener(Self::on_check_for_updates))
             .on_action(cx.listener(Self::on_about))
             .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_open_default_settings))
             .on_action(cx.listener(Self::on_open_themes_folder))
             .on_action(cx.listener(Self::on_reveal_in_finder))
             .on_action(cx.listener(Self::on_copy_file_path))

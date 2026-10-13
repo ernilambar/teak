@@ -44,6 +44,7 @@ gpui_kit::actions!(
         CheckForUpdates,
         About,
         OpenSettings,
+        OpenDefaultSettings,
         OpenThemesFolder,
         RevealInFinder,
         CopyFilePath,

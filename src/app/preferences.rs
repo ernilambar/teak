@@ -378,42 +378,49 @@ impl TinytextApp {
         )
         .description("Colored file-type icons, or a single color that follows the theme.");
 
+        // Defaults are surfaced through the "Default Settings" document rather
+        // than a page-level reset, so both pages turn the reset button off.
         let pages = vec![
-            SettingPage::new("Editor").default_open(true).groups(vec![
-                SettingGroup::new().title("Font").items(vec![
-                    font_family_item,
-                    font_size_item,
-                    font_weight_item,
+            SettingPage::new("Editor")
+                .default_open(true)
+                .resettable(false)
+                .groups(vec![
+                    SettingGroup::new().title("Font").items(vec![
+                        font_family_item,
+                        font_size_item,
+                        font_weight_item,
+                    ]),
+                    SettingGroup::new().title("Indentation").items(vec![
+                        tab_size_item,
+                        hard_tabs_item,
+                        smart_indent_item,
+                    ]),
+                    SettingGroup::new().title("Display").items(vec![
+                        soft_wrap_item,
+                        indent_wrapped_item,
+                        whitespace_item,
+                        line_numbers_item,
+                        indent_guides_item,
+                        folding_item,
+                        scroll_beyond_item,
+                    ]),
+                    SettingGroup::new()
+                        .title("Editing")
+                        .items(vec![auto_close_item]),
                 ]),
-                SettingGroup::new().title("Indentation").items(vec![
-                    tab_size_item,
-                    hard_tabs_item,
-                    smart_indent_item,
+            SettingPage::new("Appearance")
+                .resettable(false)
+                .groups(vec![
+                    SettingGroup::new()
+                        .title("Appearance")
+                        .items(vec![theme_item]),
+                    SettingGroup::new()
+                        .title("Color Scheme")
+                        .items(vec![light_scheme_item, dark_scheme_item]),
+                    SettingGroup::new()
+                        .title("Interface")
+                        .items(vec![tab_icons_item, icon_color_item]),
                 ]),
-                SettingGroup::new().title("Display").items(vec![
-                    soft_wrap_item,
-                    indent_wrapped_item,
-                    whitespace_item,
-                    line_numbers_item,
-                    indent_guides_item,
-                    folding_item,
-                    scroll_beyond_item,
-                ]),
-                SettingGroup::new()
-                    .title("Editing")
-                    .items(vec![auto_close_item]),
-            ]),
-            SettingPage::new("Appearance").groups(vec![
-                SettingGroup::new()
-                    .title("Appearance")
-                    .items(vec![theme_item]),
-                SettingGroup::new()
-                    .title("Color Scheme")
-                    .items(vec![light_scheme_item, dark_scheme_item]),
-                SettingGroup::new()
-                    .title("Interface")
-                    .items(vec![tab_icons_item, icon_color_item]),
-            ]),
         ];
 
         let open_json = Button::new("settings-open-json")

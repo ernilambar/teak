@@ -221,6 +221,43 @@ pub(crate) fn load_settings() -> Result<Settings, String> {
     parse_settings(&data).map_err(|error| format!("Invalid settings: {error}"))
 }
 
+/// Every settings key at the value it takes when left unset, as pretty JSON in
+/// the shape of `settings.json`. Values are read through the same accessors the
+/// app uses, so the document cannot disagree with the real defaults. The theme
+/// supplies the default editor font family and size, which this module cannot
+/// read itself, so the caller passes them in.
+pub(crate) fn defaults_document(mono_family: &str, mono_size: f32) -> String {
+    let editor = EditorSettings::default();
+    let ui = UiSettings::default();
+    let defaults = Settings {
+        editor: EditorSettings {
+            font_family: Some(mono_family.to_string()),
+            font_size: Some(mono_size),
+            font_weight: Some(DEFAULT_FONT_WEIGHT),
+            soft_wrap: Some(editor.soft_wrap()),
+            show_whitespace: Some(editor.show_whitespace()),
+            tab_size: Some(editor.tab_size()),
+            hard_tabs: Some(editor.hard_tabs()),
+            line_numbers: Some(editor.line_numbers()),
+            indent_guides: Some(editor.indent_guides()),
+            folding: Some(editor.folding()),
+            auto_close: Some(editor.auto_close()),
+            smart_indent: Some(editor.smart_indent()),
+            indent_wrapped_lines: Some(editor.indent_wrapped_lines()),
+            scroll_beyond_last_line: Some(editor.scroll_beyond_last_line()),
+            cursor_surrounding_lines: editor.cursor_surrounding_lines,
+        },
+        ui: UiSettings {
+            theme: Some(ui.theme().to_string()),
+            color_scheme_light: Some(ui.light_scheme().to_string()),
+            color_scheme_dark: Some(ui.dark_scheme().to_string()),
+            tab_icons: Some(ui.tab_icons()),
+            icon_color: Some(ui.icon_color().to_string()),
+        },
+    };
+    serde_json::to_string_pretty(&defaults).expect("settings serialize as JSON")
+}
+
 /// Returns `data` with `section.key` set to `value` — or removed when `value`
 /// is `None` — preserving every other key so a hand-authored file keeps the rest
 /// of its content. Keys are written in the order `serde_json` sorts them, so
@@ -499,6 +536,44 @@ mod tests {
         assert!(settings.editor.indent_wrapped_lines());
         assert!(settings.editor.scroll_beyond_last_line());
         assert_eq!(settings.editor.cursor_surrounding_lines, None);
+    }
+
+    #[test]
+    fn defaults_document_lists_every_key_at_its_effective_default() {
+        let document = defaults_document("Menlo", 13.);
+        let parsed = parse_settings(&document).unwrap();
+        let editor = EditorSettings::default();
+        let ui = UiSettings::default();
+
+        assert_eq!(parsed.editor.font_family.as_deref(), Some("Menlo"));
+        assert_eq!(parsed.editor.font_size(), Some(13.));
+        assert_eq!(parsed.editor.font_weight(), Some(DEFAULT_FONT_WEIGHT));
+        assert_eq!(parsed.editor.soft_wrap(), editor.soft_wrap());
+        assert_eq!(parsed.editor.show_whitespace(), editor.show_whitespace());
+        assert_eq!(parsed.editor.tab_size(), editor.tab_size());
+        assert_eq!(parsed.editor.hard_tabs(), editor.hard_tabs());
+        assert_eq!(parsed.editor.line_numbers(), editor.line_numbers());
+        assert_eq!(parsed.editor.indent_guides(), editor.indent_guides());
+        assert_eq!(parsed.editor.folding(), editor.folding());
+        assert_eq!(parsed.editor.auto_close(), editor.auto_close());
+        assert_eq!(parsed.editor.smart_indent(), editor.smart_indent());
+        assert_eq!(
+            parsed.editor.indent_wrapped_lines(),
+            editor.indent_wrapped_lines()
+        );
+        assert_eq!(
+            parsed.editor.scroll_beyond_last_line(),
+            editor.scroll_beyond_last_line()
+        );
+        assert_eq!(
+            parsed.editor.cursor_surrounding_lines,
+            editor.cursor_surrounding_lines
+        );
+        assert_eq!(parsed.ui.theme(), ui.theme());
+        assert_eq!(parsed.ui.light_scheme(), ui.light_scheme());
+        assert_eq!(parsed.ui.dark_scheme(), ui.dark_scheme());
+        assert_eq!(parsed.ui.tab_icons(), ui.tab_icons());
+        assert_eq!(parsed.ui.icon_color(), ui.icon_color());
     }
 
     #[test]

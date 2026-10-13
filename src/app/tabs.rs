@@ -30,7 +30,34 @@ impl TinytextApp {
             .as_deref()
             .map(|path| file_name(path).into())
             .unwrap_or_else(|| "Untitled".into());
+        self.push_tab(path, title, language, content, window, cx);
+    }
 
+    /// Opens a pathless document under an explicit title and language, for
+    /// generated content that belongs to no file on disk. The tab behaves like
+    /// any other untitled one: the session never persists it, and nothing is
+    /// written unless the user saves it somewhere.
+    pub(super) fn add_document_tab(
+        &mut self,
+        title: &str,
+        language: &str,
+        content: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.push_tab(None, title.into(), language.into(), content, window, cx);
+    }
+
+    /// Shared body of [`Self::add_tab`] and [`Self::add_document_tab`].
+    fn push_tab(
+        &mut self,
+        path: Option<PathBuf>,
+        title: SharedString,
+        language: SharedString,
+        content: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(editor_language_id(&language))
