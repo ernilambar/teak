@@ -97,8 +97,15 @@ is not caused by application code.
 
 ## Release
 
-Maintainers only. Bump `version` in `Cargo.toml`, run `cargo build` to update
-`Cargo.lock`, and commit both. Then tag and push:
+Maintainers only. `version` in `Cargo.toml` is the single source of truth. Bump it, then
+let cargo update `Cargo.lock`:
+
+```sh
+# edit version in Cargo.toml
+cargo update -p tinytext
+```
+
+Run the quality gate above, then tag the release so it matches the version:
 
 ```sh
 git tag v0.1.2

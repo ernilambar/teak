@@ -80,7 +80,8 @@ anywhere else.
 To release a new version:
 
 1. Bump `version` in `Cargo.toml`.
-2. Run `cargo build` so `Cargo.lock` picks up the new version (do not edit it by hand).
+2. Run `cargo update -p tinytext` so `Cargo.lock` picks up the new version (do not edit it
+   by hand).
 3. If the year changed, update `copyright` under `[package.metadata.bundle]`.
 4. Pass the quality gate and report the changes.
 
