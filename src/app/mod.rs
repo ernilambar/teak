@@ -1183,6 +1183,8 @@ impl Render for TinytextApp {
             .on_action(cx.listener(Self::on_go_to_line))
             .on_action(cx.listener(Self::on_add_cursor_above))
             .on_action(cx.listener(Self::on_add_cursor_below))
+            .on_action(cx.listener(Self::on_split_selection_into_lines))
+            .on_action(cx.listener(Self::on_add_next_occurrence))
             .on_action(cx.listener(Self::on_command_palette))
             .child(self.render_workspace(window, cx))
             .child(self.render_status_bar(alt_held, cx));

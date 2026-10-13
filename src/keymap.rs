@@ -10,12 +10,13 @@
 use gpui_kit::*;
 
 use crate::{
-    AddCursorAbove, AddCursorBelow, AddFolder, CloseAllFolders, CloseTab, CommandPalette,
-    CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, GoToLine, Hide,
-    HideOthers, InsertLineAbove, InsertLineBelow, JumpToTab, MoveLineDown, MoveLineUp, NewFile,
-    NextTab, OpenFile, OpenSettings, PreviousTab, Quit, Refresh, ReopenClosedTab, RevealInFinder,
-    SaveAll, SaveFile, SaveFileAs, SelectLine, ToggleLineComment, ToggleMarkdownPreview,
-    ToggleSidebar, ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CloseAllFolders, CloseTab,
+    CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, GoToLine,
+    Hide, HideOthers, InsertLineAbove, InsertLineBelow, JumpToTab, MoveLineDown, MoveLineUp,
+    NewFile, NextTab, OpenFile, OpenSettings, PreviousTab, Quit, Refresh, ReopenClosedTab,
+    RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine, SplitSelectionIntoLines,
+    ToggleLineComment, ToggleMarkdownPreview, ToggleSidebar, ToggleWhitespace, ToggleWordWrap,
+    ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -95,6 +96,8 @@ fn editor_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-down", AddCursorBelow, Some(EDITOR)),
         KeyBinding::new("ctrl-alt-up", AddCursorAbove, Some(EDITOR)),
         KeyBinding::new("ctrl-alt-down", AddCursorBelow, Some(EDITOR)),
+        KeyBinding::new("cmd-shift-l", SplitSelectionIntoLines, Some(EDITOR)),
+        KeyBinding::new("cmd-d", AddNextOccurrence, Some(EDITOR)),
         KeyBinding::new("cmd-enter", InsertLineBelow, Some(EDITOR)),
         KeyBinding::new("cmd-shift-enter", InsertLineAbove, Some(EDITOR)),
         KeyBinding::new("cmd-g", GoToLine, Some(EDITOR)),
@@ -136,7 +139,7 @@ mod tests {
         // `KeyBinding::new` panics on an invalid keystroke, so building the
         // lists is itself the assertion that every chord is well-formed.
         assert_eq!(app_bindings().len(), 36);
-        assert_eq!(editor_bindings().len(), 15);
+        assert_eq!(editor_bindings().len(), 17);
     }
 
     #[test]

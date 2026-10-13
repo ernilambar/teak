@@ -1,0 +1,19 @@
+diff --git a/src/input/base/state.rs b/src/input/base/state.rs
+index d35f083..d50dafd 100644
+--- a/src/input/base/state.rs
++++ b/src/input/base/state.rs
+@@ -3163,6 +3163,14 @@ impl<M: InputModeKind> InputBaseState<M> {
+         self.select_to(end, cx);
+     }
+ 
++    // Tinytext patch (patches/gpui-base.patch): `selected_ranges` is added; it
++    // is not part of upstream gpui-base.
++
++    /// Return every selection as UTF-8 byte ranges, the active one first.
++    pub fn selected_ranges(&self) -> Vec<Range<usize>> {
++        self.selections.iter().map(|sel| (*sel).into()).collect()
++    }
++
+     /// Add `range` as an additional selection, keeping the existing ones —
+     /// the programmatic equivalent of Alt-clicking another cursor into the
+     /// text.

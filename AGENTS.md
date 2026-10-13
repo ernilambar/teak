@@ -61,6 +61,14 @@ in headless environments.
   file or to record a choice made from the Settings overlay or a view toggle. Each write is
   a surgical `section.key` update that never rewrites unrelated keys. Group new settings
   keys by area (`editor.*`, `ui.*`).
+- `vendor/gpui-base` is gpui-base with `patches/gpui-base.patch` applied, wired in through
+  `[patch.crates-io]`. It adds `selected_ranges()` (read every selection); upstream
+  `add_selection` covers adding them.
+  Never edit `vendor/` without regenerating the patch: `./scripts/vendor-gpui-base.sh
+  --diff`. After bumping `gpui-kit`, run `cargo fetch`, then
+  `./scripts/vendor-gpui-base.sh <version>` with the gpui-base version from `Cargo.lock`;
+  a version mismatch makes Cargo ignore the patch. If the patch no longer applies, re-add the
+  change by hand in the fresh copy and run `--diff`.
 - This project targets macOS only. Do not add cross-platform code paths.
 
 ## Releasing
