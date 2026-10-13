@@ -243,7 +243,7 @@ Save as `midnight.json`:
         "sidebar.foreground": "#c8ccd4",
         "sidebar.border": "#232834",
         "scrollbar.thumb.background": "#2b3140",
-        "selection.background": "#1f2635"
+        "selection.background": "#33467c"
       },
       "highlight": {
         "editor.background": "#0f1117",
