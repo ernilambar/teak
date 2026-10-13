@@ -16,13 +16,14 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::{
-    About, AddCursorAbove, AddCursorBelow, AddFolder, CheckForUpdates, CloseAllFolders, CloseTab,
-    CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, GoToLine,
-    InsertLineAbove, InsertLineBelow, MoveLineDown, MoveLineUp, NewFile, NextTab, OpenFile,
-    OpenSettings, PreviousTab, Refresh, ReopenClosedTab, RevealInFinder, SaveAll, SaveFile,
-    SaveFileAs, SelectLine, SetTheme, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
-    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
-    ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
+    CloseAllFolders, CloseTab, CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp,
+    CopyRelativePath, DeleteLine, GoToLine, InsertLineAbove, InsertLineBelow, MoveLineDown,
+    MoveLineUp, NewFile, NextTab, OpenFile, OpenSettings, PreviousTab, Refresh, ReopenClosedTab,
+    RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, SplitSelectionIntoLines,
+    ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers,
+    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
+    ZoomIn, ZoomOut, ZoomReset,
 };
 
 use super::TinytextApp;
@@ -68,6 +69,8 @@ fn palette_groups() -> Vec<CommandGroup> {
                 .action(Box::new(GoToLine)),
             item("Add Cursor Above", Box::new(AddCursorAbove)),
             item("Add Cursor Below", Box::new(AddCursorBelow)),
+            item("Split into Lines", Box::new(SplitSelectionIntoLines)),
+            item("Add Next Occurrence", Box::new(AddNextOccurrence)),
             item("Copy Path", Box::new(CopyFilePath)),
             item("Copy Relative Path", Box::new(CopyRelativePath)),
         ]),

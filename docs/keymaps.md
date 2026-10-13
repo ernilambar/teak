@@ -44,10 +44,16 @@ and indent.
 | `⌃⌥↑` / `⌃⌥↓` | `Ctrl + Option + Up` / `Ctrl + Option + Down` | Add Cursor Above / Below (alternate) |
 | `⌥` + click | `Option` + click | Add a cursor at the click |
 | `⇧⌥` + drag | `Shift + Option` + drag | Column (block) selection |
+| `⌘⇧L` | `Cmd + Shift + L` | Split into Lines |
+| `⌘D` | `Cmd + D` | Add Next Occurrence |
 
 Once more than one cursor is active, typing, deleting, pasting, and undo or redo
 apply to every cursor at once. Add cursors by name from the Edit menu, the
 editor's context menu, or the command palette.
+
+Split into Lines turns a multi-line selection into one selection per line.
+Add Next Occurrence selects the word under the caret, then adds the next match
+of the selected text on each press, wrapping past the end of the file.
 
 ## View & window
 

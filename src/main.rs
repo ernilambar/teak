@@ -75,6 +75,8 @@ gpui_kit::actions!(
         GoToLine,
         AddCursorAbove,
         AddCursorBelow,
+        SplitSelectionIntoLines,
+        AddNextOccurrence,
     ]
 );
 
@@ -330,6 +332,8 @@ pub(crate) fn app_menus(theme: &str) -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Add Cursor Above", AddCursorAbove),
             MenuItem::action("Add Cursor Below", AddCursorBelow),
+            MenuItem::action("Split into Lines", SplitSelectionIntoLines),
+            MenuItem::action("Add Next Occurrence", AddNextOccurrence),
             MenuItem::separator(),
             MenuItem::action("Toggle Line Comment", ToggleLineComment),
             MenuItem::action("Delete Line", DeleteLine),

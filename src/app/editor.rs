@@ -18,8 +18,9 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::{
-    AddCursorAbove, AddCursorBelow, CopyLineDown, CopyLineUp, DeleteLine, GoToLine,
-    InsertLineAbove, InsertLineBelow, MoveLineDown, MoveLineUp, SelectLine, ToggleLineComment,
+    AddCursorAbove, AddCursorBelow, AddNextOccurrence, CopyLineDown, CopyLineUp, DeleteLine,
+    GoToLine, InsertLineAbove, InsertLineBelow, MoveLineDown, MoveLineUp, SelectLine,
+    SplitSelectionIntoLines, ToggleLineComment,
 };
 
 use super::TinytextApp;
@@ -267,6 +268,95 @@ fn select_line_range(buf: &LineBuffer, selection: &Range<usize>) -> Range<usize>
     buf.start(first)..buf.end(last)
 }
 
+/// Splits every non-empty selection into one selection per line it touches,
+/// excluding line breaks. Empty selections stay as they are. Returns `None`
+/// when no selection spans more than one line.
+fn split_into_lines(buf: &LineBuffer, selections: &[Range<usize>]) -> Option<Vec<Range<usize>>> {
+    let mut out = Vec::new();
+    let mut split = false;
+    for selection in selections {
+        let (first, last) = buf.touched(selection);
+        if selection.is_empty() || first == last {
+            out.push(selection.clone());
+            continue;
+        }
+        split = true;
+        for line in first..=last {
+            let start = buf.start(line);
+            let end = start + buf.lines[line].trim_end_matches('\r').len();
+            let sel_end = selection.end.min(end);
+            out.push(selection.start.max(start).min(sel_end)..sel_end);
+        }
+    }
+    if !split {
+        return None;
+    }
+    out.sort_by_key(|range| range.start);
+    Some(out)
+}
+
+/// Characters that make up a word for "add next occurrence". Non-ASCII
+/// characters other than whitespace count, so scripts with combining marks
+/// (Devanagari matras and virama) stay whole.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || (!c.is_ascii() && !c.is_whitespace())
+}
+
+/// The word touching byte offset `offset`, preferring the one after it.
+fn word_at(text: &str, offset: usize) -> Option<Range<usize>> {
+    let start = text[..offset]
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| is_word_char(c))
+        .last()
+        .map_or(offset, |(i, _)| i);
+    let end = offset
+        + text[offset..]
+            .char_indices()
+            .find(|&(_, c)| !is_word_char(c))
+            .map_or(text.len() - offset, |(i, _)| i);
+    (start < end).then_some(start..end)
+}
+
+/// Sublime's "quick add next" (`⌘D`). `selections` lists the active selection
+/// first and the result keeps that order. An empty active selection expands to
+/// the word under it; otherwise the next match of the active selection's text
+/// after the last selection in the document, wrapping around and skipping
+/// matches already selected, is appended. Returns `None` when there is nothing
+/// to add.
+fn add_next_occurrence(text: &str, selections: &[Range<usize>]) -> Option<Vec<Range<usize>>> {
+    let active = selections.first()?;
+    if active.is_empty() {
+        let word = word_at(text, active.start)?;
+        let mut out = vec![word];
+        out.extend_from_slice(&selections[1..]);
+        return Some(out);
+    }
+
+    let needle = &text[active.clone()];
+    let taken = |found: &Range<usize>| {
+        selections
+            .iter()
+            .any(|s| found.start < s.end && s.start < found.end)
+    };
+    let search = |mut from: usize| {
+        while let Some(i) = text[from..].find(needle) {
+            let found = from + i..from + i + needle.len();
+            if !taken(&found) {
+                return Some(found);
+            }
+            from = found.end;
+        }
+        None
+    };
+    let last_end = selections.iter().map(|s| s.end).max()?;
+    let found = search(last_end).or_else(|| search(0))?;
+
+    let mut out = selections.to_vec();
+    out.push(found);
+    Some(out)
+}
+
 /// How a language comments out code.
 #[derive(Clone, Copy)]
 enum CommentStyle {
@@ -508,6 +598,52 @@ impl TinytextApp {
         });
     }
 
+    /// Runs `select` against the focused editor's text and selections (active
+    /// first) and applies the selections it returns, if any. The first becomes
+    /// the active selection; the view scrolls to the last.
+    fn select_in_editor<F>(&mut self, cx: &mut Context<Self>, select: F)
+    where
+        F: FnOnce(&str, &[Range<usize>]) -> Option<Vec<Range<usize>>>,
+    {
+        let Some(tab) = self.active() else {
+            return;
+        };
+        let editor = tab.editor.clone();
+        editor.update(cx, |state, cx| {
+            let text = state.text().to_string();
+            let Some(ranges) = select(&text, &state.selected_ranges()) else {
+                return;
+            };
+            let mut ranges = ranges.into_iter();
+            if let Some(first) = ranges.next() {
+                state.set_selected_range(first, cx);
+            }
+            for range in ranges {
+                state.add_selection(range, cx);
+            }
+        });
+    }
+
+    pub(super) fn on_split_selection_into_lines(
+        &mut self,
+        _: &SplitSelectionIntoLines,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_in_editor(cx, |text, selections| {
+            split_into_lines(&LineBuffer::new(text), selections)
+        });
+    }
+
+    pub(super) fn on_add_next_occurrence(
+        &mut self,
+        _: &AddNextOccurrence,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_in_editor(cx, add_next_occurrence);
+    }
+
     /// Dispatches an engine action at the focused editor.
     ///
     /// The engine's add-cursor listeners live on the editor element, so the
@@ -598,14 +734,17 @@ impl TinytextApp {
 }
 
 #[cfg(test)]
+// Selection lists of one range read naturally as `[a..b]` in the assertions.
+#[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use std::ops::Range;
 
     // Explicit imports: `use super::*` would pull in gpui-kit's `test` attribute
     // macro and shadow the built-in one, making `#[test]` recurse.
     use super::{
-        CommentStyle, Commit, LineBuffer, comment_style, delete_lines, duplicate_lines,
-        insert_line, move_lines, select_line_range, toggle_comment,
+        CommentStyle, Commit, LineBuffer, add_next_occurrence, comment_style, delete_lines,
+        duplicate_lines, insert_line, move_lines, select_line_range, split_into_lines,
+        toggle_comment,
     };
 
     /// Applies a commit to `text` the way the handler does.
@@ -892,5 +1031,78 @@ mod tests {
             Some(CommentStyle::Block { .. })
         ));
         assert!(comment_style("Plain Text").is_none());
+    }
+
+    #[test]
+    fn split_selection_into_lines_excludes_breaks() {
+        let text = "ab\ncd\r\nef";
+        let buf = LineBuffer::new(text);
+        assert_eq!(split_into_lines(&buf, &[1..8]).unwrap(), [1..2, 3..5, 7..8]);
+    }
+
+    #[test]
+    fn split_selection_keeps_empty_lines_and_carets() {
+        let text = "a\n\nb";
+        let buf = LineBuffer::new(text);
+        assert_eq!(
+            split_into_lines(&buf, &[at(0), 0..4]).unwrap(),
+            [at(0), 0..1, 2..2, 3..4]
+        );
+    }
+
+    #[test]
+    fn split_selection_ending_at_line_start_skips_that_line() {
+        let text = "a\nb\nc";
+        let buf = LineBuffer::new(text);
+        assert_eq!(split_into_lines(&buf, &[0..4]).unwrap(), [0..1, 2..3]);
+    }
+
+    #[test]
+    fn split_single_line_selection_is_a_no_op() {
+        let buf = LineBuffer::new("abc\ndef");
+        assert!(split_into_lines(&buf, &[0..2, at(5)]).is_none());
+    }
+
+    #[test]
+    fn next_occurrence_expands_caret_to_word() {
+        assert_eq!(add_next_occurrence("foo bar", &[at(5)]).unwrap(), [4..7]);
+        assert_eq!(add_next_occurrence("foo bar", &[at(3)]).unwrap(), [0..3]);
+        assert!(add_next_occurrence("a  b", &[at(2)]).is_none());
+    }
+
+    #[test]
+    fn next_occurrence_keeps_devanagari_words_whole() {
+        let text = "नमस्ते संसार";
+        let word = add_next_occurrence(text, &[at(3)]).unwrap();
+        assert_eq!(&text[word[0].clone()], "नमस्ते");
+    }
+
+    #[test]
+    fn next_occurrence_appends_following_match() {
+        let text = "ab ab ab";
+        assert_eq!(add_next_occurrence(text, &[0..2]).unwrap(), [0..2, 3..5]);
+        assert_eq!(
+            add_next_occurrence(text, &[0..2, 3..5]).unwrap(),
+            [0..2, 3..5, 6..8]
+        );
+    }
+
+    #[test]
+    fn next_occurrence_searches_after_the_last_selection() {
+        let text = "ab ab ab ab";
+        assert_eq!(
+            add_next_occurrence(text, &[3..5, 6..8]).unwrap(),
+            [3..5, 6..8, 9..11]
+        );
+    }
+
+    #[test]
+    fn next_occurrence_wraps_and_skips_selected() {
+        let text = "ab ab ab";
+        assert_eq!(
+            add_next_occurrence(text, &[3..5, 6..8]).unwrap(),
+            [3..5, 6..8, 0..2]
+        );
+        assert!(add_next_occurrence(text, &[0..2, 3..5, 6..8]).is_none());
     }
 }
