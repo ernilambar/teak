@@ -1,10 +1,11 @@
 //! Color schemes: named palettes applied on top of the light/dark appearance.
 //!
-//! A scheme controls colors only. Editor font family/size/weight and the UI
-//! radius stay owned by settings and gpui-kit's defaults, so an installed theme
-//! can never fight the user's editor settings. Themes are Zed-compatible JSON
-//! files; the built-in `Default Light`/`Default Dark` palettes are bundled with
-//! the app, and user themes are read from [`themes_dir`].
+//! A scheme controls colors only. Font family/size for the editor and the
+//! interface and the UI radius stay owned by settings and gpui-kit's defaults,
+//! so an installed theme can never fight the user's font settings. Themes are
+//! Zed-compatible JSON files; the built-in `Default Light`/`Default Dark`
+//! palettes are bundled with the app, and user themes are read from
+//! [`themes_dir`].
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -14,7 +15,7 @@ use gpui_kit::component::{Theme, ThemeConfig, ThemeMode, ThemeRegistry, ThemeSet
 use gpui_kit::*;
 
 use crate::paths::support_dir;
-use crate::settings::{DEFAULT_FONT_WEIGHT, Settings};
+use crate::settings::{DEFAULT_FONT_WEIGHT, DEFAULT_UI_FONT_SIZE, SYSTEM_UI_FONT, Settings};
 
 /// Seed file written into a freshly created themes directory so the format is
 /// discoverable. Only `*.json` files are parsed, so this is never a theme.
@@ -42,7 +43,8 @@ Each file is a theme set:
   ]
 }
 
-A theme controls colors only; editor fonts and layout live in Settings.
+A theme controls colors only; editor and interface fonts and layout live in
+Settings.
 ";
 
 /// The directory scanned for user-installed theme files.
@@ -95,11 +97,31 @@ pub(crate) fn apply(settings: &Settings, window: Option<&mut Window>, cx: &mut A
         ThemeMode::Dark => settings.ui.dark_scheme(),
     };
     apply_scheme(name, mode, window, cx);
+    apply_ui_font(settings, cx);
 
     crate::markdown::apply_emphasis(
         cx,
         settings.editor.font_weight().unwrap_or(DEFAULT_FONT_WEIGHT),
     );
+}
+
+/// Applies the interface font family and base size from settings to the global
+/// theme. Every element inherits them from the root surface, so this reaches
+/// the whole chrome. Unset keys fall back to gpui-kit's defaults — the virtual
+/// system UI family and its base size — so clearing a setting restores them.
+/// `Theme::update` re-resolves the fonts and refreshes every window.
+fn apply_ui_font(settings: &Settings, cx: &mut App) {
+    let family: SharedString = settings
+        .ui
+        .font_family
+        .clone()
+        .unwrap_or_else(|| SYSTEM_UI_FONT.to_string())
+        .into();
+    let size = settings.ui.font_size().unwrap_or(DEFAULT_UI_FONT_SIZE);
+    Theme::update(cx, |theme| {
+        theme.font_family = family;
+        theme.font_size = px(size);
+    });
 }
 
 /// The bundled color schemes. Embedded so the default light and dark palettes

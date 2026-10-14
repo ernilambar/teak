@@ -9,6 +9,16 @@ pub(crate) const MAX_FONT_SIZE: f32 = 72.;
 pub(crate) const MIN_FONT_WEIGHT: f32 = 100.;
 pub(crate) const MAX_FONT_WEIGHT: f32 = 900.;
 pub(crate) const DEFAULT_FONT_WEIGHT: f32 = 400.;
+/// Bounds for `ui.font_size`. Tighter than the editor's because the interface
+/// scales as a whole when its base size changes.
+pub(crate) const MIN_UI_FONT_SIZE: f32 = 9.;
+pub(crate) const MAX_UI_FONT_SIZE: f32 = 24.;
+/// Base interface size when `ui.font_size` is unset. Matches gpui-kit's default
+/// theme size, so leaving it unset keeps the interface as it was.
+pub(crate) const DEFAULT_UI_FONT_SIZE: f32 = 16.;
+/// The virtual family GPUI resolves to the platform UI font. `ui.font_family`
+/// unset means this, so clearing the setting restores the system font.
+pub(crate) const SYSTEM_UI_FONT: &str = ".SystemUIFont";
 /// Effective tab width when `editor.tab_size` is unset.
 pub(crate) const DEFAULT_TAB_SIZE: usize = 4;
 /// Theme used when `ui.theme` is unset. Kept as a plain string so settings.rs
@@ -53,6 +63,19 @@ const MONOSPACE_FONTS: &[&str] = &[
     "IBM Plex Mono",
     "Hack",
     "Courier New",
+];
+
+/// Suggested when the configured interface family has no close match; only
+/// installed ones are shown. Sans-serif families, unlike [`MONOSPACE_FONTS`].
+const UI_FONTS: &[&str] = &[
+    "SF Pro Text",
+    "SF Pro",
+    "Helvetica Neue",
+    "Avenir Next",
+    "Inter",
+    "Roboto",
+    "Segoe UI",
+    "Ubuntu",
 ];
 const MAX_SUGGESTIONS: usize = 3;
 
@@ -156,6 +179,10 @@ pub(crate) struct UiSettings {
     pub(crate) color_scheme_light: Option<String>,
     /// Color scheme applied in the dark appearance, by theme name.
     pub(crate) color_scheme_dark: Option<String>,
+    /// `None` keeps the system UI font.
+    pub(crate) font_family: Option<String>,
+    /// `None` keeps the theme's base size.
+    pub(crate) font_size: Option<f32>,
     pub(crate) tab_icons: Option<bool>,
     pub(crate) icon_color: Option<String>,
 }
@@ -163,6 +190,11 @@ pub(crate) struct UiSettings {
 impl UiSettings {
     pub(crate) fn theme(&self) -> &str {
         self.theme.as_deref().unwrap_or(DEFAULT_THEME)
+    }
+
+    pub(crate) fn font_size(&self) -> Option<f32> {
+        self.font_size
+            .map(|size| size.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE))
     }
 
     /// The color scheme for the light appearance, falling back to the built-in.
@@ -224,9 +256,14 @@ pub(crate) fn load_settings() -> Result<Settings, String> {
 /// Every settings key at the value it takes when left unset, as pretty JSON in
 /// the shape of `settings.json`. Values are read through the same accessors the
 /// app uses, so the document cannot disagree with the real defaults. The theme
-/// supplies the default editor font family and size, which this module cannot
-/// read itself, so the caller passes them in.
-pub(crate) fn defaults_document(mono_family: &str, mono_size: f32) -> String {
+/// supplies the default editor and interface font families and sizes, which
+/// this module cannot read itself, so the caller passes them in.
+pub(crate) fn defaults_document(
+    mono_family: &str,
+    mono_size: f32,
+    ui_family: &str,
+    ui_size: f32,
+) -> String {
     let editor = EditorSettings::default();
     let ui = UiSettings::default();
     let defaults = Settings {
@@ -251,6 +288,8 @@ pub(crate) fn defaults_document(mono_family: &str, mono_size: f32) -> String {
             theme: Some(ui.theme().to_string()),
             color_scheme_light: Some(ui.light_scheme().to_string()),
             color_scheme_dark: Some(ui.dark_scheme().to_string()),
+            font_family: Some(ui_family.to_string()),
+            font_size: Some(ui_size),
             tab_icons: Some(ui.tab_icons()),
             icon_color: Some(ui.icon_color().to_string()),
         },
@@ -423,6 +462,22 @@ pub(crate) fn save_hard_tabs(enabled: bool) -> Result<String, String> {
     )
 }
 
+/// Records the interface font family (`ui.font_family`); `None` removes the
+/// override so the system UI font applies again.
+pub(crate) fn save_ui_font_family(family: Option<&str>) -> Result<String, String> {
+    save_setting(
+        "ui",
+        "font_family",
+        family.map(|family| serde_json::Value::String(family.to_string())),
+    )
+}
+
+/// Records the interface font size (`ui.font_size`); `None` removes the override
+/// so the theme's base size applies again.
+pub(crate) fn save_ui_font_size(size: Option<f32>) -> Result<String, String> {
+    save_setting("ui", "font_size", size.map(|size| serde_json::json!(size)))
+}
+
 /// Records the sidebar tab-icon preference (`ui.tab_icons`).
 pub(crate) fn save_tab_icons(enabled: bool) -> Result<String, String> {
     save_setting("ui", "tab_icons", Some(serde_json::Value::Bool(enabled)))
@@ -437,8 +492,24 @@ pub(crate) fn save_icon_color(style: &str) -> Result<String, String> {
     )
 }
 
-/// Explains why `family` will not render, with installed names to use instead.
+/// Explains why the editor font `family` will not render, with installed names
+/// to use instead.
 pub(crate) fn font_family_issue(family: &str, installed: &[String]) -> Option<String> {
+    font_issue(family, installed, MONOSPACE_FONTS, "monospace")
+}
+
+/// Like [`font_family_issue`], for the interface font, suggesting sans-serif
+/// families instead of monospace ones.
+pub(crate) fn ui_font_family_issue(family: &str, installed: &[String]) -> Option<String> {
+    font_issue(family, installed, UI_FONTS, "sans-serif")
+}
+
+fn font_issue(
+    family: &str,
+    installed: &[String],
+    suggestions: &[&str],
+    label: &str,
+) -> Option<String> {
     if installed.iter().any(|name| name == family) {
         return None;
     }
@@ -460,17 +531,17 @@ pub(crate) fn font_family_issue(family: &str, installed: &[String]) -> Option<St
         ));
     }
 
-    let monospace: Vec<&str> = MONOSPACE_FONTS
+    let available: Vec<&str> = suggestions
         .iter()
         .copied()
         .filter(|font| installed.iter().any(|name| name == font))
         .collect();
-    if monospace.is_empty() {
+    if available.is_empty() {
         return Some(format!("Font \"{family}\" is not installed."));
     }
     Some(format!(
-        "Font \"{family}\" is not installed. Installed monospace fonts: {}.",
-        quoted(&monospace)
+        "Font \"{family}\" is not installed. Installed {label} fonts: {}.",
+        quoted(&available)
     ))
 }
 
@@ -540,7 +611,7 @@ mod tests {
 
     #[test]
     fn defaults_document_lists_every_key_at_its_effective_default() {
-        let document = defaults_document("Menlo", 13.);
+        let document = defaults_document("Menlo", 13., "SF Pro Text", 16.);
         let parsed = parse_settings(&document).unwrap();
         let editor = EditorSettings::default();
         let ui = UiSettings::default();
@@ -572,6 +643,8 @@ mod tests {
         assert_eq!(parsed.ui.theme(), ui.theme());
         assert_eq!(parsed.ui.light_scheme(), ui.light_scheme());
         assert_eq!(parsed.ui.dark_scheme(), ui.dark_scheme());
+        assert_eq!(parsed.ui.font_family.as_deref(), Some("SF Pro Text"));
+        assert_eq!(parsed.ui.font_size(), Some(16.));
         assert_eq!(parsed.ui.tab_icons(), ui.tab_icons());
         assert_eq!(parsed.ui.icon_color(), ui.icon_color());
     }
@@ -638,6 +711,27 @@ mod tests {
 
         let settings = parse_settings(r#"{"ui": {"tab_icons": false}}"#).unwrap();
         assert!(!settings.ui.tab_icons());
+    }
+
+    #[test]
+    fn ui_font_defaults_and_parses() {
+        let settings = Settings::default();
+        assert_eq!(settings.ui.font_family, None);
+        assert_eq!(settings.ui.font_size(), None);
+
+        let settings =
+            parse_settings(r#"{"ui": {"font_family": "Inter", "font_size": 18}}"#).unwrap();
+        assert_eq!(settings.ui.font_family.as_deref(), Some("Inter"));
+        assert_eq!(settings.ui.font_size(), Some(18.));
+    }
+
+    #[test]
+    fn clamps_ui_font_size() {
+        let settings = parse_settings(r#"{"ui": {"font_size": 500}}"#).unwrap();
+        assert_eq!(settings.ui.font_size(), Some(MAX_UI_FONT_SIZE));
+
+        let settings = parse_settings(r#"{"ui": {"font_size": 1}}"#).unwrap();
+        assert_eq!(settings.ui.font_size(), Some(MIN_UI_FONT_SIZE));
     }
 
     #[test]
@@ -814,6 +908,15 @@ mod tests {
         assert_eq!(
             font_family_issue("Comic Code", &installed(&["Arial"])).unwrap(),
             r#"Font "Comic Code" is not installed."#
+        );
+    }
+
+    #[test]
+    fn ui_font_issue_suggests_sans_serif_fonts() {
+        assert_eq!(ui_font_family_issue("Inter", &installed(&["Inter"])), None);
+        assert_eq!(
+            ui_font_family_issue("Nonesuch", &installed(&["Helvetica Neue", "Menlo"])).unwrap(),
+            r#"Font "Nonesuch" is not installed. Installed sans-serif fonts: "Helvetica Neue"."#
         );
     }
 
