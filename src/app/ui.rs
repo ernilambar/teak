@@ -42,8 +42,6 @@ const SIDEBAR_WIDTH: Pixels = px(240.);
 const TAB_MIN_WIDTH: Pixels = px(80.);
 
 const TAB_HEIGHT: Pixels = px(32.);
-/// Thickness of the accent line along the active tab's top edge.
-const TAB_ACCENT_HEIGHT: Pixels = px(2.);
 /// Hover time before a tab's path tooltip appears; GPUI's default is 500ms.
 const TAB_TOOLTIP_DELAY: Duration = Duration::from_millis(800);
 
@@ -192,7 +190,6 @@ impl TinytextApp {
                 div()
                     .id(("tab", ix))
                     .group(TAB_GROUP)
-                    .relative()
                     .h_flex()
                     .flex_shrink(1.)
                     .min_w(TAB_MIN_WIDTH)
@@ -206,15 +203,7 @@ impl TinytextApp {
                     .border_color(separator_color)
                     .map(|this| {
                         if selected {
-                            this.bg(active_bg).text_color(active_fg).child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .right_0()
-                                    .h(TAB_ACCENT_HEIGHT)
-                                    .bg(accent),
-                            )
+                            this.bg(active_bg).text_color(active_fg)
                         } else {
                             this.bg(bar_bg)
                                 .text_color(fg)
