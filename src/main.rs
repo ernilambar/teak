@@ -270,6 +270,11 @@ pub(crate) const ICON_STYLE_CHOICES: [(&str, &str); 2] = [
     (ICON_STYLE_MONOCHROME, "Monochrome"),
 ];
 
+/// The sidebar position choices as `(ui.sidebar_position value, label)`, in
+/// menu order.
+pub(crate) const SIDEBAR_POSITION_CHOICES: [(&str, &str); 2] =
+    [("left", "Left"), ("right", "Right")];
+
 /// Maps an explicit string form of `ui.theme` (kept GPUI-free in settings.rs) to
 /// a `ThemeMode`. `system` is resolved by [`theme::apply`] and never reaches
 /// here; unknown values fall back to dark.

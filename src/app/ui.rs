@@ -430,16 +430,20 @@ impl TinytextApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         if self.sidebar_visible {
-            div().flex_1().min_h_0().child(
-                h_resizable("workspace-panels")
-                    .child(
-                        resizable_panel()
-                            .size(SIDEBAR_WIDTH)
-                            .size_range(px(160.)..px(480.))
-                            .child(self.render_sidebar(cx)),
-                    )
-                    .child(resizable_panel().child(self.render_editor_panel(window, cx))),
-            )
+            let sidebar = resizable_panel()
+                .size(SIDEBAR_WIDTH)
+                .size_range(px(160.)..px(480.))
+                .child(self.render_sidebar(cx));
+            let editor = resizable_panel().child(self.render_editor_panel(window, cx));
+
+            div()
+                .flex_1()
+                .min_h_0()
+                .child(if self.settings.ui.sidebar_right() {
+                    h_resizable("workspace-panels").child(editor).child(sidebar)
+                } else {
+                    h_resizable("workspace-panels").child(sidebar).child(editor)
+                })
         } else {
             div()
                 .flex_1()

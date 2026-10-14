@@ -26,11 +26,11 @@ use gpui_kit::*;
 
 use crate::settings::{
     DEFAULT_DARK_SCHEME, DEFAULT_FONT_WEIGHT, DEFAULT_ICON_STYLE, DEFAULT_LIGHT_SCHEME,
-    DEFAULT_TAB_SIZE, DEFAULT_THEME, EditorSettings, MAX_FONT_SIZE, MAX_UI_FONT_SIZE,
-    MIN_FONT_SIZE, MIN_UI_FONT_SIZE, save_color_scheme_dark, save_color_scheme_light,
-    save_font_family, save_font_size, save_font_weight, save_hard_tabs, save_icon_color,
-    save_show_whitespace, save_soft_wrap, save_tab_icons, save_tab_size, save_theme,
-    save_ui_font_family, save_ui_font_size,
+    DEFAULT_SIDEBAR_POSITION, DEFAULT_TAB_SIZE, DEFAULT_THEME, EditorSettings, MAX_FONT_SIZE,
+    MAX_UI_FONT_SIZE, MIN_FONT_SIZE, MIN_UI_FONT_SIZE, save_color_scheme_dark,
+    save_color_scheme_light, save_font_family, save_font_size, save_font_weight, save_hard_tabs,
+    save_icon_color, save_show_whitespace, save_sidebar_position, save_soft_wrap, save_tab_icons,
+    save_tab_size, save_theme, save_ui_font_family, save_ui_font_size,
 };
 
 use super::TinytextApp;
@@ -388,6 +388,28 @@ impl TinytextApp {
         )
         .description("Colored file-type icons, or a single color that follows the theme.");
 
+        let sidebar_position_weak = weak.clone();
+        let sidebar_position: SharedString = ui.sidebar_position().into();
+        let sidebar_position_item = SettingItem::new(
+            "Sidebar Position",
+            SettingField::dropdown(
+                crate::SIDEBAR_POSITION_CHOICES
+                    .iter()
+                    .map(|(value, label)| (SharedString::from(*value), SharedString::from(*label)))
+                    .collect::<Vec<_>>(),
+                move |_cx| sidebar_position.clone(),
+                move |value, cx| {
+                    sidebar_position_weak
+                        .update(cx, |this, cx| {
+                            this.set_ui_sidebar_position(value.to_string(), cx)
+                        })
+                        .ok();
+                },
+            )
+            .default_value(SharedString::from(DEFAULT_SIDEBAR_POSITION)),
+        )
+        .description("Which side of the workspace the file tree sits on.");
+
         let ui_family_weak = weak.clone();
         let ui_family_reset_weak = weak.clone();
         let ui_family_value = ui_font_family.clone();
@@ -485,9 +507,11 @@ impl TinytextApp {
                     SettingGroup::new()
                         .title("Font")
                         .items(vec![ui_font_family_item, ui_font_size_item]),
-                    SettingGroup::new()
-                        .title("Interface")
-                        .items(vec![tab_icons_item, icon_color_item]),
+                    SettingGroup::new().title("Interface").items(vec![
+                        tab_icons_item,
+                        icon_color_item,
+                        sidebar_position_item,
+                    ]),
                 ]),
         ];
 
@@ -655,6 +679,12 @@ impl TinytextApp {
     fn set_ui_icon_color(&mut self, style: String, cx: &mut Context<Self>) {
         self.settings.ui.icon_color = Some(style.clone());
         self.record_write(save_icon_color(&style), cx);
+    }
+
+    fn set_ui_sidebar_position(&mut self, position: String, cx: &mut Context<Self>) {
+        self.settings.ui.sidebar_position = Some(position.clone());
+        cx.notify();
+        self.record_write(save_sidebar_position(&position), cx);
     }
 
     fn set_editor_soft_wrap(&mut self, wrap: bool, window: &mut Window, cx: &mut Context<Self>) {

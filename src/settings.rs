@@ -41,6 +41,12 @@ pub(crate) const ICON_STYLE_MONOCHROME: &str = "monochrome";
 /// Icon style used when `ui.icon_color` is unset.
 pub(crate) const DEFAULT_ICON_STYLE: &str = ICON_STYLE_MONOCHROME;
 
+/// Workspace tree position used when `ui.sidebar_position` is unset.
+pub(crate) const DEFAULT_SIDEBAR_POSITION: &str = "left";
+
+/// Unknown `ui.sidebar_position` values fall back to this.
+pub(crate) const SIDEBAR_POSITION_RIGHT: &str = "right";
+
 /// How file-type icons are painted. Kept GPUI-free; the renderer maps it to the
 /// right element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +192,8 @@ pub(crate) struct UiSettings {
     pub(crate) font_size: Option<f32>,
     pub(crate) tab_icons: Option<bool>,
     pub(crate) icon_color: Option<String>,
+    /// Which side of the workspace the file tree sits on.
+    pub(crate) sidebar_position: Option<String>,
 }
 
 impl UiSettings {
@@ -218,6 +226,16 @@ impl UiSettings {
 
     pub(crate) fn icon_color(&self) -> &str {
         self.icon_color.as_deref().unwrap_or(DEFAULT_ICON_STYLE)
+    }
+
+    pub(crate) fn sidebar_position(&self) -> &str {
+        self.sidebar_position
+            .as_deref()
+            .unwrap_or(DEFAULT_SIDEBAR_POSITION)
+    }
+
+    pub(crate) fn sidebar_right(&self) -> bool {
+        self.sidebar_position() == SIDEBAR_POSITION_RIGHT
     }
 
     /// Resolves `ui.icon_color`, falling back to the default for a value the
@@ -293,6 +311,7 @@ pub(crate) fn defaults_document(
             font_size: Some(ui_size),
             tab_icons: Some(ui.tab_icons()),
             icon_color: Some(ui.icon_color().to_string()),
+            sidebar_position: Some(ui.sidebar_position().to_string()),
         },
     };
     serde_json::to_string_pretty(&defaults).expect("settings serialize as JSON")
@@ -493,6 +512,15 @@ pub(crate) fn save_icon_color(style: &str) -> Result<String, String> {
     )
 }
 
+/// Records which side the file tree sits on (`ui.sidebar_position`).
+pub(crate) fn save_sidebar_position(value: &str) -> Result<String, String> {
+    save_setting(
+        "ui",
+        "sidebar_position",
+        Some(serde_json::Value::String(value.to_string())),
+    )
+}
+
 /// Explains why the editor font `family` will not render, with installed names
 /// to use instead.
 pub(crate) fn font_family_issue(family: &str, installed: &[String]) -> Option<String> {
@@ -648,6 +676,7 @@ mod tests {
         assert_eq!(parsed.ui.font_size(), Some(16.));
         assert_eq!(parsed.ui.tab_icons(), ui.tab_icons());
         assert_eq!(parsed.ui.icon_color(), ui.icon_color());
+        assert_eq!(parsed.ui.sidebar_position(), ui.sidebar_position());
     }
 
     #[test]
@@ -751,6 +780,20 @@ mod tests {
     fn ui_icon_style_falls_back_for_unknown_values() {
         let settings = parse_settings(r#"{"ui": {"icon_color": "neon"}}"#).unwrap();
         assert_eq!(settings.ui.icon_style(), IconStyle::Colorful);
+    }
+
+    #[test]
+    fn ui_sidebar_position_defaults_and_parses() {
+        let settings = Settings::default();
+        assert_eq!(settings.ui.sidebar_position(), DEFAULT_SIDEBAR_POSITION);
+        assert!(!settings.ui.sidebar_right());
+
+        let settings = parse_settings(r#"{"ui": {"sidebar_position": "right"}}"#).unwrap();
+        assert_eq!(settings.ui.sidebar_position(), SIDEBAR_POSITION_RIGHT);
+        assert!(settings.ui.sidebar_right());
+
+        let settings = parse_settings(r#"{"ui": {"sidebar_position": "unknown"}}"#).unwrap();
+        assert!(!settings.ui.sidebar_right());
     }
 
     fn text(value: &str) -> Option<serde_json::Value> {
