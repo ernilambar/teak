@@ -33,12 +33,13 @@ pub(crate) const DEFAULT_LIGHT_SCHEME: &str = "Default Light";
 pub(crate) const DEFAULT_DARK_SCHEME: &str = "Default Dark";
 
 /// File-icon style that keeps each type's own colors (the Material Icon Theme
-/// palette). The default, and the `ui.icon_color` value it maps to.
+/// palette), mapped to by the `ui.icon_color` value "colorful".
 pub(crate) const ICON_STYLE_COLORFUL: &str = "colorful";
-/// File-icon style that paints every icon as a single color following the theme.
+/// File-icon style that paints every icon as a single color following the
+/// theme. The default, since it matches the app's muted gray UI.
 pub(crate) const ICON_STYLE_MONOCHROME: &str = "monochrome";
 /// Icon style used when `ui.icon_color` is unset.
-pub(crate) const DEFAULT_ICON_STYLE: &str = ICON_STYLE_COLORFUL;
+pub(crate) const DEFAULT_ICON_STYLE: &str = ICON_STYLE_MONOCHROME;
 
 /// How file-type icons are painted. Kept GPUI-free; the renderer maps it to the
 /// right element.
@@ -737,7 +738,7 @@ mod tests {
     #[test]
     fn ui_icon_style_defaults_and_parses() {
         assert_eq!(Settings::default().ui.icon_color(), DEFAULT_ICON_STYLE);
-        assert_eq!(Settings::default().ui.icon_style(), IconStyle::Colorful);
+        assert_eq!(Settings::default().ui.icon_style(), IconStyle::Monochrome);
 
         let settings = parse_settings(r#"{"ui": {"icon_color": "monochrome"}}"#).unwrap();
         assert_eq!(settings.ui.icon_style(), IconStyle::Monochrome);
