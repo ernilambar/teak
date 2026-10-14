@@ -16,6 +16,7 @@ use gpui_kit::component::{
     input::{EditorState, TabSize, WrappingIndent},
     link::Link,
     notification::Notification,
+    resizable::ResizableState,
     text::TextViewState,
 };
 use gpui_kit::*;
@@ -132,6 +133,13 @@ struct ClosedTab {
 /// How many recently closed tabs to remember for `ReopenClosedTab`.
 const MAX_CLOSED_TABS: usize = 10;
 
+/// Sidebar width used when `sidebar_width` is absent from the session.
+const DEFAULT_SIDEBAR_WIDTH: u32 = 240;
+/// Floor and ceiling for dragging the sidebar, shared with the workspace
+/// layout's panel size range.
+const SIDEBAR_MIN_WIDTH: u32 = 160;
+const SIDEBAR_MAX_WIDTH: u32 = 480;
+
 /// One flattened, currently-visible row of the sidebar tree. A root row is a
 /// workspace folder itself; every other row is one of its entries.
 struct TreeRow {
@@ -171,6 +179,13 @@ pub(crate) struct TinytextApp {
     /// The focus that was active when the palette opened, restored on close.
     palette_return_focus: Option<FocusHandle>,
     sidebar_visible: bool,
+    /// Sidebar width in pixels, persisted to the session and applied to the
+    /// workspace layout on each render.
+    sidebar_width: u32,
+    /// Sizes for the resizable workspace panels. The sidebar's `.size()`
+    /// preference only takes hold while its slot is unset, so a position flip
+    /// clears this to re-seed it from [`TinytextApp::sidebar_width`].
+    panels_state: Entity<ResizableState>,
     cursor_line: usize,
     cursor_col: usize,
     settings: Settings,
@@ -226,6 +241,8 @@ impl TinytextApp {
             palette: None,
             palette_return_focus: None,
             sidebar_visible,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            panels_state: cx.new(|_| ResizableState::default()),
             cursor_line: 1,
             cursor_col: 1,
             settings,
@@ -282,6 +299,10 @@ impl TinytextApp {
 
         self.selected_path = session.selected_path.filter(|path| path.exists());
         self.sidebar_visible = session.sidebar_visible;
+        self.sidebar_width = session
+            .sidebar_width
+            .unwrap_or(self.sidebar_width)
+            .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
         self.reload_tree();
 
         let mut paths = session.tabs;
@@ -342,6 +363,7 @@ impl TinytextApp {
             expanded,
             selected_path: self.selected_path.clone(),
             sidebar_visible: self.sidebar_visible,
+            sidebar_width: Some(self.sidebar_width),
         };
 
         let Ok(json) = serde_json::to_string_pretty(&state) else {

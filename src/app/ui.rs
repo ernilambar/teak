@@ -14,7 +14,7 @@ use gpui_kit::component::{
     kbd::Kbd,
     list::ListItem,
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem},
-    resizable::{h_resizable, resizable_panel},
+    resizable::{ResizableState, h_resizable, resizable_panel},
     scroll::ScrollableElement as _,
     spinner::Spinner,
     status_bar::StatusBar,
@@ -33,9 +33,8 @@ use crate::{
     RevealInFinder,
 };
 
-use super::{Preview, TinytextApp};
+use super::{Preview, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TinytextApp};
 
-const SIDEBAR_WIDTH: Pixels = px(240.);
 /// Floor on a tab's width. Tabs size to their full titles while the strip has
 /// room, shrink with an ellipsis down to this floor as it fills, and past that
 /// the strip scrolls horizontally.
@@ -431,19 +430,43 @@ impl TinytextApp {
     ) -> impl IntoElement {
         if self.sidebar_visible {
             let sidebar = resizable_panel()
-                .size(SIDEBAR_WIDTH)
-                .size_range(px(160.)..px(480.))
+                .size(px(self.sidebar_width as f32))
+                .size_range(px(SIDEBAR_MIN_WIDTH as f32)..px(SIDEBAR_MAX_WIDTH as f32))
                 .child(self.render_sidebar(cx));
             let editor = resizable_panel().child(self.render_editor_panel(window, cx));
 
-            div()
-                .flex_1()
-                .min_h_0()
-                .child(if self.settings.ui.sidebar_right() {
-                    h_resizable("workspace-panels").child(editor).child(sidebar)
-                } else {
-                    h_resizable("workspace-panels").child(sidebar).child(editor)
-                })
+            let on_resize = {
+                let weak = cx.entity().downgrade();
+                move |state: &Entity<ResizableState>, _: &mut Window, cx: &mut App| {
+                    weak.update(cx, |this, cx| {
+                        // The panel sized by the drag is the one the sidebar
+                        // sits in: slot 0 on the left, the leftover slot on the
+                        // right.
+                        let ix = usize::from(this.settings.ui.sidebar_right());
+                        let Some(width) = state.read(cx).sizes().get(ix).copied() else {
+                            return;
+                        };
+                        let width = (width.as_f32().round() as u32)
+                            .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+                        if width != this.sidebar_width {
+                            this.sidebar_width = width;
+                            this.save_session();
+                        }
+                    })
+                    .ok();
+                }
+            };
+
+            let group = h_resizable("workspace-panels")
+                .with_state(&self.panels_state)
+                .on_resize(on_resize);
+            let group = if self.settings.ui.sidebar_right() {
+                group.child(editor).child(sidebar)
+            } else {
+                group.child(sidebar).child(editor)
+            };
+
+            div().flex_1().min_h_0().child(group)
         } else {
             div()
                 .flex_1()

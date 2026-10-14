@@ -683,6 +683,10 @@ impl TinytextApp {
 
     fn set_ui_sidebar_position(&mut self, position: String, cx: &mut Context<Self>) {
         self.settings.ui.sidebar_position = Some(position.clone());
+        // Panel sizes are tracked per slot index, so a flip would otherwise
+        // leave the sidebar with whatever the editor's old slot held. Clearing
+        // re-seeds both panels, with the sidebar's width preference.
+        self.panels_state.update(cx, |state, _| state.clear());
         cx.notify();
         self.record_write(save_sidebar_position(&position), cx);
     }

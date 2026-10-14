@@ -13,6 +13,8 @@ pub(crate) struct SessionState {
     pub(crate) expanded: Vec<PathBuf>,
     pub(crate) selected_path: Option<PathBuf>,
     pub(crate) sidebar_visible: bool,
+    /// Sidebar width in pixels, as last dragged by the user.
+    pub(crate) sidebar_width: Option<u32>,
 }
 
 pub(crate) fn session_path() -> Option<PathBuf> {
@@ -38,6 +40,7 @@ mod tests {
             expanded: vec![PathBuf::from("/tmp/project")],
             selected_path: None,
             sidebar_visible: true,
+            sidebar_width: Some(260),
         };
         let json = serde_json::to_string(&state).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -48,6 +51,7 @@ mod tests {
         assert_eq!(restored.expanded, state.expanded);
         assert_eq!(restored.selected_path, state.selected_path);
         assert!(restored.sidebar_visible);
+        assert_eq!(restored.sidebar_width, Some(260));
     }
 
     #[test]
