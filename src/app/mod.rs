@@ -24,9 +24,9 @@ use crate::cli::{app_bundle_path, install_cli};
 use crate::paths::{DirEntry, read_dir};
 use crate::session::{SessionState, session_path};
 use crate::settings::{
-    DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, defaults_document,
-    font_family_issue, load_settings, save_editor_flag, save_font_size, save_show_whitespace,
-    save_soft_wrap, save_theme, settings_path,
+    DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, UiSettings,
+    defaults_document, font_family_issue, load_settings, save_editor_flag, save_font_size,
+    save_show_whitespace, save_soft_wrap, save_theme, settings_path, ui_font_family_issue,
 };
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
 use crate::{
@@ -956,6 +956,8 @@ impl TinytextApp {
         let document = defaults_document(
             cx.theme().mono_font_family.as_ref(),
             cx.theme().mono_font_size.as_f32(),
+            cx.theme().font_family.as_ref(),
+            cx.theme().font_size.as_f32(),
         );
         self.add_document_tab("Default Settings", "JSON", document, window, cx);
     }
@@ -989,7 +991,11 @@ impl TinytextApp {
                     font_weight: Some(DEFAULT_FONT_WEIGHT),
                     ..Default::default()
                 },
-                ui: Default::default(),
+                ui: UiSettings {
+                    font_family: Some(cx.theme().font_family.to_string()),
+                    font_size: Some(cx.theme().font_size.as_f32()),
+                    ..Default::default()
+                },
             };
             let written = serde_json::to_string_pretty(&starter)
                 .map_err(std::io::Error::other)
@@ -1038,12 +1044,14 @@ impl TinytextApp {
         }
     }
 
-    /// Warns when the configured editor font is not installed. Font enumeration
-    /// is slow on macOS, so it runs off the main thread.
+    /// Warns when a configured editor or interface font is not installed. Font
+    /// enumeration is slow on macOS, so it runs off the main thread.
     pub(crate) fn check_font_family(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(family) = self.settings.editor.font_family.clone() else {
+        let editor = self.settings.editor.font_family.clone();
+        let interface = self.settings.ui.font_family.clone();
+        if editor.is_none() && interface.is_none() {
             return;
-        };
+        }
         let text_system = cx.text_system().clone();
 
         cx.spawn_in(window, async move |this, cx| {
@@ -1051,12 +1059,22 @@ impl TinytextApp {
                 .background_executor()
                 .spawn(async move { text_system.all_font_names() })
                 .await;
-            if let Some(message) = font_family_issue(&family, &installed) {
-                this.update_in(cx, |_this, window, cx| {
-                    window.push_notification(Notification::warning(message), cx);
-                })
-                .ok();
+            let mut issues = Vec::new();
+            if let Some(family) = &editor {
+                issues.extend(font_family_issue(family, &installed));
             }
+            if let Some(family) = &interface {
+                issues.extend(ui_font_family_issue(family, &installed));
+            }
+            if issues.is_empty() {
+                return;
+            }
+            this.update_in(cx, |_this, window, cx| {
+                for issue in issues {
+                    window.push_notification(Notification::warning(issue), cx);
+                }
+            })
+            .ok();
         })
         .detach();
     }

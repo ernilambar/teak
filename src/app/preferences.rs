@@ -26,10 +26,11 @@ use gpui_kit::*;
 
 use crate::settings::{
     DEFAULT_DARK_SCHEME, DEFAULT_FONT_WEIGHT, DEFAULT_ICON_STYLE, DEFAULT_LIGHT_SCHEME,
-    DEFAULT_TAB_SIZE, DEFAULT_THEME, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE,
-    save_color_scheme_dark, save_color_scheme_light, save_font_family, save_font_size,
-    save_font_weight, save_hard_tabs, save_icon_color, save_show_whitespace, save_soft_wrap,
-    save_tab_icons, save_tab_size, save_theme,
+    DEFAULT_TAB_SIZE, DEFAULT_THEME, EditorSettings, MAX_FONT_SIZE, MAX_UI_FONT_SIZE,
+    MIN_FONT_SIZE, MIN_UI_FONT_SIZE, save_color_scheme_dark, save_color_scheme_light,
+    save_font_family, save_font_size, save_font_weight, save_hard_tabs, save_icon_color,
+    save_show_whitespace, save_soft_wrap, save_tab_icons, save_tab_size, save_theme,
+    save_ui_font_family, save_ui_font_size,
 };
 
 use super::TinytextApp;
@@ -82,6 +83,15 @@ impl TinytextApp {
         let soft_wrap = editor.soft_wrap();
         let show_whitespace = editor.show_whitespace();
         let theme_value = ui.theme().to_string();
+        let ui_font_family = ui
+            .font_family
+            .clone()
+            .unwrap_or_else(|| cx.theme().font_family.to_string());
+        let ui_font_size = ui
+            .font_size()
+            .unwrap_or_else(|| cx.theme().font_size.as_f32()) as f64;
+        let ui_font_family_is_set = ui.font_family.is_some();
+        let ui_font_size_is_set = ui.font_size.is_some();
         let tab_icons = ui.tab_icons();
         let icon_color: SharedString = ui.icon_color().into();
         let light_schemes = crate::theme::schemes(ThemeMode::Light, cx);
@@ -378,6 +388,61 @@ impl TinytextApp {
         )
         .description("Colored file-type icons, or a single color that follows the theme.");
 
+        let ui_family_weak = weak.clone();
+        let ui_family_reset_weak = weak.clone();
+        let ui_family_value = ui_font_family.clone();
+        let ui_font_family_item = SettingItem::new(
+            "Family",
+            SettingField::input(
+                move |_cx| SharedString::from(ui_family_value.clone()),
+                move |value, cx| {
+                    ui_family_weak
+                        .update(cx, |this, cx| {
+                            this.set_ui_font_family(value.to_string(), cx)
+                        })
+                        .ok();
+                },
+            )
+            .on_reset(
+                move |_cx| ui_font_family_is_set,
+                move |window, cx| {
+                    ui_family_reset_weak
+                        .update(cx, |this, cx| this.reset_ui_font_family(window, cx))
+                        .ok();
+                },
+            ),
+        )
+        .description("Name of an installed font for the app's interface.")
+        .layout(Axis::Vertical);
+
+        let ui_size_weak = weak.clone();
+        let ui_size_reset_weak = weak.clone();
+        let ui_font_size_item = SettingItem::new(
+            "Size",
+            SettingField::number_input(
+                NumberFieldOptions {
+                    min: MIN_UI_FONT_SIZE as f64,
+                    max: MAX_UI_FONT_SIZE as f64,
+                    step: 1.0,
+                },
+                move |_cx| ui_font_size,
+                move |value, cx| {
+                    ui_size_weak
+                        .update(cx, |this, cx| this.set_ui_font_size(value as f32, cx))
+                        .ok();
+                },
+            )
+            .on_reset(
+                move |_cx| ui_font_size_is_set,
+                move |window, cx| {
+                    ui_size_reset_weak
+                        .update(cx, |this, cx| this.reset_ui_font_size(window, cx))
+                        .ok();
+                },
+            ),
+        )
+        .description("Base size for the interface. Text and controls scale together.");
+
         // Defaults are surfaced through the "Default Settings" document rather
         // than a page-level reset, so both pages turn the reset button off.
         let pages = vec![
@@ -417,6 +482,9 @@ impl TinytextApp {
                     SettingGroup::new()
                         .title("Color Scheme")
                         .items(vec![light_scheme_item, dark_scheme_item]),
+                    SettingGroup::new()
+                        .title("Font")
+                        .items(vec![ui_font_family_item, ui_font_size_item]),
                     SettingGroup::new()
                         .title("Interface")
                         .items(vec![tab_icons_item, icon_color_item]),
@@ -534,19 +602,47 @@ impl TinytextApp {
 
     fn set_ui_color_scheme_light(&mut self, name: String, cx: &mut Context<Self>) {
         self.settings.ui.color_scheme_light = Some(name.clone());
-        self.apply_after_scheme_change(cx);
+        self.reapply_theme_choice(cx);
         self.record_write(save_color_scheme_light(&name), cx);
     }
 
     fn set_ui_color_scheme_dark(&mut self, name: String, cx: &mut Context<Self>) {
         self.settings.ui.color_scheme_dark = Some(name.clone());
-        self.apply_after_scheme_change(cx);
+        self.reapply_theme_choice(cx);
         self.record_write(save_color_scheme_dark(&name), cx);
     }
 
-    /// Re-applies the theme after a color-scheme change while keeping the
+    fn set_ui_font_family(&mut self, family: String, cx: &mut Context<Self>) {
+        self.settings.ui.font_family = Some(family.clone());
+        self.reapply_theme_choice(cx);
+        self.record_write(save_ui_font_family(Some(&family)), cx);
+    }
+
+    fn set_ui_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
+        self.settings.ui.font_size = Some(size);
+        self.reapply_theme_choice(cx);
+        self.record_write(save_ui_font_size(Some(size)), cx);
+    }
+
+    /// Clears the interface font override so the system UI font applies again.
+    fn reset_ui_font_family(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.ui.font_family = None;
+        self.reapply_theme_choice(cx);
+        self.after_setting_write(save_ui_font_family(None), window, cx);
+        cx.notify();
+    }
+
+    /// Clears the interface size override so the theme's base size applies again.
+    fn reset_ui_font_size(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.ui.font_size = None;
+        self.reapply_theme_choice(cx);
+        self.after_setting_write(save_ui_font_size(None), window, cx);
+        cx.notify();
+    }
+
+    /// Re-applies the theme after a settings change while keeping the
     /// Appearance menu's check mark on the current mode.
-    fn apply_after_scheme_change(&self, cx: &mut Context<Self>) {
+    fn reapply_theme_choice(&self, cx: &mut Context<Self>) {
         let choice = self.settings.ui.theme().to_string();
         self.apply_theme_choice(&choice, None, cx);
     }
