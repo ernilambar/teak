@@ -18,6 +18,7 @@
 //! and two hand-written surfaces -- so each menu keeps an explicit
 //! [`Entry`] skeleton that pulls its command rows out of the table by cluster.
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::component::{
@@ -26,12 +27,13 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
+use crate::paths::display_path;
 use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
-    CloseAllFolders, CloseTab, CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp,
+    ClearRecent, CloseAllFolders, CloseTab, CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp,
     CopyRelativePath, DeleteLine, GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow,
     InstallCli, JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextTab, OpenDefaultSettings,
-    OpenFile, OpenSettings, OpenThemesFolder, PreviousTab, QuickOpen, Quit, Refresh,
+    OpenFile, OpenPath, OpenSettings, OpenThemesFolder, PreviousTab, QuickOpen, Quit, Refresh,
     ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll,
     SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
     ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
@@ -186,6 +188,15 @@ static COMMANDS: &[Command] = &[
         menu: None,
         palette: Some((PaletteGroup::File, 10)),
         keywords: &[],
+    },
+    Command {
+        // The Open Recent submenu shows this as "Clear Menu", the macOS name.
+        label: "Clear Recent",
+        make: || Box::new(ClearRecent),
+        bindings: NO_KEYS,
+        menu: None,
+        palette: Some((PaletteGroup::File, 11)),
+        keywords: &["recent", "history"],
     },
     // Edit
     Command {
@@ -651,6 +662,8 @@ enum Entry {
     Item(fn() -> MenuItem),
     /// The Appearance submenu, which needs the current theme.
     Appearance,
+    /// The Open Recent submenu, which needs the recent list.
+    OpenRecent,
 }
 
 const TINYTEXT_MENU: &[Entry] = &[
@@ -669,6 +682,7 @@ const TINYTEXT_MENU: &[Entry] = &[
 
 const FILE_MENU: &[Entry] = &[
     Entry::Cluster(0),
+    Entry::OpenRecent,
     Entry::Item(MenuItem::separator),
     Entry::Cluster(1),
     Entry::Item(MenuItem::separator),
@@ -828,7 +842,7 @@ fn binding(chord: &str, action: Box<dyn Action>, context: Scope) -> KeyBinding {
 }
 
 /// The whole menu bar, derived from [`COMMANDS`] plus each menu's skeleton.
-pub(crate) fn menus(theme: &str) -> Vec<Menu> {
+pub(crate) fn menus(theme: &str, recent: &[PathBuf]) -> Vec<Menu> {
     MenuKind::ALL
         .iter()
         .map(|&kind| {
@@ -843,6 +857,7 @@ pub(crate) fn menus(theme: &str) -> Vec<Menu> {
                     ),
                     Entry::Item(build) => items.push(build()),
                     Entry::Appearance => items.push(MenuItem::submenu(theme_menu(theme))),
+                    Entry::OpenRecent => items.push(MenuItem::submenu(recent_menu(recent))),
                 }
             }
             Menu::new(kind.label()).items(items)
@@ -899,6 +914,25 @@ fn ranked(keep: impl Fn(&Command) -> bool, rank: impl Fn(&Command) -> u8) -> Vec
     let mut rows: Vec<&'static Command> = COMMANDS.iter().filter(|command| keep(command)).collect();
     rows.sort_by_key(|command| rank(command));
     rows
+}
+
+/// The Open Recent submenu: one item per path, newest first, then Clear Menu.
+fn recent_menu(recent: &[PathBuf]) -> Menu {
+    let mut items: Vec<MenuItem> = recent
+        .iter()
+        .map(|path| MenuItem::action(display_path(path), OpenPath(path.clone())))
+        .collect();
+    if !items.is_empty() {
+        items.push(MenuItem::separator());
+    }
+    items.push(MenuItem::Action {
+        name: "Clear Menu".into(),
+        action: Box::new(ClearRecent),
+        os_action: None,
+        checked: false,
+        disabled: recent.is_empty(),
+    });
+    Menu::new("Open Recent").items(items)
 }
 
 /// The Appearance submenu: one item per choice, with a check mark on the active
@@ -1242,6 +1276,6 @@ mod tests {
     #[test]
     fn surface_sizes_are_pinned() {
         assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 49);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 46);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 47);
     }
 }

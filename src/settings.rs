@@ -120,6 +120,8 @@ pub(crate) struct EditorSettings {
     pub(crate) smart_indent: Option<bool>,
     pub(crate) indent_wrapped_lines: Option<bool>,
     pub(crate) scroll_beyond_last_line: Option<bool>,
+    pub(crate) trim_trailing_whitespace: Option<bool>,
+    pub(crate) ensure_final_newline: Option<bool>,
     /// `None` keeps the engine's default margin.
     pub(crate) cursor_surrounding_lines: Option<usize>,
 }
@@ -177,6 +179,14 @@ impl EditorSettings {
 
     pub(crate) fn scroll_beyond_last_line(&self) -> bool {
         self.scroll_beyond_last_line.unwrap_or(true)
+    }
+
+    pub(crate) fn trim_trailing_whitespace(&self) -> bool {
+        self.trim_trailing_whitespace.unwrap_or(false)
+    }
+
+    pub(crate) fn ensure_final_newline(&self) -> bool {
+        self.ensure_final_newline.unwrap_or(false)
     }
 }
 
@@ -305,6 +315,8 @@ pub(crate) fn defaults_document(
             smart_indent: Some(editor.smart_indent()),
             indent_wrapped_lines: Some(editor.indent_wrapped_lines()),
             scroll_beyond_last_line: Some(editor.scroll_beyond_last_line()),
+            trim_trailing_whitespace: Some(editor.trim_trailing_whitespace()),
+            ensure_final_newline: Some(editor.ensure_final_newline()),
             cursor_surrounding_lines: Some(DEFAULT_CURSOR_SURROUNDING_LINES),
         },
         ui: UiSettings {
@@ -649,6 +661,8 @@ mod tests {
         assert!(settings.editor.smart_indent());
         assert!(settings.editor.indent_wrapped_lines());
         assert!(settings.editor.scroll_beyond_last_line());
+        assert!(!settings.editor.trim_trailing_whitespace());
+        assert!(!settings.editor.ensure_final_newline());
         assert_eq!(settings.editor.cursor_surrounding_lines, None);
     }
 

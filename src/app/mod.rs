@@ -29,7 +29,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::cli::{app_bundle_path, install_cli};
-use crate::session::{SessionState, session_path};
+use crate::session::{SessionState, load_session, session_path};
 use crate::settings::{
     DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, UiSettings,
     defaults_document, font_family_issue, load_settings, save_editor_flag, save_font_size,
@@ -37,8 +37,8 @@ use crate::settings::{
 };
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
 use crate::{
-    About, CheckForUpdates, CopyFilePath, CopyRelativePath, InstallCli, JumpToTab, NextTab,
-    OpenDefaultSettings, OpenSettings, OpenThemesFolder, PreviousTab, Quit, Refresh,
+    About, CheckForUpdates, ClearRecent, CopyFilePath, CopyRelativePath, InstallCli, JumpToTab,
+    NextTab, OpenDefaultSettings, OpenSettings, OpenThemesFolder, PreviousTab, Quit, Refresh,
     ReopenClosedTab, RevealInFinder, SetTheme, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
     ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace,
     ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
@@ -93,7 +93,35 @@ impl TinytextApp {
             settings: SettingsState::new(settings),
         };
         app.workspace.reload();
+        // Read on its own because the session is skipped when the app is
+        // launched with paths, but the recent list still applies.
+        app.workspace.set_recent(
+            load_session()
+                .map(|session| session.recent)
+                .unwrap_or_default(),
+        );
+        app.refresh_menus(cx);
         app
+    }
+
+    /// Rebuilds the menu bar, whose Appearance and Open Recent submenus show
+    /// app state.
+    fn refresh_menus(&self, cx: &mut App) {
+        let theme = self.settings.values.ui.theme().to_string();
+        cx.set_menus(crate::commands::menus(&theme, self.workspace.recent()));
+    }
+
+    /// Records a file or folder the user opened, for File > Open Recent.
+    pub(super) fn note_recent(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.workspace.note_recent(path);
+        self.save_session();
+        self.refresh_menus(cx);
+    }
+
+    fn on_clear_recent(&mut self, _: &ClearRecent, _window: &mut Window, cx: &mut Context<Self>) {
+        self.workspace.clear_recent();
+        self.save_session();
+        self.refresh_menus(cx);
     }
 
     /// Keeps the native window title in sync with the focused tab, appending the
@@ -179,6 +207,7 @@ impl TinytextApp {
             selected_path: self.workspace.selected().map(Path::to_path_buf),
             sidebar_visible: self.workspace.sidebar_visible(),
             sidebar_width: Some(self.workspace.width()),
+            recent: self.workspace.recent().to_vec(),
         };
 
         let Ok(json) = serde_json::to_string_pretty(&state) else {
@@ -513,7 +542,7 @@ impl TinytextApp {
         cx: &mut Context<Self>,
     ) {
         crate::theme::apply(&self.settings.values, window, cx);
-        cx.set_menus(crate::commands::menus(choice));
+        cx.set_menus(crate::commands::menus(choice, self.workspace.recent()));
     }
 
     /// Re-applies the current appearance and color scheme without a window, used
@@ -982,6 +1011,13 @@ impl Render for TinytextApp {
             .on_action(cx.listener(Self::on_open_file))
             .on_action(cx.listener(Self::on_add_folder))
             .on_action(cx.listener(Self::on_close_all_folders))
+            .on_action(cx.listener(Self::on_clear_recent))
+            // Files and folders dragged in from Finder open like Open… does.
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                for path in paths.paths() {
+                    this.request_open(path.clone(), window, cx);
+                }
+            }))
             .on_action(cx.listener(Self::on_save_file))
             .on_action(cx.listener(Self::on_save_file_as))
             .on_action(cx.listener(Self::on_save_all))

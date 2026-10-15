@@ -441,6 +441,22 @@ impl TinytextApp {
             editor.auto_close(),
             |e| &mut e.auto_close,
         );
+        let trim_whitespace_item = flag_item(
+            "Trim Trailing Whitespace",
+            "Remove spaces and tabs at line ends on save.",
+            "trim-whitespace-switch",
+            "trim_trailing_whitespace",
+            editor.trim_trailing_whitespace(),
+            |e| &mut e.trim_trailing_whitespace,
+        );
+        let final_newline_item = flag_item(
+            "Ensure Final Newline",
+            "End the file with a newline on save.",
+            "final-newline-switch",
+            "ensure_final_newline",
+            editor.ensure_final_newline(),
+            |e| &mut e.ensure_final_newline,
+        );
         let smart_indent_item = flag_item(
             "Smart Indent",
             "Indent new lines based on the language.",
@@ -652,9 +668,11 @@ impl TinytextApp {
                         scroll_beyond_item,
                         cursor_surrounding_lines_item,
                     ]),
-                    SettingGroup::new()
-                        .title("Editing")
-                        .items(vec![auto_close_item]),
+                    SettingGroup::new().title("Editing").items(vec![
+                        auto_close_item,
+                        trim_whitespace_item,
+                        final_newline_item,
+                    ]),
                 ]),
             SettingPage::new("Appearance")
                 .resettable(false)

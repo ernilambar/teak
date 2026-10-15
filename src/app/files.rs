@@ -182,6 +182,7 @@ impl TinytextApp {
             .position(|tab| tab.path.as_deref() == Some(path.as_path()))
         {
             self.activate_tab(ix, window, cx);
+            self.note_recent(path, cx);
             return;
         }
 
@@ -194,7 +195,10 @@ impl TinytextApp {
                 })
                 .await;
             this.update_in(cx, |this, window, cx| match read {
-                Ok(content) => this.add_file_tab(path, content, window, cx),
+                Ok(content) => {
+                    this.add_file_tab(path.clone(), content, window, cx);
+                    this.note_recent(path, cx);
+                }
                 Err(error) => {
                     window.push_notification(Notification::error(open_error(&path, &error)), cx)
                 }
@@ -232,7 +236,10 @@ impl TinytextApp {
                         })
                         .await;
                     this.update_in(cx, |this, window, cx| match read {
-                        Ok(content) => this.add_file_tab(path, content, window, cx),
+                        Ok(content) => {
+                            this.add_file_tab(path.clone(), content, window, cx);
+                            this.note_recent(path, cx);
+                        }
                         Err(error) => window
                             .push_notification(Notification::error(open_error(&path, &error)), cx),
                     })
@@ -286,6 +293,7 @@ impl TinytextApp {
             }
             AddRoot::Added => {}
         }
+        self.note_recent(path, cx);
 
         self.save_session();
         cx.notify();
@@ -511,6 +519,10 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(editor) = self.tabs.find(id).map(|tab| tab.editor.clone()) else {
+            return;
+        };
+        self.tidy_for_save(&editor, window, cx);
         let Some(tab) = self.tabs.find(id) else {
             return;
         };
@@ -558,9 +570,10 @@ impl TinytextApp {
             tab.disk_modified = modified_time(&path);
             // The bad bytes were replaced on disk, so the file is clean UTF-8.
             tab.format.lossy = false;
-            tab.path = Some(path);
+            tab.path = Some(path.clone());
             tab.dirty = false;
         }
+        self.note_recent(path, cx);
         self.reload_tree();
         self.save_session();
         cx.notify();
