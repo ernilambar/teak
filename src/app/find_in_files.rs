@@ -19,7 +19,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::file_icons::file_icon;
-use crate::paths::{collect_files, file_name, nearest_root, relative_display};
+use crate::paths::{collect_files, exclude_set, file_name, nearest_root, relative_display};
 use crate::search::{MAX_MATCHES, SearchMatch, SearchOptions, build_matcher, search_files};
 use crate::settings::IconStyle;
 use crate::{FindInFiles, OpenMatch};
@@ -73,6 +73,8 @@ impl TinytextApp {
         // Walked on every open so new and removed files are picked up. With no
         // workspace roots the open tabs stand in for the project.
         let roots = self.workspace.roots().to_vec();
+        // Settings were validated on load, so a bad glob cannot reach here.
+        let exclude = exclude_set(self.settings.values.search.exclude()).unwrap_or_default();
         let fallback: Vec<PathBuf> = self
             .tabs
             .iter()
@@ -86,7 +88,7 @@ impl TinytextApp {
                     if roots.is_empty() {
                         fallback
                     } else {
-                        collect_files(&roots, MAX_FIND_FILES)
+                        collect_files(&roots, MAX_FIND_FILES, &exclude)
                     }
                 })
                 .await;

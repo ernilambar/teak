@@ -828,6 +828,7 @@ impl TinytextApp {
                     font_size: Some(cx.theme().font_size.as_f32()),
                     ..Default::default()
                 },
+                ..Default::default()
             };
             let written = serde_json::to_string_pretty(&starter)
                 .map_err(std::io::Error::other)

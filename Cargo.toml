@@ -31,6 +31,10 @@ gpui-kit = { version = "0.7.3", features = [
     "tree-sitter-typescript",
     "tree-sitter-yaml",
 ] }
+# `globset` and `ignore` are already in the tree; used directly for the
+# Quick Open / Find in Files walk (`.gitignore` and `search.exclude`).
+globset = "0.4.20"
+ignore = "0.4.33"
 # Already in the tree through GPUI; used directly for NSFileManager (Trash).
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",

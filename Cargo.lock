@@ -6839,7 +6839,9 @@ name = "tinytext"
 version = "0.1.11"
 dependencies = [
  "async-channel",
+ "globset",
  "gpui-kit",
+ "ignore",
  "objc2-foundation 0.3.2",
  "regex",
  "serde",

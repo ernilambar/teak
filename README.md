@@ -14,6 +14,8 @@ A fast, lightweight text editor for macOS.
 - Command palette (`Cmd+Shift+P`) to search and run any command
 - Quick Open (`Cmd+P`) to fuzzy-find a file across the workspace folders
 - Find in Files (`Cmd+Shift+F`) with match case, whole word, and regex options
+- Quick Open and Find in Files skip what `.gitignore` lists, plus any globs in the
+  `search.exclude` setting
 - Markdown preview (`Cmd+Shift+V`)
 - Reopens your tabs and folder where you left off
 - File → Open Recent for recently opened files and folders
