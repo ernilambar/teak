@@ -1,10 +1,10 @@
 //! The sidebar's workspace state: the open folders, the expanded set, the
 //! cached directory listings and the flattened rows rendered from them.
 //!
-//! `expanded` and `rows` have to agree — a row exists only for a root or for an
-//! entry of an expanded folder — so both are private and callers change them
-//! through methods that rebuild the rows. `TreeRow` and `FileClipboard` are leaf
-//! records and keep `pub(super)` fields.
+//! `rows` is derived from `roots` + `expanded`. Most methods rebuild it, but
+//! `expand`, `forget` and `remap` do not: their callers batch several changes
+//! and then call [`Workspace::reload`] once, which also re-reads the disk.
+//! `TreeRow` and `FileClipboard` are leaf records and keep `pub(super)` fields.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -226,7 +226,8 @@ impl Workspace {
     }
 
     /// Drops `path` and anything under it from the expansion state, and clears
-    /// the selection when it pointed inside. Used when an entry is removed.
+    /// the selection when it pointed inside. Used when an entry is removed;
+    /// call [`Self::reload`] afterwards.
     pub(super) fn forget(&mut self, path: &Path) {
         self.expanded
             .retain(|entry| entry.as_path() != path && !entry.starts_with(path));
@@ -272,7 +273,8 @@ impl Workspace {
         self.reload();
     }
 
-    /// Rewrites every stored path that sat under `old` to sit under `new`.
+    /// Rewrites every stored path that sat under `old` to sit under `new`. Call
+    /// [`Self::reload`] afterwards.
     pub(super) fn remap(&mut self, old: &Path, new: &Path) {
         let remap = |path: &PathBuf| remap_prefix(path, old, new).unwrap_or_else(|| path.clone());
         self.expanded = self.expanded.iter().map(remap).collect();

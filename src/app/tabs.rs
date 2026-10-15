@@ -143,8 +143,9 @@ impl TabSet {
         self.active.and_then(|ix| self.tabs.get(ix))
     }
 
+    /// Points the active index at `ix`; an index past the end clears it.
     pub(super) fn set_active(&mut self, ix: Option<usize>) {
-        self.active = ix;
+        self.active = ix.filter(|&ix| ix < self.tabs.len());
     }
 
     pub(super) fn context(&self) -> Option<usize> {
@@ -206,6 +207,11 @@ impl TabSet {
         }
 
         let preview = self.tabs.remove(ix).preview;
+        self.context = match self.context {
+            Some(context) if context == ix => None,
+            Some(context) if context > ix => Some(context - 1),
+            context => context,
+        };
         self.active = if self.tabs.is_empty() {
             None
         } else {
@@ -786,6 +792,28 @@ mod tests {
         set.drop_at(0);
 
         assert!(set.is_empty());
+        assert_eq!(set.active_index(), None);
+    }
+
+    #[gpui_kit::test]
+    async fn dropping_a_tab_keeps_the_context_index_on_its_tab(cx: &mut TestAppContext) {
+        let (handle, _app) = open_app(cx);
+        let mut set = tab_set(cx, handle, 3);
+
+        set.set_context(Some(2));
+        set.drop_at(0);
+        assert_eq!(set.context(), Some(1), "context follows its tab down");
+
+        set.drop_at(1);
+        assert_eq!(set.context(), None, "dropping the context tab clears it");
+    }
+
+    #[gpui_kit::test]
+    async fn set_active_rejects_an_index_past_the_end(cx: &mut TestAppContext) {
+        let (handle, _app) = open_app(cx);
+        let mut set = tab_set(cx, handle, 2);
+
+        set.set_active(Some(2));
         assert_eq!(set.active_index(), None);
     }
 

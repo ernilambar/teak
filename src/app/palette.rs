@@ -11,7 +11,7 @@
 
 use gpui_kit::component::{
     ActiveTheme as _,
-    command::{Command, CommandGroup, CommandState},
+    command::{Command, CommandState},
 };
 use gpui_kit::*;
 
@@ -23,13 +23,6 @@ use super::TinytextApp;
 const PALETTE_WIDTH: Pixels = px(560.);
 /// Gap between the top of the window and the palette panel.
 const PALETTE_TOP: Pixels = px(72.);
-
-/// The rows the palette offers. Declared once in `commands.rs`, next to each
-/// command's menu placement, chords and search keywords; each row carries its
-/// action, so the default row also shows that action's keybinding.
-fn palette_groups() -> Vec<CommandGroup> {
-    crate::commands::palette_groups()
-}
 
 impl TinytextApp {
     /// Opens the palette, or closes it when it is already open.
@@ -113,7 +106,9 @@ impl TinytextApp {
                     });
                 }
             });
-        for group in palette_groups() {
+        // Declared once in `commands.rs`; each row carries its action, so the
+        // default row also shows that action's keybinding.
+        for group in crate::commands::palette_groups() {
             command = command.group(group);
         }
 

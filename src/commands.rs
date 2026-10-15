@@ -62,7 +62,7 @@ pub(crate) enum PaletteGroup {
 
 /// Which key context a chord is active in.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Context {
+pub(crate) enum Scope {
     /// Fires regardless of focus.
     Global,
     /// Fires only while a text editor has focus.
@@ -76,7 +76,7 @@ pub(crate) struct Command {
     /// Builds the action to dispatch.
     make: fn() -> Box<dyn Action>,
     /// Chords for this command, each with the context it fires in.
-    bindings: &'static [(&'static str, Context)],
+    bindings: &'static [(&'static str, Scope)],
     /// Menu placement: which menu, and which cluster of it. Commands sharing a
     /// cluster appear in table order, so a cluster's rows are declared together.
     menu: Option<(MenuKind, u8)>,
@@ -87,7 +87,7 @@ pub(crate) struct Command {
 }
 
 /// A command with no chord.
-const NO_KEYS: &[(&str, Context)] = &[];
+const NO_KEYS: &[(&str, Scope)] = &[];
 
 /// Every user-invokable command.
 ///
@@ -100,7 +100,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "New File",
         make: || Box::new(NewFile),
-        bindings: &[("cmd-n", Context::Global)],
+        bindings: &[("cmd-n", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 0)),
         keywords: &[],
@@ -108,7 +108,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Open…",
         make: || Box::new(OpenFile),
-        bindings: &[("cmd-o", Context::Global)],
+        bindings: &[("cmd-o", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 1)),
         keywords: &[],
@@ -116,7 +116,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Quick Open…",
         make: || Box::new(QuickOpen),
-        bindings: &[("cmd-p", Context::Global)],
+        bindings: &[("cmd-p", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 2)),
         keywords: &[],
@@ -124,7 +124,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Add Folder…",
         make: || Box::new(AddFolder),
-        bindings: &[("cmd-shift-o", Context::Global)],
+        bindings: &[("cmd-shift-o", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 3)),
         keywords: &[],
@@ -132,7 +132,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Close All Folders",
         make: || Box::new(CloseAllFolders),
-        bindings: &[("alt-cmd-w", Context::Global)],
+        bindings: &[("alt-cmd-w", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 4)),
         keywords: &[],
@@ -140,7 +140,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Save",
         make: || Box::new(SaveFile),
-        bindings: &[("cmd-s", Context::Global)],
+        bindings: &[("cmd-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
         palette: Some((PaletteGroup::File, 5)),
         keywords: &[],
@@ -148,7 +148,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Save As…",
         make: || Box::new(SaveFileAs),
-        bindings: &[("cmd-shift-s", Context::Global)],
+        bindings: &[("cmd-shift-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
         palette: Some((PaletteGroup::File, 6)),
         keywords: &[],
@@ -156,7 +156,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Save All",
         make: || Box::new(SaveAll),
-        bindings: &[("alt-cmd-s", Context::Global)],
+        bindings: &[("alt-cmd-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
         palette: Some((PaletteGroup::File, 7)),
         keywords: &[],
@@ -164,7 +164,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Close Tab",
         make: || Box::new(CloseTab),
-        bindings: &[("cmd-w", Context::Global)],
+        bindings: &[("cmd-w", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
         palette: Some((PaletteGroup::File, 8)),
         keywords: &[],
@@ -174,7 +174,7 @@ static COMMANDS: &[Command] = &[
         // "Reopen Closed Tab"; one label now serves both.
         label: "Reopen Closed Tab",
         make: || Box::new(ReopenClosedTab),
-        bindings: &[("cmd-shift-t", Context::Global)],
+        bindings: &[("cmd-shift-t", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
         palette: Some((PaletteGroup::File, 9)),
         keywords: &[],
@@ -182,7 +182,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Reveal in Finder",
         make: || Box::new(RevealInFinder),
-        bindings: &[("alt-cmd-r", Context::Global)],
+        bindings: &[("alt-cmd-r", Scope::Global)],
         menu: None,
         palette: Some((PaletteGroup::File, 10)),
         keywords: &[],
@@ -191,7 +191,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Copy Path",
         make: || Box::new(CopyFilePath),
-        bindings: &[("alt-cmd-c", Context::Global)],
+        bindings: &[("alt-cmd-c", Scope::Global)],
         menu: Some((MenuKind::Edit, 0)),
         palette: Some((PaletteGroup::Edit, 14)),
         keywords: &[],
@@ -199,7 +199,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Copy Relative Path",
         make: || Box::new(CopyRelativePath),
-        bindings: &[("alt-cmd-shift-c", Context::Global)],
+        bindings: &[("alt-cmd-shift-c", Scope::Global)],
         menu: Some((MenuKind::Edit, 0)),
         palette: Some((PaletteGroup::Edit, 15)),
         keywords: &[],
@@ -207,7 +207,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Toggle Line Comment",
         make: || Box::new(ToggleLineComment),
-        bindings: &[("cmd-/", Context::Editor)],
+        bindings: &[("cmd-/", Scope::Editor)],
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 0)),
         keywords: &[],
@@ -215,7 +215,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Delete Line",
         make: || Box::new(DeleteLine),
-        bindings: &[("cmd-shift-k", Context::Editor)],
+        bindings: &[("cmd-shift-k", Scope::Editor)],
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 1)),
         keywords: &[],
@@ -223,7 +223,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Select Line",
         make: || Box::new(SelectLine),
-        bindings: &[("cmd-l", Context::Editor)],
+        bindings: &[("cmd-l", Scope::Editor)],
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 2)),
         keywords: &[],
@@ -231,7 +231,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Move Line Up",
         make: || Box::new(MoveLineUp),
-        bindings: &[("alt-up", Context::Editor)],
+        bindings: &[("alt-up", Scope::Editor)],
         menu: Some((MenuKind::Edit, 3)),
         palette: Some((PaletteGroup::Edit, 3)),
         keywords: &[],
@@ -239,7 +239,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Move Line Down",
         make: || Box::new(MoveLineDown),
-        bindings: &[("alt-down", Context::Editor)],
+        bindings: &[("alt-down", Scope::Editor)],
         menu: Some((MenuKind::Edit, 3)),
         palette: Some((PaletteGroup::Edit, 4)),
         keywords: &[],
@@ -247,7 +247,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Copy Line Up",
         make: || Box::new(CopyLineUp),
-        bindings: &[("shift-alt-up", Context::Editor)],
+        bindings: &[("shift-alt-up", Scope::Editor)],
         menu: Some((MenuKind::Edit, 3)),
         palette: Some((PaletteGroup::Edit, 5)),
         keywords: &[],
@@ -255,7 +255,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Copy Line Down",
         make: || Box::new(CopyLineDown),
-        bindings: &[("shift-alt-down", Context::Editor)],
+        bindings: &[("shift-alt-down", Scope::Editor)],
         menu: Some((MenuKind::Edit, 3)),
         palette: Some((PaletteGroup::Edit, 6)),
         keywords: &[],
@@ -263,7 +263,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Insert Line Above",
         make: || Box::new(InsertLineAbove),
-        bindings: &[("cmd-shift-enter", Context::Editor)],
+        bindings: &[("cmd-shift-enter", Scope::Editor)],
         menu: Some((MenuKind::Edit, 4)),
         palette: Some((PaletteGroup::Edit, 7)),
         keywords: &[],
@@ -271,7 +271,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Insert Line Below",
         make: || Box::new(InsertLineBelow),
-        bindings: &[("cmd-enter", Context::Editor)],
+        bindings: &[("cmd-enter", Scope::Editor)],
         menu: Some((MenuKind::Edit, 4)),
         palette: Some((PaletteGroup::Edit, 8)),
         keywords: &[],
@@ -279,7 +279,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Go to Line…",
         make: || Box::new(GoToLine),
-        bindings: &[("cmd-g", Context::Editor)],
+        bindings: &[("cmd-g", Scope::Editor)],
         menu: Some((MenuKind::Edit, 5)),
         palette: Some((PaletteGroup::Edit, 9)),
         keywords: &["goto"],
@@ -288,8 +288,8 @@ static COMMANDS: &[Command] = &[
         label: "Add Cursor Above",
         make: || Box::new(AddCursorAbove),
         bindings: &[
-            ("cmd-alt-up", Context::Editor),
-            ("ctrl-alt-up", Context::Editor),
+            ("cmd-alt-up", Scope::Editor),
+            ("ctrl-alt-up", Scope::Editor),
         ],
         menu: Some((MenuKind::Edit, 1)),
         palette: Some((PaletteGroup::Edit, 10)),
@@ -299,8 +299,8 @@ static COMMANDS: &[Command] = &[
         label: "Add Cursor Below",
         make: || Box::new(AddCursorBelow),
         bindings: &[
-            ("cmd-alt-down", Context::Editor),
-            ("ctrl-alt-down", Context::Editor),
+            ("cmd-alt-down", Scope::Editor),
+            ("ctrl-alt-down", Scope::Editor),
         ],
         menu: Some((MenuKind::Edit, 1)),
         palette: Some((PaletteGroup::Edit, 11)),
@@ -309,7 +309,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Split into Lines",
         make: || Box::new(SplitSelectionIntoLines),
-        bindings: &[("cmd-shift-l", Context::Editor)],
+        bindings: &[("cmd-shift-l", Scope::Editor)],
         menu: Some((MenuKind::Edit, 1)),
         palette: Some((PaletteGroup::Edit, 12)),
         keywords: &[],
@@ -317,7 +317,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Add Next Occurrence",
         make: || Box::new(AddNextOccurrence),
-        bindings: &[("cmd-d", Context::Editor)],
+        bindings: &[("cmd-d", Scope::Editor)],
         menu: Some((MenuKind::Edit, 1)),
         palette: Some((PaletteGroup::Edit, 13)),
         keywords: &[],
@@ -326,7 +326,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Command Palette…",
         make: || Box::new(CommandPalette),
-        bindings: &[("cmd-shift-p", Context::Global)],
+        bindings: &[("cmd-shift-p", Scope::Global)],
         menu: Some((MenuKind::View, 0)),
         palette: None,
         keywords: &[],
@@ -334,7 +334,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Toggle Sidebar",
         make: || Box::new(ToggleSidebar),
-        bindings: &[("cmd-b", Context::Global)],
+        bindings: &[("cmd-b", Scope::Global)],
         menu: Some((MenuKind::View, 1)),
         palette: Some((PaletteGroup::View, 0)),
         keywords: &[],
@@ -342,7 +342,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Refresh",
         make: || Box::new(Refresh),
-        bindings: &[("cmd-r", Context::Global)],
+        bindings: &[("cmd-r", Scope::Global)],
         menu: Some((MenuKind::View, 1)),
         palette: Some((PaletteGroup::View, 1)),
         keywords: &[],
@@ -350,7 +350,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Zoom In",
         make: || Box::new(ZoomIn),
-        bindings: &[("cmd-=", Context::Global), ("cmd-shift-=", Context::Global)],
+        bindings: &[("cmd-=", Scope::Global), ("cmd-shift-=", Scope::Global)],
         menu: Some((MenuKind::View, 2)),
         palette: Some((PaletteGroup::View, 2)),
         keywords: &[],
@@ -358,7 +358,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Zoom Out",
         make: || Box::new(ZoomOut),
-        bindings: &[("cmd--", Context::Global)],
+        bindings: &[("cmd--", Scope::Global)],
         menu: Some((MenuKind::View, 2)),
         palette: Some((PaletteGroup::View, 3)),
         keywords: &[],
@@ -366,7 +366,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Actual Size",
         make: || Box::new(ZoomReset),
-        bindings: &[("cmd-0", Context::Global)],
+        bindings: &[("cmd-0", Scope::Global)],
         menu: Some((MenuKind::View, 2)),
         palette: Some((PaletteGroup::View, 4)),
         keywords: &[],
@@ -374,7 +374,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Toggle Word Wrap",
         make: || Box::new(ToggleWordWrap),
-        bindings: &[("alt-z", Context::Editor)],
+        bindings: &[("alt-z", Scope::Editor)],
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 5)),
         keywords: &[],
@@ -382,7 +382,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Toggle Invisible Characters",
         make: || Box::new(ToggleWhitespace),
-        bindings: &[("alt-cmd-i", Context::Global)],
+        bindings: &[("alt-cmd-i", Scope::Global)],
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 6)),
         keywords: &[],
@@ -414,7 +414,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Toggle Preview",
         make: || Box::new(ToggleMarkdownPreview),
-        bindings: &[("cmd-shift-v", Context::Global)],
+        bindings: &[("cmd-shift-v", Scope::Global)],
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 10)),
         keywords: &[],
@@ -438,7 +438,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Next Tab",
         make: || Box::new(NextTab),
-        bindings: &[("cmd-shift-]", Context::Global)],
+        bindings: &[("cmd-shift-]", Scope::Global)],
         menu: Some((MenuKind::View, 4)),
         palette: Some((PaletteGroup::View, 13)),
         keywords: &[],
@@ -446,7 +446,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Previous Tab",
         make: || Box::new(PreviousTab),
-        bindings: &[("cmd-shift-[", Context::Global)],
+        bindings: &[("cmd-shift-[", Scope::Global)],
         menu: Some((MenuKind::View, 4)),
         palette: Some((PaletteGroup::View, 14)),
         keywords: &[],
@@ -455,7 +455,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Settings…",
         make: || Box::new(OpenSettings),
-        bindings: &[("cmd-,", Context::Global)],
+        bindings: &[("cmd-,", Scope::Global)],
         menu: Some((MenuKind::Tinytext, 1)),
         palette: Some((PaletteGroup::Tinytext, 0)),
         keywords: &["preferences", "config"],
@@ -503,7 +503,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Hide Tinytext",
         make: || Box::new(Hide),
-        bindings: &[("cmd-h", Context::Global)],
+        bindings: &[("cmd-h", Scope::Global)],
         menu: Some((MenuKind::Tinytext, 3)),
         palette: None,
         keywords: &[],
@@ -511,7 +511,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Hide Others",
         make: || Box::new(HideOthers),
-        bindings: &[("alt-cmd-h", Context::Global)],
+        bindings: &[("alt-cmd-h", Scope::Global)],
         menu: Some((MenuKind::Tinytext, 3)),
         palette: None,
         keywords: &[],
@@ -527,7 +527,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Quit Tinytext",
         make: || Box::new(Quit),
-        bindings: &[("cmd-q", Context::Global)],
+        bindings: &[("cmd-q", Scope::Global)],
         menu: Some((MenuKind::Tinytext, 4)),
         palette: None,
         keywords: &[],
@@ -536,7 +536,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 1",
         make: || Box::new(JumpToTab(1)),
-        bindings: &[("cmd-1", Context::Global)],
+        bindings: &[("cmd-1", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -544,7 +544,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 2",
         make: || Box::new(JumpToTab(2)),
-        bindings: &[("cmd-2", Context::Global)],
+        bindings: &[("cmd-2", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -552,7 +552,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 3",
         make: || Box::new(JumpToTab(3)),
-        bindings: &[("cmd-3", Context::Global)],
+        bindings: &[("cmd-3", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -560,7 +560,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 4",
         make: || Box::new(JumpToTab(4)),
-        bindings: &[("cmd-4", Context::Global)],
+        bindings: &[("cmd-4", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -568,7 +568,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 5",
         make: || Box::new(JumpToTab(5)),
-        bindings: &[("cmd-5", Context::Global)],
+        bindings: &[("cmd-5", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -576,7 +576,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 6",
         make: || Box::new(JumpToTab(6)),
-        bindings: &[("cmd-6", Context::Global)],
+        bindings: &[("cmd-6", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -584,7 +584,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 7",
         make: || Box::new(JumpToTab(7)),
-        bindings: &[("cmd-7", Context::Global)],
+        bindings: &[("cmd-7", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -592,7 +592,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 8",
         make: || Box::new(JumpToTab(8)),
-        bindings: &[("cmd-8", Context::Global)],
+        bindings: &[("cmd-8", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -600,7 +600,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 9",
         make: || Box::new(JumpToTab(9)),
-        bindings: &[("cmd-9", Context::Global)],
+        bindings: &[("cmd-9", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -645,7 +645,7 @@ impl PaletteGroup {
 /// commands with gpui-kit's own actions, separators and two hand-written
 /// surfaces, so the running order cannot come from the table alone.
 enum Entry {
-    /// Every command placed at this menu and cluster, in rank order.
+    /// Every command placed at this menu and cluster, in table order.
     Cluster(u8),
     /// A separator, an engine action, or the Services menu.
     Item(fn() -> MenuItem),
@@ -779,7 +779,7 @@ fn outdent() -> MenuItem {
 
 /// Bindings that are active regardless of which element has focus.
 pub(crate) fn app_bindings() -> Vec<KeyBinding> {
-    bindings(Context::Global)
+    bindings(Scope::Global)
 }
 
 /// VS Code's macOS editing chords, scoped to the focused editor.
@@ -796,10 +796,10 @@ pub(crate) fn app_bindings() -> Vec<KeyBinding> {
 /// - `cmd-enter` — VS Code inserts a line below; the engine maps
 ///   `secondary-enter` to a plain newline on macOS, so this is the useful one.
 pub(crate) fn editor_bindings() -> Vec<KeyBinding> {
-    bindings(Context::Editor)
+    bindings(Scope::Editor)
 }
 
-fn bindings(context: Context) -> Vec<KeyBinding> {
+fn bindings(context: Scope) -> Vec<KeyBinding> {
     let mut bindings = Vec::new();
     for command in COMMANDS {
         for (chord, scope) in command.bindings {
@@ -816,10 +816,10 @@ fn bindings(context: Context) -> Vec<KeyBinding> {
 /// the table holds `Box<dyn Action>`, which does not satisfy `new`'s
 /// `impl Action` bound, so the equivalent public constructor is used with the
 /// same arguments (`new` passes `false`, `None` and `DummyKeyboardMapper`).
-fn binding(chord: &str, action: Box<dyn Action>, context: Context) -> KeyBinding {
+fn binding(chord: &str, action: Box<dyn Action>, context: Scope) -> KeyBinding {
     let predicate = match context {
-        Context::Global => None,
-        Context::Editor => Some(Rc::new(
+        Scope::Global => None,
+        Scope::Editor => Some(Rc::new(
             KeyBindingContextPredicate::parse(EDITOR).expect("the editor context parses"),
         )),
     };
@@ -836,12 +836,10 @@ pub(crate) fn menus(theme: &str) -> Vec<Menu> {
             for entry in kind.skeleton() {
                 match entry {
                     Entry::Cluster(cluster) => items.extend(
-                        ranked(
-                            |command| command.menu == Some((kind, *cluster)),
-                            |command| command.menu.map_or(u8::MAX, |(_, rank)| rank),
-                        )
-                        .into_iter()
-                        .map(menu_item),
+                        COMMANDS
+                            .iter()
+                            .filter(|command| command.menu == Some((kind, *cluster)))
+                            .map(menu_item),
                     ),
                     Entry::Item(build) => items.push(build()),
                     Entry::Appearance => items.push(MenuItem::submenu(theme_menu(theme))),
@@ -896,9 +894,7 @@ pub(crate) fn palette_groups() -> Vec<CommandGroup> {
         .collect()
 }
 
-/// The commands matching `keep`, sorted by `rank`. The sort is stable, so
-/// commands sharing a rank keep the order they are declared in — menu clusters
-/// rely on that, while palette ranks are all distinct.
+/// The commands matching `keep`, sorted by `rank`.
 fn ranked(keep: impl Fn(&Command) -> bool, rank: impl Fn(&Command) -> u8) -> Vec<&'static Command> {
     let mut rows: Vec<&'static Command> = COMMANDS.iter().filter(|command| keep(command)).collect();
     rows.sort_by_key(|command| rank(command));
@@ -918,7 +914,7 @@ mod tests {
     use gpui_kit::{Action as _, KeyBinding, KeyContext, Keymap, Keystroke};
 
     use super::{
-        COMMANDS, Context, Entry, MenuKind, PALETTE, PaletteGroup, PaletteSlot, app_bindings,
+        COMMANDS, Entry, MenuKind, PALETTE, PaletteGroup, PaletteSlot, Scope, app_bindings,
         editor_bindings,
     };
 
@@ -1211,7 +1207,7 @@ mod tests {
 
     #[test]
     fn chords_do_not_collide_within_a_context() {
-        for context in [Context::Global, Context::Editor] {
+        for context in [Scope::Global, Scope::Editor] {
             let mut chords: Vec<&str> = COMMANDS
                 .iter()
                 .flat_map(|command| command.bindings.iter())
