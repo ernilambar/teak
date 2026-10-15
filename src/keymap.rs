@@ -19,4 +19,5 @@ use crate::commands;
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys(commands::app_bindings());
     cx.bind_keys(commands::editor_bindings());
+    cx.bind_keys(commands::find_bindings());
 }

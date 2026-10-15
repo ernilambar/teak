@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::paths::support_dir;
+use crate::search::SearchOptions;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -17,6 +18,11 @@ pub(crate) struct SessionState {
     pub(crate) sidebar_width: Option<u32>,
     /// Recently opened files and folders, newest first, for File > Open Recent.
     pub(crate) recent: Vec<PathBuf>,
+    /// The Find panel's last query, Where field and toggles.
+    pub(crate) find_query: String,
+    pub(crate) find_where: String,
+    pub(crate) find_replace: String,
+    pub(crate) find_options: SearchOptions,
 }
 
 /// How many entries File > Open Recent keeps.
@@ -55,6 +61,13 @@ mod tests {
             sidebar_visible: true,
             sidebar_width: Some(260),
             recent: vec![PathBuf::from("/tmp/project/a.rs")],
+            find_query: "needle".into(),
+            find_where: "-vendor/**".into(),
+            find_replace: "pin".into(),
+            find_options: SearchOptions {
+                regex: true,
+                ..Default::default()
+            },
         };
         let json = serde_json::to_string(&state).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -67,6 +80,10 @@ mod tests {
         assert!(restored.sidebar_visible);
         assert_eq!(restored.sidebar_width, Some(260));
         assert_eq!(restored.recent, state.recent);
+        assert_eq!(restored.find_query, "needle");
+        assert_eq!(restored.find_where, "-vendor/**");
+        assert_eq!(restored.find_replace, "pin");
+        assert_eq!(restored.find_options, state.find_options);
     }
 
     #[test]

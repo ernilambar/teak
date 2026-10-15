@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use globset::GlobSet;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{
     ActiveTheme as _,
@@ -69,9 +70,6 @@ impl TinytextApp {
         if self.overlays.is_palette_open() {
             self.close_palette(window, cx);
         }
-        if self.overlays.is_find_open() {
-            self.close_find_in_files(window, cx);
-        }
 
         let state = cx.new(|cx| CommandState::new(window, cx));
         // Remember what held focus so it can be restored once the finder closes.
@@ -102,7 +100,7 @@ impl TinytextApp {
                     if roots.is_empty() {
                         fallback
                     } else {
-                        collect_files(&roots, MAX_INDEX_FILES, &exclude)
+                        collect_files(&roots, MAX_INDEX_FILES, &exclude, &GlobSet::empty())
                     }
                 })
                 .await;

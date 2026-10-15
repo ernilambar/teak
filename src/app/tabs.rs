@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use gpui_kit::component::{
     WindowExt as _,
     button::ButtonVariant,
-    input::{EditorState, InputEvent, TabSize},
+    input::{EditorState, InputEvent, RangeDecorationCollection, TabSize},
     notification::Notification,
     text::TextViewState,
 };
@@ -17,6 +17,7 @@ use crate::paths::file_name;
 
 use super::TinytextApp;
 use super::files::{FileContent, LARGE_FILE_BYTES, TextFormat, modified_time};
+use crate::search::ResultTarget;
 
 /// How many recently closed tabs to remember for `ReopenClosedTab`.
 const MAX_CLOSED_TABS: usize = 10;
@@ -40,7 +41,19 @@ pub(super) struct OpenTab {
     /// A binary image opened view-only: it always shows its preview, its
     /// editor stays empty, and it is never saved.
     pub(super) raster: bool,
+    /// Set on the read-only Find Results tab, which is never saved or restored.
+    pub(super) find_results: Option<FindResultsTab>,
     pub(super) _subscriptions: Vec<Subscription>,
+}
+
+/// What the Find Results tab knows beyond its text.
+pub(super) struct FindResultsTab {
+    /// The results lines that open a match, in document order.
+    pub(super) targets: Vec<ResultTarget>,
+    /// The match highlights, replaced on every search.
+    pub(super) highlights: RangeDecorationCollection,
+    /// The target F4 / Shift+F4 last moved to.
+    pub(super) current: Option<usize>,
 }
 
 pub(super) enum Preview {
@@ -353,6 +366,7 @@ impl TinytextApp {
             editor: editor.clone(),
             preview: None,
             raster: false,
+            find_results: None,
             _subscriptions: vec![change_subscription, cursor_subscription],
         });
         self.tabs.set_active(Some(ix));
@@ -684,7 +698,10 @@ impl TinytextApp {
             return;
         };
 
-        if let Some(tab) = self.tabs.get(ix) {
+        // Reopening the results tab would bring it back as a plain Untitled copy.
+        if let Some(tab) = self.tabs.get(ix)
+            && tab.find_results.is_none()
+        {
             self.tabs.push_closed(ClosedTab {
                 path: tab.path.clone(),
                 content: tab.editor.read(cx).text().to_string(),
@@ -822,6 +839,7 @@ mod tests {
                 editor,
                 preview: None,
                 raster: false,
+                find_results: None,
                 _subscriptions: Vec::new(),
             });
         }

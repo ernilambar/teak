@@ -1,5 +1,5 @@
-//! State for the mutually exclusive overlay surfaces: the command palette, the
-//! quick-open finder, Find in Files, and the file indexes the last two search.
+//! State for the transient surfaces: the mutually exclusive command palette and
+//! quick-open finder, the file index the finder searches, and the Find panel.
 //!
 //! Opening and closing stays on `TinytextApp`: mounting an overlay needs a
 //! `Window` (`window.defer` for the focus request, `cx.spawn_in` for the index
@@ -10,20 +10,35 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use gpui_kit::component::command::CommandState;
+use gpui_kit::component::{command::CommandState, input::InputState};
 use gpui_kit::*;
 
-use crate::search::{SearchOptions, SearchResults};
+use crate::search::SearchOptions;
 
-/// Where the current Find in Files query stands.
+/// The Find panel's text fields, alive while the panel is shown.
+pub(super) struct FindFields {
+    pub(super) query: Entity<InputState>,
+    pub(super) scope: Entity<InputState>,
+    pub(super) replace: Entity<InputState>,
+}
+
+/// The Find panel's text, kept while the panel is hidden.
+#[derive(Clone, Default)]
+pub(super) struct FindText {
+    pub(super) query: String,
+    pub(super) scope: String,
+    pub(super) replace: String,
+}
+
+/// What the Find panel's status line reports.
 #[derive(Default)]
-pub(super) enum FindOutcome {
-    /// No query yet.
+pub(super) enum FindStatus {
     #[default]
     Idle,
     Searching,
-    Done(SearchResults),
-    /// The regex does not compile; holds the reason.
+    /// The last search's summary.
+    Done(String),
+    /// The query or the Where field does not compile; holds the reason.
     Invalid(String),
 }
 
@@ -41,17 +56,15 @@ pub(super) struct Overlays {
     /// The quick-open file index: every file under the workspace roots, walked
     /// on the last finder open. Cached until it is rebuilt on the next open.
     open_paths: Vec<PathBuf>,
-    /// Find in Files' interaction state while the overlay is open.
-    find: Option<Entity<CommandState>>,
-    /// The focus that was active when Find in Files opened, restored on close.
+    /// The Find panel's fields while it is shown.
+    find: Option<FindFields>,
+    /// The focus that was active when the Find panel opened, restored on close.
     find_return_focus: Option<FocusHandle>,
-    /// The files Find in Files searches, walked on each open.
-    find_files: Arc<Vec<PathBuf>>,
-    find_query: String,
-    /// Kept across opens, like most editors' search toggles.
+    /// The panel's text, kept while it is hidden and across relaunches.
+    find_text: FindText,
     find_options: SearchOptions,
-    find_outcome: FindOutcome,
-    /// Bumped by every new query; a search whose number no longer matches
+    find_status: FindStatus,
+    /// Bumped by every new search; a search whose number no longer matches
     /// stops early and drops its results.
     find_generation: Arc<AtomicU64>,
 }
@@ -120,47 +133,28 @@ impl Overlays {
         self.open_paths = paths;
     }
 
-    pub(super) fn find(&self) -> Option<&Entity<CommandState>> {
+    pub(super) fn find(&self) -> Option<&FindFields> {
         self.find.as_ref()
     }
 
-    pub(super) fn is_find_open(&self) -> bool {
-        self.find.is_some()
-    }
-
-    /// Mounts Find in Files with an empty query, remembering `return_focus`.
-    pub(super) fn set_find(
-        &mut self,
-        state: Entity<CommandState>,
-        return_focus: Option<FocusHandle>,
-    ) {
-        self.find = Some(state);
+    /// Shows the Find panel with `fields`, remembering `return_focus`.
+    pub(super) fn set_find(&mut self, fields: FindFields, return_focus: Option<FocusHandle>) {
+        self.find = Some(fields);
         self.find_return_focus = return_focus;
-        self.find_query.clear();
-        self.find_outcome = FindOutcome::Idle;
     }
 
-    /// Unmounts Find in Files, cancelling any search still running.
-    pub(super) fn take_find(&mut self) -> Option<(Entity<CommandState>, Option<FocusHandle>)> {
-        let state = self.find.take()?;
-        self.next_find_generation();
-        Some((state, self.find_return_focus.take()))
+    /// Hides the Find panel, handing back its fields and the focus to restore.
+    pub(super) fn take_find(&mut self) -> Option<(FindFields, Option<FocusHandle>)> {
+        let fields = self.find.take()?;
+        Some((fields, self.find_return_focus.take()))
     }
 
-    pub(super) fn find_files(&self) -> Arc<Vec<PathBuf>> {
-        self.find_files.clone()
+    pub(super) fn find_text(&self) -> &FindText {
+        &self.find_text
     }
 
-    pub(super) fn set_find_files(&mut self, files: Vec<PathBuf>) {
-        self.find_files = Arc::new(files);
-    }
-
-    pub(super) fn find_query(&self) -> &str {
-        &self.find_query
-    }
-
-    pub(super) fn set_find_query(&mut self, query: String) {
-        self.find_query = query;
+    pub(super) fn set_find_text(&mut self, text: FindText) {
+        self.find_text = text;
     }
 
     pub(super) fn find_options(&self) -> SearchOptions {
@@ -171,12 +165,12 @@ impl Overlays {
         &mut self.find_options
     }
 
-    pub(super) fn find_outcome(&self) -> &FindOutcome {
-        &self.find_outcome
+    pub(super) fn find_status(&self) -> &FindStatus {
+        &self.find_status
     }
 
-    pub(super) fn set_find_outcome(&mut self, outcome: FindOutcome) {
-        self.find_outcome = outcome;
+    pub(super) fn set_find_status(&mut self, status: FindStatus) {
+        self.find_status = status;
     }
 
     pub(super) fn find_generation(&self) -> Arc<AtomicU64> {

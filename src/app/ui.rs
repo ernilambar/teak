@@ -211,6 +211,13 @@ impl TinytextApp {
                         }
                     })
                     .when(show_icons, |this| {
+                        if tab.find_results.is_some() {
+                            return this.child(
+                                Icon::new(IconName::Search)
+                                    .with_size(Size::Small)
+                                    .flex_none(),
+                            );
+                        }
                         // Untitled tabs have no path and fall back to the default file icon.
                         let path = tab.path.as_deref().unwrap_or(Path::new(""));
                         this.child(file_type_icon(file_icon(path), icon_style, cx))
@@ -871,10 +878,30 @@ impl TinytextApp {
                 div()
                     .size_full()
                     .bg(cx.theme().background)
+                    // Enter and double-click open the match under the caret; the
+                    // context lets the Enter binding beat the editor's newline.
+                    .when(tab.find_results.is_some(), |panel| {
+                        panel
+                            .key_context("FindResults")
+                            .capture_any_mouse_down(cx.listener(
+                                |_this, event: &MouseDownEvent, window, cx| {
+                                    // The first click already put the caret on the
+                                    // line. Deferred so the editor finishes handling
+                                    // the press, and taking focus, before the jump.
+                                    if event.click_count == 2 {
+                                        cx.defer_in(window, |this, window, cx| {
+                                            this.open_result_at_caret(window, cx);
+                                        });
+                                    }
+                                },
+                            ))
+                    })
                     .child(
                         Editor::new(&tab.editor)
                             .appearance(false)
                             .bordered(false)
+                            // The element sets this on the state every render.
+                            .readonly(tab.find_results.is_some())
                             .when_some(
                                 self.settings.values.editor.font_family.clone(),
                                 |editor, family| editor.font_family(family),

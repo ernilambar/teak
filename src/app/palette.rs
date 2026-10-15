@@ -44,9 +44,6 @@ impl TinytextApp {
         if self.overlays.is_quick_open_open() {
             self.close_quick_open(window, cx);
         }
-        if self.overlays.is_find_open() {
-            self.close_find_in_files(window, cx);
-        }
 
         let state = cx.new(|cx| CommandState::new(window, cx));
         // Remember what held focus so it can be restored once the palette closes.

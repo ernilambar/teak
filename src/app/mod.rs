@@ -11,7 +11,7 @@ mod ui;
 mod workspace;
 
 use self::chrome::Chrome;
-use self::overlays::Overlays;
+use self::overlays::{FindText, Overlays};
 use self::preferences::SettingsState;
 use self::tabs::{OpenTab, Preview, TabSet};
 use self::workspace::Workspace;
@@ -95,12 +95,15 @@ impl TinytextApp {
         };
         app.workspace.reload();
         // Read on its own because the session is skipped when the app is
-        // launched with paths, but the recent list still applies.
-        app.workspace.set_recent(
-            load_session()
-                .map(|session| session.recent)
-                .unwrap_or_default(),
-        );
+        // launched with paths, but the recent list and Find text still apply.
+        let session = load_session().unwrap_or_default();
+        app.workspace.set_recent(session.recent);
+        app.overlays.set_find_text(FindText {
+            query: session.find_query,
+            scope: session.find_where,
+            replace: session.find_replace,
+        });
+        *app.overlays.find_options_mut() = session.find_options;
         app.refresh_menus(cx);
         app
     }
@@ -209,6 +212,10 @@ impl TinytextApp {
             sidebar_visible: self.workspace.sidebar_visible(),
             sidebar_width: Some(self.workspace.width()),
             recent: self.workspace.recent().to_vec(),
+            find_query: self.overlays.find_text().query.clone(),
+            find_where: self.overlays.find_text().scope.clone(),
+            find_replace: self.overlays.find_text().replace.clone(),
+            find_options: self.overlays.find_options(),
         };
 
         let Ok(json) = serde_json::to_string_pretty(&state) else {
@@ -995,11 +1002,7 @@ impl Render for TinytextApp {
             .quick_open()
             .cloned()
             .map(|state| self.render_quick_open(&state, cx));
-        let find_in_files = self
-            .overlays
-            .find()
-            .cloned()
-            .map(|state| self.render_find_in_files(&state, cx));
+        let find_panel = self.render_find_panel(cx);
         let settings_overlay = self.settings.is_open().then(|| self.render_settings(cx));
         // Only worth hinting while an editor is open; other panes have no carets.
         let alt_held = window.modifiers().alt && self.active().is_some();
@@ -1074,9 +1077,17 @@ impl Render for TinytextApp {
             .on_action(cx.listener(Self::on_command_palette))
             .on_action(cx.listener(Self::on_quick_open))
             .on_action(cx.listener(Self::on_find_in_files))
-            .on_action(cx.listener(Self::on_open_match))
+            .on_action(cx.listener(Self::on_run_find))
+            .on_action(cx.listener(Self::on_replace_all))
+            .on_action(cx.listener(Self::on_close_find_panel))
+            .on_action(cx.listener(Self::on_find_next_field))
+            .on_action(cx.listener(Self::on_find_previous_field))
+            .on_action(cx.listener(Self::on_open_result))
+            .on_action(cx.listener(Self::on_next_result))
+            .on_action(cx.listener(Self::on_previous_result))
             .on_action(cx.listener(Self::on_open_path))
             .child(self.render_workspace(window, cx))
+            .children(find_panel)
             .child(self.render_status_bar(alt_held, cx));
 
         let root = match palette {
@@ -1084,10 +1095,6 @@ impl Render for TinytextApp {
             None => root,
         };
         let root = match quick_open {
-            Some(overlay) => root.child(overlay),
-            None => root,
-        };
-        let root = match find_in_files {
             Some(overlay) => root.child(overlay),
             None => root,
         };
