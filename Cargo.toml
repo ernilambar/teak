@@ -28,6 +28,14 @@ gpui-kit = { version = "0.7.3", features = [
     "tree-sitter-toml",
     "tree-sitter-typescript",
 ] }
+# Already in the tree through GPUI; used directly for NSFileManager (Trash).
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSError",
+    "NSFileManager",
+    "NSString",
+    "NSURL",
+] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 

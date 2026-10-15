@@ -221,6 +221,17 @@ pub(crate) fn nearest_root<'a>(roots: &'a [PathBuf], path: &Path) -> Option<&'a 
         .map(PathBuf::as_path)
 }
 
+/// Moves a file or directory to the user's Trash, so a delete can be undone
+/// from Finder.
+pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
+    use objc2_foundation::{NSFileManager, NSString, NSURL};
+
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    NSFileManager::defaultManager()
+        .trashItemAtURL_resultingItemURL_error(&url, None)
+        .map_err(|error| error.localizedDescription().to_string())
+}
+
 /// Copies a file, or a directory tree, to `to`. Directories are created and
 /// filled recursively.
 pub(crate) fn copy_entry(from: &Path, to: &Path) -> std::io::Result<()> {

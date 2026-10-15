@@ -6838,6 +6838,7 @@ version = "0.1.11"
 dependencies = [
  "async-channel",
  "gpui-kit",
+ "objc2-foundation 0.3.2",
  "serde",
  "serde_json",
 ]

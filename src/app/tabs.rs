@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use gpui_kit::component::{
     WindowExt as _,
@@ -14,7 +15,7 @@ use crate::language::{editor_language_id, language_for};
 use crate::paths::file_name;
 
 use super::TinytextApp;
-use super::files::FileContent;
+use super::files::{FileContent, modified_time};
 
 /// How many recently closed tabs to remember for `ReopenClosedTab`.
 const MAX_CLOSED_TABS: usize = 10;
@@ -27,6 +28,9 @@ pub(super) struct OpenTab {
     /// renaming must not re-derive it from the file extension.
     pub(super) language_override: bool,
     pub(super) dirty: bool,
+    /// The file's modification time when last read or written, compared on
+    /// activation and before saving to spot edits made by other programs.
+    pub(super) disk_modified: Option<SystemTime>,
     pub(super) editor: Entity<EditorState>,
     /// The rendered view shown in place of the editor while preview is on.
     /// Kept in sync with the buffer by the change subscription.
@@ -311,12 +315,14 @@ impl TinytextApp {
             this.sync_cursor(editor.entity_id(), cx);
         });
 
+        let disk_modified = path.as_deref().and_then(modified_time);
         let ix = self.tabs.push(OpenTab {
             path,
             title,
             language,
             language_override: false,
             dirty: false,
+            disk_modified,
             editor: editor.clone(),
             preview: None,
             raster: false,
@@ -389,6 +395,7 @@ impl TinytextApp {
         // changes, since the tree cache is otherwise only refreshed on
         // activation and in-app file operations.
         self.reload_tree();
+        self.check_outside_change(window, cx);
         cx.notify();
     }
 
@@ -644,7 +651,7 @@ impl TinytextApp {
     }
 
     /// Pushes `editor`'s text into its tab's preview, if one is open.
-    fn sync_preview(&mut self, editor: &Entity<EditorState>, cx: &mut Context<Self>) {
+    pub(super) fn sync_preview(&mut self, editor: &Entity<EditorState>, cx: &mut Context<Self>) {
         let Some(tab) = self
             .tabs
             .iter_mut()
@@ -738,6 +745,7 @@ mod tests {
                 language: "Plain Text".into(),
                 language_override: false,
                 dirty: false,
+                disk_modified: None,
                 editor,
                 preview: None,
                 raster: false,

@@ -225,8 +225,11 @@ fn main() {
             // Re-render whenever the window is (de)activated so a file deleted
             // while the app was in the background is reflected in its tab.
             app.update(cx, |_this, cx| {
-                cx.observe_window_activation(window, |this, _window, cx| {
+                cx.observe_window_activation(window, |this, window, cx| {
                     this.reload_tree();
+                    if window.is_window_active() {
+                        this.check_outside_change(window, cx);
+                    }
                     cx.notify()
                 })
                 .detach();

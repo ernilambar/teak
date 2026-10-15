@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use gpui_kit::component::{
     WindowExt as _,
@@ -10,7 +11,9 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::language::{editor_language_id, language_for};
-use crate::paths::{copy_entry, duplicate_name, file_name, is_valid_entry_name, remap_prefix};
+use crate::paths::{
+    copy_entry, duplicate_name, file_name, is_valid_entry_name, move_to_trash, remap_prefix,
+};
 use crate::{AddFolder, CloseAllFolders, NewFile, OpenFile, SaveAll, SaveFile, SaveFileAs};
 
 use super::TinytextApp;
@@ -50,6 +53,14 @@ pub(super) fn read_file(path: &Path) -> std::io::Result<FileContent> {
         }
         None => std::fs::read_to_string(path).map(FileContent::Text),
     }
+}
+
+/// The file's last modification time, or `None` when it cannot be read (for
+/// example, because the file no longer exists).
+pub(super) fn modified_time(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
 }
 
 /// The notification shown when a file the user asked for cannot be opened.
@@ -333,6 +344,51 @@ impl TinytextApp {
         if tab.raster {
             return;
         }
+
+        // Saving over the tab's own file after another program changed it
+        // would silently discard that change, so ask first.
+        let changed_on_disk = tab.path.as_deref() == Some(path.as_path())
+            && tab.disk_modified.is_some()
+            && modified_time(&path).is_some_and(|modified| Some(modified) != tab.disk_modified);
+        if !changed_on_disk {
+            self.write_editor(id, path, window, cx);
+            return;
+        }
+
+        let name = file_name(&path);
+        let entity = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let entity = entity.clone();
+            let path = path.clone();
+            alert
+                .confirm()
+                .title("File Changed")
+                .description(format!(
+                    "\"{name}\" changed on disk since it was opened. Overwrite it?"
+                ))
+                .ok_text("Overwrite")
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text("Cancel")
+                .on_ok(move |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.write_editor(id, path.clone(), window, cx)
+                    });
+                    true
+                })
+        });
+    }
+
+    /// Writes the tab's text to `path` without any checks.
+    fn write_editor(
+        &mut self,
+        id: EntityId,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.find(id) else {
+            return;
+        };
         let text = tab.editor.read(cx).text().to_string();
         let filename = file_name(&path);
 
@@ -374,12 +430,135 @@ impl TinytextApp {
                 });
                 tab.language = language;
             }
+            tab.disk_modified = modified_time(&path);
             tab.path = Some(path);
             tab.dirty = false;
         }
         self.reload_tree();
         self.save_session();
         cx.notify();
+    }
+
+    /// Picks up edits another program made to the active tab's file. A tab
+    /// without unsaved edits reloads silently; one with edits asks first.
+    /// Other tabs are checked when they become active.
+    pub(crate) fn check_outside_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        if tab.raster {
+            return;
+        }
+        let Some(path) = tab.path.clone() else {
+            return;
+        };
+        // A missing file is shown as deleted elsewhere; nothing to reload.
+        let Some(modified) = modified_time(&path) else {
+            return;
+        };
+        if tab.disk_modified == Some(modified) {
+            return;
+        }
+        let id = tab.editor.entity_id();
+
+        if !tab.dirty {
+            self.reload_from_disk(id, path, window, cx);
+            return;
+        }
+
+        // Record the new time up front so later activations do not ask again;
+        // keeping the edits is the default.
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.editor.entity_id() == id)
+        {
+            tab.disk_modified = Some(modified);
+        }
+        let name = file_name(&path);
+        let entity = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let entity = entity.clone();
+            let path = path.clone();
+            alert
+                .confirm()
+                .title("File Changed")
+                .description(format!(
+                    "\"{name}\" changed on disk. Reload it and discard your unsaved edits?"
+                ))
+                .ok_text("Reload")
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text("Keep My Edits")
+                .on_ok(move |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.reload_from_disk(id, path.clone(), window, cx)
+                    });
+                    true
+                })
+        });
+    }
+
+    /// Replaces the tab's text with the file's current contents, keeping the
+    /// caret on the same line where possible. Undo history is cleared.
+    fn reload_from_disk(
+        &mut self,
+        id: EntityId,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let started_dirty = self.tabs.find(id).is_some_and(|tab| tab.dirty);
+        cx.spawn_in(window, async move |this, cx| {
+            let read_path = path.clone();
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    let modified = modified_time(&read_path);
+                    std::fs::read_to_string(&read_path).map(|text| (text, modified))
+                })
+                .await;
+
+            this.update_in(cx, |this, window, cx| {
+                let (text, modified) = match read {
+                    Ok(read) => read,
+                    Err(error) => {
+                        window
+                            .push_notification(Notification::error(open_error(&path, &error)), cx);
+                        return;
+                    }
+                };
+                let Some(tab) = this
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.editor.entity_id() == id)
+                else {
+                    return;
+                };
+                // Typing during the read made the tab dirty; leave it alone and
+                // let the next activation ask instead.
+                if tab.path.as_deref() != Some(path.as_path()) || (tab.dirty && !started_dirty) {
+                    return;
+                }
+                tab.disk_modified = modified;
+                let editor = tab.editor.clone();
+                let is_active = this.tabs.active().map(|tab| tab.editor.entity_id()) == Some(id);
+                editor.update(cx, |state, cx| {
+                    let position = state.cursor_position();
+                    // `set_value` emits no change event, so the tab stays clean.
+                    state.set_value(text, window, cx);
+                    // Restoring the caret also focuses the editor, so only do it
+                    // when the visible editor already has focus.
+                    if is_active && state.focus_handle(cx).is_focused(window) {
+                        state.set_cursor_position(position, window, cx);
+                    }
+                });
+                this.set_dirty(id, false, cx);
+                this.sync_preview(&editor, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Prompts for a single name with a text field and runs `on_confirm` with
@@ -782,8 +961,8 @@ impl TinytextApp {
             alert
                 .confirm()
                 .title("Delete")
-                .description(format!("Delete \"{name}\"? This cannot be undone."))
-                .ok_text("Delete")
+                .description(format!("Move \"{name}\" to the Trash?"))
+                .ok_text("Move to Trash")
                 .ok_variant(ButtonVariant::Danger)
                 .cancel_text("Cancel")
                 .on_ok(move |_, window, cx| {
@@ -808,20 +987,15 @@ impl TinytextApp {
             self.remove_tab(id, window, cx);
         }
 
-        let result = if path.is_dir() {
-            std::fs::remove_dir_all(path)
-        } else {
-            std::fs::remove_file(path)
-        };
-
-        match result {
+        match move_to_trash(path) {
             Ok(()) => {
                 let name = file_name(path);
                 self.workspace.forget(path);
                 self.reload_tree();
                 self.save_session();
                 cx.notify();
-                window.push_notification(Notification::success(format!("Deleted {name}")), cx);
+                window
+                    .push_notification(Notification::success(format!("Moved {name} to Trash")), cx);
             }
             Err(error) => window.push_notification(
                 Notification::error(format!("Could not delete {}: {error}", file_name(path))),
