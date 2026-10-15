@@ -6,11 +6,11 @@
 //! reading the entity there would re-enter its borrow. The set closures capture
 //! a `WeakEntity` and run on interaction, when the entity is free to update.
 //!
-//! Word wrap, whitespace and the other editor display switches need a `Window`
-//! to push their new state onto the editors that are already open, so they are
-//! built with a custom field whose render closure is handed one. Everything
-//! else persists through the window-free setters and reports a write failure in
-//! an inline banner.
+//! Word wrap, whitespace and the other editor options need a `Window` to push
+//! their new state onto the editors that are already open, so they are built
+//! with a custom field whose render closure is handed one — a switch, or a
+//! number input for the cursor scroll margin. Everything else persists through
+//! the window-free setters and reports a write failure in an inline banner.
 
 use std::rc::Rc;
 
@@ -18,19 +18,20 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, ThemeMode,
     button::{Button, ButtonVariants as _},
-    input::TabSize,
+    input::{InputEvent, InputState, NumberInput, TabSize},
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     switch::Switch,
 };
 use gpui_kit::*;
 
 use crate::settings::{
-    DEFAULT_DARK_SCHEME, DEFAULT_FONT_WEIGHT, DEFAULT_ICON_STYLE, DEFAULT_LIGHT_SCHEME,
-    DEFAULT_SIDEBAR_POSITION, DEFAULT_TAB_SIZE, DEFAULT_THEME, EditorSettings, MAX_FONT_SIZE,
-    MAX_UI_FONT_SIZE, MIN_FONT_SIZE, MIN_UI_FONT_SIZE, save_color_scheme_dark,
-    save_color_scheme_light, save_font_family, save_font_size, save_font_weight, save_hard_tabs,
-    save_icon_color, save_show_whitespace, save_sidebar_position, save_soft_wrap, save_tab_icons,
-    save_tab_size, save_theme, save_ui_font_family, save_ui_font_size,
+    DEFAULT_CURSOR_SURROUNDING_LINES, DEFAULT_DARK_SCHEME, DEFAULT_FONT_WEIGHT, DEFAULT_ICON_STYLE,
+    DEFAULT_LIGHT_SCHEME, DEFAULT_SIDEBAR_POSITION, DEFAULT_TAB_SIZE, DEFAULT_THEME,
+    EditorSettings, MAX_FONT_SIZE, MAX_UI_FONT_SIZE, MIN_FONT_SIZE, MIN_UI_FONT_SIZE,
+    save_color_scheme_dark, save_color_scheme_light, save_cursor_surrounding_lines,
+    save_font_family, save_font_size, save_font_weight, save_hard_tabs, save_icon_color,
+    save_show_whitespace, save_sidebar_position, save_soft_wrap, save_tab_icons, save_tab_size,
+    save_theme, save_ui_font_family, save_ui_font_size,
 };
 
 use super::TinytextApp;
@@ -59,6 +60,88 @@ fn window_switch(
                 weak.update(cx, |this, cx| apply(this, value, window, cx))
                     .ok();
             })
+            .into_any_element()
+    })
+}
+
+/// A number field's change handler, given the window it needs to apply.
+type WindowNumberSetter =
+    Rc<dyn Fn(&mut TinytextApp, usize, &mut Window, &mut Context<TinytextApp>)>;
+
+/// State for [`window_number_input`], held in the window so the field's text and
+/// caret survive re-renders of the overlay.
+struct NumberFieldState {
+    input: Entity<InputState>,
+    committed: usize,
+    _subscriptions: Vec<Subscription>,
+}
+
+/// A number input that needs the window to apply its change immediately,
+/// [`window_switch`]'s numeric counterpart. The typed
+/// `SettingField::number_input` hands its setter only `&mut App`, which is not
+/// enough for the editor options the engine can only set through a `Window`.
+fn window_number_input(
+    id: &'static str,
+    value: usize,
+    options: NumberFieldOptions,
+    weak: WeakEntity<TinytextApp>,
+    apply: WindowNumberSetter,
+) -> SettingField<SharedString> {
+    SettingField::render(move |render_options, window, cx| {
+        let init_bounds = options.clone();
+        let live_bounds = options.clone();
+        let weak = weak.clone();
+        let apply = apply.clone();
+        let state = window.use_keyed_state(id, cx, move |window, cx| {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(value.to_string())
+                    .step(init_bounds.step)
+                    .min(init_bounds.min)
+                    .max(init_bounds.max)
+            });
+            let subscriptions = vec![cx.subscribe_in(
+                &input,
+                window,
+                move |state: &mut NumberFieldState, input, event: &InputEvent, window, cx| {
+                    if !matches!(event, InputEvent::Change) {
+                        return;
+                    }
+                    // Unparsable intermediates ("", "-") are left alone so the
+                    // next keystroke can complete them; out-of-range text is
+                    // clamped rather than rejected.
+                    let Ok(parsed) = input.read(cx).value().trim().parse::<usize>() else {
+                        return;
+                    };
+                    let lines = parsed.clamp(live_bounds.min as usize, live_bounds.max as usize);
+                    if state.committed == lines {
+                        return;
+                    }
+                    state.committed = lines;
+                    weak.update(cx, |this, cx| apply(this, lines, window, cx))
+                        .ok();
+                },
+            )];
+            NumberFieldState {
+                input,
+                committed: value,
+                _subscriptions: subscriptions,
+            }
+        });
+
+        // Reflect a value that changed while the overlay was closed.
+        state.update(cx, |state, cx| {
+            if state.committed != value {
+                state.committed = value;
+                state.input.update(cx, |input, cx| {
+                    input.set_value(SharedString::from(value.to_string()), window, cx);
+                });
+            }
+        });
+
+        NumberInput::new(&state.read(cx).input)
+            .with_size(render_options.size())
+            .w_32()
             .into_any_element()
     })
 }
@@ -273,6 +356,38 @@ impl TinytextApp {
             editor.scroll_beyond_last_line(),
             |e| &mut e.scroll_beyond_last_line,
         );
+        let cursor_lines_is_set = editor.cursor_surrounding_lines.is_some();
+        let cursor_lines = editor
+            .cursor_surrounding_lines
+            .unwrap_or(DEFAULT_CURSOR_SURROUNDING_LINES);
+        let cursor_lines_reset_weak = weak.clone();
+        let cursor_surrounding_lines_item = SettingItem::new(
+            "Cursor Surrounding Lines",
+            window_number_input(
+                "cursor-surrounding-lines-field",
+                cursor_lines,
+                NumberFieldOptions {
+                    min: 0.0,
+                    max: 50.0,
+                    step: 1.0,
+                },
+                weak.clone(),
+                Rc::new(|this, lines, window, cx| {
+                    this.set_editor_cursor_surrounding_lines(lines, window, cx)
+                }),
+            )
+            .on_reset(
+                move |_cx| cursor_lines_is_set,
+                move |window, cx| {
+                    cursor_lines_reset_weak
+                        .update(cx, |this, cx| {
+                            this.reset_cursor_surrounding_lines(window, cx)
+                        })
+                        .ok();
+                },
+            ),
+        )
+        .description("Lines kept above and below the cursor before the editor scrolls.");
         let auto_close_item = flag_item(
             "Auto Close Brackets",
             "Insert the closing bracket or quote as you type.",
@@ -490,6 +605,7 @@ impl TinytextApp {
                         indent_guides_item,
                         folding_item,
                         scroll_beyond_item,
+                        cursor_surrounding_lines_item,
                     ]),
                     SettingGroup::new()
                         .title("Editing")
@@ -710,6 +826,28 @@ impl TinytextApp {
         cx.notify();
     }
 
+    fn set_editor_cursor_surrounding_lines(
+        &mut self,
+        lines: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.editor.cursor_surrounding_lines = Some(lines);
+        self.apply_editor_options_to_all(window, cx);
+        self.after_setting_write(save_cursor_surrounding_lines(Some(lines)), window, cx);
+        cx.notify();
+    }
+
+    /// Clears the scroll margin so the engine picks it again: one line on a
+    /// short viewport, three otherwise. No typed value reproduces that, which is
+    /// why this setting resets to unset rather than to a number.
+    fn reset_cursor_surrounding_lines(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.editor.cursor_surrounding_lines = None;
+        self.apply_editor_options_to_all(window, cx);
+        self.after_setting_write(save_cursor_surrounding_lines(None), window, cx);
+        cx.notify();
+    }
+
     /// Pushes the tab-size settings onto open editors. Unlike soft wrap and
     /// whitespace, this needs no window.
     fn apply_tab_options(&mut self, cx: &mut Context<Self>) {
@@ -721,5 +859,35 @@ impl TinytextApp {
         for editor in editors {
             editor.update(cx, |state, cx| state.set_tab_size(tab, cx));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    use crate::app::test_support::open_app;
+
+    /// The overlay builds every field it offers, including the custom number
+    /// input for the cursor scroll margin, and renders again with that field's
+    /// window-held state already present.
+    #[gpui_kit::test]
+    async fn settings_overlay_renders_the_cursor_margin_field(cx: &mut TestAppContext) {
+        let (handle, app) = open_app(cx);
+
+        cx.update_window(handle, |_, window, cx| {
+            let focus_handle = app.read(cx).focus_handle.clone();
+            window.focus(&focus_handle, cx);
+            app.update(cx, |app, cx| {
+                app.settings_open = true;
+                cx.notify();
+            });
+            window.render_frame(cx);
+            window.render_frame(cx);
+            assert!(app.read(cx).settings_open, "the overlay stays open");
+        })
+        .unwrap();
+        cx.run_until_parked();
     }
 }

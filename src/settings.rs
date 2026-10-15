@@ -21,6 +21,10 @@ pub(crate) const DEFAULT_UI_FONT_SIZE: f32 = 16.;
 pub(crate) const SYSTEM_UI_FONT: &str = ".SystemUIFont";
 /// Effective tab width when `editor.tab_size` is unset.
 pub(crate) const DEFAULT_TAB_SIZE: usize = 4;
+/// Scroll margin used when `editor.cursor_surrounding_lines` is unset. Mirrors
+/// gpui-base's own default, so the settings overlay offers the value the engine
+/// would pick on its own.
+pub(crate) const DEFAULT_CURSOR_SURROUNDING_LINES: usize = 3;
 /// Theme used when `ui.theme` is unset. Kept as a plain string so settings.rs
 /// stays free of GPUI types.
 pub(crate) const DEFAULT_THEME: &str = "dark";
@@ -301,7 +305,7 @@ pub(crate) fn defaults_document(
             smart_indent: Some(editor.smart_indent()),
             indent_wrapped_lines: Some(editor.indent_wrapped_lines()),
             scroll_beyond_last_line: Some(editor.scroll_beyond_last_line()),
-            cursor_surrounding_lines: editor.cursor_surrounding_lines,
+            cursor_surrounding_lines: Some(DEFAULT_CURSOR_SURROUNDING_LINES),
         },
         ui: UiSettings {
             theme: Some(ui.theme().to_string()),
@@ -482,6 +486,16 @@ pub(crate) fn save_hard_tabs(enabled: bool) -> Result<String, String> {
     )
 }
 
+/// Records the cursor scroll margin (`editor.cursor_surrounding_lines`); `None`
+/// removes the override so the engine's own margin applies again.
+pub(crate) fn save_cursor_surrounding_lines(lines: Option<usize>) -> Result<String, String> {
+    save_setting(
+        "editor",
+        "cursor_surrounding_lines",
+        lines.map(|lines| serde_json::json!(lines)),
+    )
+}
+
 /// Records the interface font family (`ui.font_family`); `None` removes the
 /// override so the system UI font applies again.
 pub(crate) fn save_ui_font_family(family: Option<&str>) -> Result<String, String> {
@@ -639,6 +653,29 @@ mod tests {
     }
 
     #[test]
+    fn cursor_surrounding_lines_round_trips_through_set_setting() {
+        let json = set_setting(
+            r#"{"editor": {"font_size": 15}}"#,
+            "editor",
+            "cursor_surrounding_lines",
+            Some(serde_json::json!(6)),
+        )
+        .unwrap();
+        let settings = parse_settings(&json).unwrap();
+
+        // Re-parsing proves the key matches the field: an unknown key would be
+        // rejected rather than silently ignored.
+        assert_eq!(settings.editor.cursor_surrounding_lines, Some(6));
+        assert_eq!(settings.editor.font_size(), Some(15.));
+
+        // Clearing it drops the override so the engine's own margin applies.
+        let cleared = set_setting(&json, "editor", "cursor_surrounding_lines", None).unwrap();
+        let settings = parse_settings(&cleared).unwrap();
+        assert_eq!(settings.editor.cursor_surrounding_lines, None);
+        assert_eq!(settings.editor.font_size(), Some(15.));
+    }
+
+    #[test]
     fn defaults_document_lists_every_key_at_its_effective_default() {
         let document = defaults_document("Menlo", 13., "SF Pro Text", 16.);
         let parsed = parse_settings(&document).unwrap();
@@ -667,7 +704,7 @@ mod tests {
         );
         assert_eq!(
             parsed.editor.cursor_surrounding_lines,
-            editor.cursor_surrounding_lines
+            Some(DEFAULT_CURSOR_SURROUNDING_LINES)
         );
         assert_eq!(parsed.ui.theme(), ui.theme());
         assert_eq!(parsed.ui.light_scheme(), ui.light_scheme());

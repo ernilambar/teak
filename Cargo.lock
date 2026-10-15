@@ -2160,7 +2160,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "regex",
- "ropey 2.0.0-beta.1",
+ "ropey",
  "schemars",
  "serde",
  "serde_json",
@@ -2205,7 +2205,7 @@ dependencies = [
  "raw-window-handle",
  "regex",
  "resvg 0.45.1",
- "ropey 2.0.0-beta.1",
+ "ropey",
  "rust-i18n",
  "schemars",
  "serde",
@@ -5731,16 +5731,6 @@ dependencies = [
 
 [[package]]
 name = "ropey"
-version = "1.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93411e420bcd1a75ddd1dc3caf18c23155eda2c090631a85af21ba19e97093b5"
-dependencies = [
- "smallvec",
- "str_indices",
-]
-
-[[package]]
-name = "ropey"
 version = "2.0.0-beta.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4045a00dc327d084a2bbf126976e14125b54f23bd30511d45b842eba76c52d74"
@@ -6846,10 +6836,8 @@ dependencies = [
 name = "tinytext"
 version = "0.1.10"
 dependencies = [
- "anyhow",
  "async-channel",
  "gpui-kit",
- "ropey 1.6.1",
  "serde",
  "serde_json",
 ]
