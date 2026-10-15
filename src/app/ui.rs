@@ -1047,11 +1047,14 @@ impl TinytextApp {
         }
 
         let (cursor_line, cursor_col) = self.chrome.cursor();
+        let format = self.active().map(|tab| tab.format).unwrap_or_default();
 
         status
             .left(div().child(format!("Ln {cursor_line}, Col {cursor_col}")))
             .left(divider())
-            .left(div().child("UTF-8"))
+            .left(div().child(format.encoding_label()))
+            .left(divider())
+            .left(div().child(format.line_ending_label()))
             .right(language_button)
             .right(divider())
             .right(save_status)

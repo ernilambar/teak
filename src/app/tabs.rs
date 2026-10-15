@@ -6,6 +6,7 @@ use gpui_kit::component::{
     WindowExt as _,
     button::ButtonVariant,
     input::{EditorState, InputEvent, TabSize},
+    notification::Notification,
     text::TextViewState,
 };
 use gpui_kit::*;
@@ -15,7 +16,7 @@ use crate::language::{editor_language_id, language_for};
 use crate::paths::file_name;
 
 use super::TinytextApp;
-use super::files::{FileContent, modified_time};
+use super::files::{FileContent, LARGE_FILE_BYTES, TextFormat, modified_time};
 
 /// How many recently closed tabs to remember for `ReopenClosedTab`.
 const MAX_CLOSED_TABS: usize = 10;
@@ -31,6 +32,7 @@ pub(super) struct OpenTab {
     /// The file's modification time when last read or written, compared on
     /// activation and before saving to spot edits made by other programs.
     pub(super) disk_modified: Option<SystemTime>,
+    pub(super) format: TextFormat,
     pub(super) editor: Entity<EditorState>,
     /// The rendered view shown in place of the editor while preview is on.
     /// Kept in sync with the buffer by the change subscription.
@@ -323,6 +325,7 @@ impl TinytextApp {
             language_override: false,
             dirty: false,
             disk_modified,
+            format: TextFormat::default(),
             editor: editor.clone(),
             preview: None,
             raster: false,
@@ -349,7 +352,40 @@ impl TinytextApp {
         cx: &mut Context<Self>,
     ) {
         match content {
-            FileContent::Text(text) => self.add_tab(Some(path), text, window, cx),
+            FileContent::Text { text, format } => {
+                let name = file_name(&path);
+                let large = text.len() > LARGE_FILE_BYTES;
+                let language = if large {
+                    "Plain Text".into()
+                } else {
+                    language_for(&path)
+                };
+                self.push_tab(Some(path), name.clone().into(), language, text, window, cx);
+                if let Some(ix) = self.tabs.active_index()
+                    && let Some(tab) = self.tabs.get_mut(ix)
+                {
+                    tab.format = format;
+                    // Keeps a save from turning highlighting back on.
+                    tab.language_override = large;
+                }
+                if format.lossy {
+                    window.push_notification(
+                        Notification::warning(format!(
+                            "{name} is not valid UTF-8; unreadable bytes show as �"
+                        )),
+                        cx,
+                    );
+                }
+                if large {
+                    window.push_notification(
+                        Notification::info(format!(
+                            "{name} is over {} MB; syntax highlighting is off",
+                            LARGE_FILE_BYTES / (1024 * 1024)
+                        )),
+                        cx,
+                    );
+                }
+            }
             FileContent::Image(image) => {
                 self.add_tab(Some(path), String::new(), window, cx);
                 let ix = self.tabs.len() - 1;
@@ -727,7 +763,7 @@ mod tests {
 
     use crate::app::test_support::open_app;
 
-    use super::{OpenTab, TabSet, remap_moved_index};
+    use super::{OpenTab, TabSet, TextFormat, remap_moved_index};
 
     /// `n` tabs whose editors are real (empty) editor entities, so the entity
     /// ids the index bookkeeping matches on are distinct.
@@ -746,6 +782,7 @@ mod tests {
                 language_override: false,
                 dirty: false,
                 disk_modified: None,
+                format: TextFormat::default(),
                 editor,
                 preview: None,
                 raster: false,

@@ -21,8 +21,78 @@ use super::workspace::{AddRoot, FileClipboard};
 
 /// A file read for a new tab: text for the editor, or a raster image to view.
 pub(super) enum FileContent {
-    Text(String),
+    Text { text: String, format: TextFormat },
     Image(Arc<Image>),
+}
+
+/// Text files above this size open as Plain Text, since syntax highlighting
+/// a huge file can stall the editor.
+pub(super) const LARGE_FILE_BYTES: usize = 10 * 1024 * 1024;
+
+const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+
+/// How a text file is stored on disk, so saving writes it back the same way.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct TextFormat {
+    /// Starts with a UTF-8 byte order mark, kept out of the editor's text.
+    pub(super) bom: bool,
+    /// Uses `\r\n` line breaks, judged from the first break.
+    pub(super) crlf: bool,
+    /// Held bytes that are not valid UTF-8; the editor shows them as U+FFFD.
+    pub(super) lossy: bool,
+}
+
+impl TextFormat {
+    /// Splits raw file bytes into editor text and the format to save it
+    /// with. Binary content (a NUL byte near the start) is refused.
+    pub(super) fn decode(bytes: &[u8]) -> std::io::Result<(String, Self)> {
+        if bytes.iter().take(8192).any(|&byte| byte == 0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "binary file",
+            ));
+        }
+        let bom = bytes.starts_with(UTF8_BOM);
+        let body = if bom { &bytes[UTF8_BOM.len()..] } else { bytes };
+        let (text, lossy) = match std::str::from_utf8(body) {
+            Ok(text) => (text.to_string(), false),
+            Err(_) => (String::from_utf8_lossy(body).into_owned(), true),
+        };
+        let crlf = text
+            .find('\n')
+            .is_some_and(|ix| ix > 0 && text.as_bytes()[ix - 1] == b'\r');
+        Ok((text, Self { bom, crlf, lossy }))
+    }
+
+    /// The bytes to write for `text`. A CRLF file gets `\r\n` for every bare
+    /// `\n` typed or pasted since it was opened, and its BOM goes back on.
+    pub(super) fn encode(&self, text: &str) -> Vec<u8> {
+        let mut out = Vec::with_capacity(text.len() + UTF8_BOM.len());
+        if self.bom {
+            out.extend_from_slice(UTF8_BOM);
+        }
+        if !self.crlf {
+            out.extend_from_slice(text.as_bytes());
+            return out;
+        }
+        let mut previous = 0;
+        for &byte in text.as_bytes() {
+            if byte == b'\n' && previous != b'\r' {
+                out.push(b'\r');
+            }
+            out.push(byte);
+            previous = byte;
+        }
+        out
+    }
+
+    pub(super) fn encoding_label(&self) -> &'static str {
+        if self.bom { "UTF-8 with BOM" } else { "UTF-8" }
+    }
+
+    pub(super) fn line_ending_label(&self) -> &'static str {
+        if self.crlf { "CRLF" } else { "LF" }
+    }
 }
 
 /// The raster format GPUI decodes for `path`'s extension. SVG is absent on
@@ -42,16 +112,17 @@ fn raster_format(path: &Path) -> Option<ImageFormat> {
 }
 
 /// Reads `path` for a new tab. Raster images load as raw bytes; everything
-/// else must be UTF-8 text.
+/// else is decoded as text.
 pub(super) fn read_file(path: &Path) -> std::io::Result<FileContent> {
+    let bytes = std::fs::read(path)?;
     match raster_format(path) {
-        Some(format) => {
-            let bytes = std::fs::read(path)?;
-            Ok(FileContent::Image(Arc::new(Image::from_bytes(
-                format, bytes,
-            ))))
+        Some(format) => Ok(FileContent::Image(Arc::new(Image::from_bytes(
+            format, bytes,
+        )))),
+        None => {
+            let (text, format) = TextFormat::decode(&bytes)?;
+            Ok(FileContent::Text { text, format })
         }
-        None => std::fs::read_to_string(path).map(FileContent::Text),
     }
 }
 
@@ -67,7 +138,7 @@ pub(super) fn modified_time(path: &Path) -> Option<SystemTime> {
 fn open_error(path: &Path, error: &std::io::Error) -> String {
     let filename = file_name(path);
     if error.kind() == std::io::ErrorKind::InvalidData {
-        format!("Could not open {filename}: not a UTF-8 text file")
+        format!("Could not open {filename}: it looks like a binary file")
     } else {
         format!("Could not open {filename}: {error}")
     }
@@ -345,6 +416,48 @@ impl TinytextApp {
             return;
         }
 
+        // Writing back a file that was not valid UTF-8 replaces its bad bytes
+        // for good, so ask first. Saving a copy elsewhere loses nothing.
+        if !(tab.format.lossy && tab.path.as_deref() == Some(path.as_path())) {
+            self.save_over_changes(id, path, window, cx);
+            return;
+        }
+
+        let name = file_name(&path);
+        let entity = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let entity = entity.clone();
+            let path = path.clone();
+            alert
+                .confirm()
+                .title("Not Valid UTF-8")
+                .description(format!(
+                    "\"{name}\" has bytes that are not valid UTF-8. Saving replaces them with �. Save anyway?"
+                ))
+                .ok_text("Save")
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text("Cancel")
+                .on_ok(move |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.save_over_changes(id, path.clone(), window, cx)
+                    });
+                    true
+                })
+        });
+    }
+
+    /// Writes the tab, first asking when its file changed on disk.
+    fn save_over_changes(
+        &mut self,
+        id: EntityId,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.find(id) else {
+            return;
+        };
+
         // Saving over the tab's own file after another program changed it
         // would silently discard that change, so ask first.
         let changed_on_disk = tab.path.as_deref() == Some(path.as_path())
@@ -389,7 +502,7 @@ impl TinytextApp {
         let Some(tab) = self.tabs.find(id) else {
             return;
         };
-        let text = tab.editor.read(cx).text().to_string();
+        let text = tab.format.encode(&tab.editor.read(cx).text().to_string());
         let filename = file_name(&path);
 
         cx.spawn_in(window, async move |this, cx| {
@@ -431,6 +544,8 @@ impl TinytextApp {
                 tab.language = language;
             }
             tab.disk_modified = modified_time(&path);
+            // The bad bytes were replaced on disk, so the file is clean UTF-8.
+            tab.format.lossy = false;
             tab.path = Some(path);
             tab.dirty = false;
         }
@@ -514,12 +629,13 @@ impl TinytextApp {
                 .background_executor()
                 .spawn(async move {
                     let modified = modified_time(&read_path);
-                    std::fs::read_to_string(&read_path).map(|text| (text, modified))
+                    let bytes = std::fs::read(&read_path)?;
+                    TextFormat::decode(&bytes).map(|(text, format)| (text, format, modified))
                 })
                 .await;
 
             this.update_in(cx, |this, window, cx| {
-                let (text, modified) = match read {
+                let (text, format, modified) = match read {
                     Ok(read) => read,
                     Err(error) => {
                         window
@@ -540,6 +656,7 @@ impl TinytextApp {
                     return;
                 }
                 tab.disk_modified = modified;
+                tab.format = format;
                 let editor = tab.editor.clone();
                 let is_active = this.tabs.active().map(|tab| tab.editor.entity_id()) == Some(id);
                 editor.update(cx, |state, cx| {
@@ -1074,7 +1191,7 @@ mod tests {
 
     use gpui_kit::ImageFormat;
 
-    use super::raster_format;
+    use super::{TextFormat, raster_format};
 
     #[test]
     fn raster_format_maps_image_extensions() {
@@ -1082,5 +1199,60 @@ mod tests {
         assert_eq!(raster_format(Path::new("a.jpeg")), Some(ImageFormat::Jpeg));
         assert_eq!(raster_format(Path::new("icon.svg")), None);
         assert_eq!(raster_format(Path::new("notes.txt")), None);
+    }
+
+    #[test]
+    fn unchanged_files_round_trip_byte_for_byte() {
+        for bytes in [
+            &b"plain\nlf\n"[..],
+            b"windows\r\nlines\r\n",
+            b"\xEF\xBB\xBFwith bom\r\n",
+            b"lf file keeps a stray \r here\n",
+            b"",
+        ] {
+            let (text, format) = TextFormat::decode(bytes).unwrap();
+            assert_eq!(format.encode(&text), bytes, "{bytes:?}");
+        }
+    }
+
+    #[test]
+    fn bom_stays_out_of_the_editor_text() {
+        let (text, format) = TextFormat::decode(b"\xEF\xBB\xBFhi").unwrap();
+        assert_eq!(text, "hi");
+        assert!(format.bom);
+        assert_eq!(format.encoding_label(), "UTF-8 with BOM");
+    }
+
+    #[test]
+    fn crlf_file_saves_new_lines_as_crlf() {
+        let (_, format) = TextFormat::decode(b"a\r\nb\r\n").unwrap();
+        assert!(format.crlf);
+        assert_eq!(format.line_ending_label(), "CRLF");
+        assert_eq!(format.encode("a\r\nnew\nb\r\n"), b"a\r\nnew\r\nb\r\n");
+    }
+
+    #[test]
+    fn mixed_file_saves_with_its_first_line_ending() {
+        let (text, format) = TextFormat::decode(b"a\r\nb\nc\r\n").unwrap();
+        assert_eq!(format.encode(&text), b"a\r\nb\r\nc\r\n");
+    }
+
+    #[test]
+    fn line_ending_follows_the_first_break() {
+        assert!(!TextFormat::decode(b"a\nb\r\n").unwrap().1.crlf);
+        assert!(!TextFormat::decode(b"no breaks").unwrap().1.crlf);
+    }
+
+    #[test]
+    fn invalid_utf8_opens_lossy() {
+        let (text, format) = TextFormat::decode(b"caf\xE9").unwrap();
+        assert_eq!(text, "caf\u{FFFD}");
+        assert!(format.lossy);
+    }
+
+    #[test]
+    fn binary_content_is_refused() {
+        let error = TextFormat::decode(b"\x89PNG\0\0").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 }
