@@ -81,6 +81,48 @@ pub(crate) fn read_dir(dir: &Path) -> Vec<DirEntry> {
     dirs
 }
 
+/// Directories whose contents never belong in the quick-open file index.
+const IGNORED_DIRS: &[&str] = &[".git", "node_modules", "target", "__pycache__"];
+
+/// Collects the files under every root with a breadth-first walk, stopping
+/// once `limit` paths are collected. Dot directories and dependency/build
+/// directories are skipped, and symlinks are not followed, so a symlinked
+/// folder appears as a file entry instead of being walked.
+pub(crate) fn collect_files(roots: &[PathBuf], limit: usize) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut queue: Vec<PathBuf> = roots.to_vec();
+
+    while let Some(dir) = queue.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if files.len() >= limit {
+                return files;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                if is_ignored_dir(&path) {
+                    continue;
+                }
+                queue.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
+fn is_ignored_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| IGNORED_DIRS.contains(&name) || name.starts_with('.'))
+}
+
 pub(crate) fn path_from_file_url(url: &str) -> Option<PathBuf> {
     let rest = url.strip_prefix("file://")?;
     let path = rest.strip_prefix("localhost").unwrap_or(rest);
@@ -281,6 +323,48 @@ mod tests {
     #[test]
     fn read_dir_returns_empty_for_missing_directory() {
         assert!(read_dir(Path::new("/nonexistent/tinytext")).is_empty());
+    }
+
+    #[test]
+    fn collect_files_walks_files_and_skips_ignored_directories() {
+        let root = std::env::temp_dir().join(format!("tinytext-collect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src/deep")).unwrap();
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::write(root.join("README.md"), "readme").unwrap();
+        std::fs::write(root.join("src/a.rs"), "a").unwrap();
+        std::fs::write(root.join("src/deep/b.rs"), "b").unwrap();
+        std::fs::write(root.join(".hidden/c.txt"), "c").unwrap();
+        std::fs::write(root.join("node_modules/d.txt"), "d").unwrap();
+
+        let files = collect_files(std::slice::from_ref(&root), usize::MAX);
+        let mut names: Vec<String> = files.iter().map(|path| file_name(path)).collect();
+        names.sort();
+
+        assert_eq!(names, ["README.md", "a.rs", "b.rs"]);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn collect_files_stops_at_the_limit() {
+        let root = std::env::temp_dir().join(format!("tinytext-collect-2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        for index in 0..5 {
+            std::fs::write(root.join(format!("file-{index}.txt")), "").unwrap();
+        }
+
+        assert_eq!(collect_files(std::slice::from_ref(&root), 0).len(), 0);
+        assert_eq!(collect_files(std::slice::from_ref(&root), 3).len(), 3);
+        assert_eq!(collect_files(&[root], 5).len(), 5);
+    }
+
+    #[test]
+    fn collect_files_tolerates_missing_roots() {
+        assert!(collect_files(&[PathBuf::from("/nonexistent/tinytext")], usize::MAX).is_empty());
+        assert!(collect_files(&[], usize::MAX).is_empty());
     }
 
     #[test]

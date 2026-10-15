@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod file_icons;
+mod fuzzy;
 mod keymap;
 mod language;
 mod markdown;
@@ -28,6 +29,7 @@ gpui_kit::actions!(
     [
         NewFile,
         OpenFile,
+        QuickOpen,
         AddFolder,
         CloseAllFolders,
         SaveFile,
@@ -86,6 +88,12 @@ gpui_kit::actions!(
 #[derive(Clone, PartialEq, gpui_kit::Action)]
 #[action(namespace = tinytext, no_json)]
 pub struct JumpToTab(usize);
+
+/// Opens the file the quick-open finder confirmed, from `Cmd+P`. The `actions!`
+/// macro only builds unit actions, so the path is carried here instead.
+#[derive(Clone, PartialEq, gpui_kit::Action)]
+#[action(namespace = tinytext, no_json)]
+pub struct OpenPath(pub(crate) PathBuf);
 
 /// Picks the appearance from the Appearance menu or the command palette. The
 /// payload is the `ui.theme` value: `light`, `dark`, or `system`.
@@ -307,6 +315,7 @@ pub(crate) fn app_menus(theme: &str) -> Vec<Menu> {
         Menu::new("File").items([
             MenuItem::action("New File", NewFile),
             MenuItem::action("Open…", OpenFile),
+            MenuItem::action("Quick Open…", QuickOpen),
             MenuItem::action("Add Folder…", AddFolder),
             MenuItem::action("Close All Folders", CloseAllFolders),
             MenuItem::separator(),

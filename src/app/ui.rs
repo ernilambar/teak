@@ -110,7 +110,7 @@ thread_local! {
 /// `Icon` component built on it — flattens an SVG to a single tinted color, so
 /// the colorful style draws the vendored SVG through the image pipeline
 /// instead, which preserves its fills.
-fn file_type_icon(bytes: &'static [u8], style: IconStyle, cx: &App) -> AnyElement {
+pub(super) fn file_type_icon(bytes: &'static [u8], style: IconStyle, cx: &App) -> AnyElement {
     if style == IconStyle::Colorful
         && let Some(image) = colored_icon(bytes, cx)
     {

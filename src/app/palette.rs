@@ -20,10 +20,10 @@ use crate::{
     CloseAllFolders, CloseTab, CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp,
     CopyRelativePath, DeleteLine, GoToLine, InsertLineAbove, InsertLineBelow, MoveLineDown,
     MoveLineUp, NewFile, NextTab, OpenDefaultSettings, OpenFile, OpenSettings, PreviousTab,
-    Refresh, ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme,
-    SplitSelectionIntoLines, ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineComment,
-    ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace,
-    ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    QuickOpen, Refresh, ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine,
+    SetTheme, SplitSelectionIntoLines, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
+    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
+    ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 
 use super::TinytextApp;
@@ -44,6 +44,7 @@ fn palette_groups() -> Vec<CommandGroup> {
         CommandGroup::new().label("File").items([
             item("New File", Box::new(NewFile)),
             item("Open…", Box::new(OpenFile)),
+            item("Quick Open…", Box::new(QuickOpen)),
             item("Add Folder…", Box::new(AddFolder)),
             item("Close All Folders", Box::new(CloseAllFolders)),
             item("Save", Box::new(SaveFile)),
@@ -130,6 +131,11 @@ impl TinytextApp {
     }
 
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Keep the quick-open finder and the palette from stacking.
+        if self.quick_open.is_some() {
+            self.close_quick_open(window, cx);
+        }
+
         let state = cx.new(|cx| CommandState::new(window, cx));
         // Remember what held focus so it can be restored once the palette closes.
         self.palette_return_focus = window.focused(cx);
@@ -142,7 +148,7 @@ impl TinytextApp {
         });
     }
 
-    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(state) = self.palette.take() else {
             return;
         };
@@ -181,8 +187,18 @@ impl TinytextApp {
             .on_confirm(move |_, window, cx| {
                 confirm.update(cx, |this, cx| this.close_palette(window, cx));
             })
-            .on_cancel(move |window, cx| {
-                cancel.update(cx, |this, cx| this.close_palette(window, cx));
+            .on_cancel({
+                let cancel = cancel.clone();
+                move |window, cx| {
+                    // The callback runs while the palette's Cancel dispatch is
+                    // still in progress, so closing here would read the palette
+                    // state while it is being updated. Hand the dismissal to
+                    // the next frame instead.
+                    let cancel = cancel.clone();
+                    window.defer(cx, move |window, cx| {
+                        cancel.update(cx, |this, cx| this.close_palette(window, cx));
+                    });
+                }
             });
         for group in palette_groups() {
             command = command.group(group);
@@ -208,5 +224,51 @@ impl TinytextApp {
                     .child(command),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    use crate::app::test_support::open_app;
+
+    /// Escape closes the palette. Closing must survive running inside the
+    /// palette's own Cancel dispatch, which happens before the dispatch
+    /// unwinds, so the close is deferred a frame.
+    #[gpui_kit::test]
+    async fn escape_closes_the_palette(cx: &mut TestAppContext) {
+        let (handle, app) = open_app(cx);
+
+        cx.update_window(handle, |_, window, cx| {
+            let focus_handle = app.read(cx).focus_handle.clone();
+            window.focus(&focus_handle, cx);
+            window.render_frame(cx);
+
+            window.press("cmd-shift-p", cx);
+            window.render_frame(cx);
+            assert!(app.read(cx).palette.is_some(), "the palette should open");
+            // The app defers its focus request to the next frame, so mirror it
+            // explicitly here the way the kit's palette fixtures do.
+            if let Some(palette) = app.read(cx).palette.clone() {
+                palette.update(cx, |state, cx| state.focus(window, cx));
+            }
+            window.render_frame(cx);
+
+            window.press("escape", cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            assert!(app.read(cx).palette.is_none(), "Escape closes the palette");
+            assert_eq!(
+                window.focused(cx).as_ref(),
+                Some(&app.read(cx).focus_handle),
+                "focus returns to what held it before the palette opened"
+            );
+        })
+        .expect("the headless palette window must survive Escape");
     }
 }

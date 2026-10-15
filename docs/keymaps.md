@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | `⌘N` | `Cmd + N` | New File |
 | `⌘O` | `Cmd + O` | Open… |
+| `⌘P` | `Cmd + P` | Quick Open… |
 | `⌘⇧O` | `Cmd + Shift + O` | Open Folder… |
 | `⌥⌘W` | `Cmd + Option + W` | Close Folder |
 | `⌘S` | `Cmd + S` | Save |

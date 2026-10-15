@@ -2,6 +2,7 @@ mod editor;
 mod files;
 mod palette;
 mod preferences;
+mod quick_open;
 mod tabs;
 mod ui;
 
@@ -178,6 +179,13 @@ pub(crate) struct TinytextApp {
     palette: Option<Entity<CommandState>>,
     /// The focus that was active when the palette opened, restored on close.
     palette_return_focus: Option<FocusHandle>,
+    /// The quick-open finder's interaction state while the overlay is open.
+    quick_open: Option<Entity<CommandState>>,
+    /// The focus that was active when the finder opened, restored on close.
+    quick_open_return_focus: Option<FocusHandle>,
+    /// The quick-open file index: every file under the workspace roots, walked
+    /// on the last finder open. Cached until it is rebuilt on the next open.
+    open_paths: Vec<PathBuf>,
     sidebar_visible: bool,
     /// Sidebar width in pixels, persisted to the session and applied to the
     /// workspace layout on each render.
@@ -240,6 +248,9 @@ impl TinytextApp {
             busy: None,
             palette: None,
             palette_return_focus: None,
+            quick_open: None,
+            quick_open_return_focus: None,
+            open_paths: Vec::new(),
             sidebar_visible,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             panels_state: cx.new(|_| ResizableState::default()),
@@ -1178,6 +1189,10 @@ impl Render for TinytextApp {
             .palette
             .clone()
             .map(|state| self.render_palette(&state, cx));
+        let quick_open = self
+            .quick_open
+            .clone()
+            .map(|state| self.render_quick_open(&state, cx));
         let settings_overlay = self.settings_open.then(|| self.render_settings(cx));
         // Only worth hinting while an editor is open; other panes have no carets.
         let alt_held = window.modifiers().alt && self.active().is_some();
@@ -1243,10 +1258,16 @@ impl Render for TinytextApp {
             .on_action(cx.listener(Self::on_split_selection_into_lines))
             .on_action(cx.listener(Self::on_add_next_occurrence))
             .on_action(cx.listener(Self::on_command_palette))
+            .on_action(cx.listener(Self::on_quick_open))
+            .on_action(cx.listener(Self::on_open_path))
             .child(self.render_workspace(window, cx))
             .child(self.render_status_bar(alt_held, cx));
 
         let root = match palette {
+            Some(overlay) => root.child(overlay),
+            None => root,
+        };
+        let root = match quick_open {
             Some(overlay) => root.child(overlay),
             None => root,
         };
@@ -1255,5 +1276,34 @@ impl Render for TinytextApp {
             Some(overlay) => root.child(overlay).into_any_element(),
             None => root.into_any_element(),
         }
+    }
+}
+
+/// Fixtures for the overlay tests.
+///
+/// The tests render the real app in gpui-kit's headless window, so they need
+/// the same setup `main` performs: the kit initialized and the keymap bound.
+#[cfg(test)]
+pub(super) mod test_support {
+    use gpui_kit::{
+        AnyWindowHandle, AppContext as _, Entity, TestAppContext, WindowOptions, open_window,
+    };
+
+    use super::TinytextApp;
+    use crate::keymap;
+    use crate::settings::Settings;
+
+    /// A headless window running the app with no workspace folders open.
+    pub(super) fn open_app(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<TinytextApp>) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            keymap::bind_keys(cx);
+        });
+        cx.update(|cx| {
+            open_window(WindowOptions::default(), cx, |_window, cx| {
+                cx.new(|cx| TinytextApp::new(Vec::new(), Settings::default(), cx))
+            })
+            .unwrap()
+        })
     }
 }

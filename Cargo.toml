@@ -7,6 +7,13 @@ license = "MIT"
 homepage = "https://nilambar.net/"
 repository = "https://github.com/ernilambar/tinytext"
 
+# Declared so the package is its own workspace root and dependency features
+# unify across dependency kinds. That is what lets the overlay UI tests turn on
+# gpui-kit's `test-support` from a dev-dependency without shipping the harness
+# (and its proptest tree) inside the app.
+[workspace]
+resolver = "2"
+
 [dependencies]
 anyhow = "1.0.104"
 async-channel = "2"
@@ -25,6 +32,10 @@ gpui-kit = { version = "0.7.3", features = [
 ropey = "1.6"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+
+# The overlay UI tests render the real app in gpui-kit's headless window.
+[dev-dependencies]
+gpui-kit = { version = "0.7.3", features = ["test-support"] }
 
 # Produces the shareable macOS app bundle via `cargo bundle --release`
 # (or ./scripts/bundle.sh). Regenerate the icon with scripts/make-icon.py.

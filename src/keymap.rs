@@ -13,10 +13,10 @@ use crate::{
     AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CloseAllFolders, CloseTab,
     CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, GoToLine,
     Hide, HideOthers, InsertLineAbove, InsertLineBelow, JumpToTab, MoveLineDown, MoveLineUp,
-    NewFile, NextTab, OpenFile, OpenSettings, PreviousTab, Quit, Refresh, ReopenClosedTab,
-    RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine, SplitSelectionIntoLines,
-    ToggleLineComment, ToggleMarkdownPreview, ToggleSidebar, ToggleWhitespace, ToggleWordWrap,
-    ZoomIn, ZoomOut, ZoomReset,
+    NewFile, NextTab, OpenFile, OpenSettings, PreviousTab, QuickOpen, Quit, Refresh,
+    ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine,
+    SplitSelectionIntoLines, ToggleLineComment, ToggleMarkdownPreview, ToggleSidebar,
+    ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -34,6 +34,7 @@ fn app_bindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("cmd-n", NewFile, None),
         KeyBinding::new("cmd-o", OpenFile, None),
+        KeyBinding::new("cmd-p", QuickOpen, None),
         KeyBinding::new("cmd-shift-o", AddFolder, None),
         KeyBinding::new("alt-cmd-w", CloseAllFolders, None),
         KeyBinding::new("cmd-s", SaveFile, None),
@@ -138,7 +139,7 @@ mod tests {
     fn every_binding_parses() {
         // `KeyBinding::new` panics on an invalid keystroke, so building the
         // lists is itself the assertion that every chord is well-formed.
-        assert_eq!(app_bindings().len(), 36);
+        assert_eq!(app_bindings().len(), 37);
         assert_eq!(editor_bindings().len(), 17);
     }
 
@@ -150,6 +151,9 @@ mod tests {
 
         assert!(resolve(&keymap, "cmd-n", &[])[0].ends_with("NewFile"));
         assert!(resolve(&keymap, "cmd-r", &[])[0].ends_with("Refresh"));
+        // The finder opens from anywhere, including while an editor has focus.
+        assert!(resolve(&keymap, "cmd-p", &[])[0].ends_with("QuickOpen"));
+        assert!(resolve(&keymap, "cmd-p", &["Input"])[0].ends_with("QuickOpen"));
         // The palette opens from anywhere, including while an editor has focus.
         assert!(resolve(&keymap, "cmd-shift-p", &[])[0].ends_with("CommandPalette"));
         assert!(resolve(&keymap, "cmd-shift-p", &["Input"])[0].ends_with("CommandPalette"));

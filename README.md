@@ -12,6 +12,7 @@ A fast, lightweight text editor for macOS.
 - Syntax highlighting
 - File explorer sidebar for browsing a project folder
 - Command palette (`Cmd+Shift+P`) to search and run any command
+- Quick Open (`Cmd+P`) to fuzzy-find a file across the workspace folders
 - Markdown preview (`Cmd+Shift+V`)
 - Reopens your tabs and folder where you left off
 - Warns before closing a file with unsaved changes
