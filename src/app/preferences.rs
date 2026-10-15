@@ -146,6 +146,51 @@ fn window_number_input(
     })
 }
 
+/// The user's preferences together with the Settings overlay's own state.
+///
+/// `values` is `pub(super)` because it is the parsed `settings.json` value
+/// object: five files read it, and there is no invariant a wrapper could
+/// protect. `open` and `error` are private because they have to agree — opening
+/// the overlay discards an error left over from a previous write.
+pub(super) struct SettingsState {
+    pub(super) values: crate::settings::Settings,
+    open: bool,
+    error: Option<SharedString>,
+}
+
+impl SettingsState {
+    pub(super) fn new(values: crate::settings::Settings) -> Self {
+        Self {
+            values,
+            open: false,
+            error: None,
+        }
+    }
+
+    pub(super) fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub(super) fn set_open(&mut self, open: bool) {
+        self.open = open;
+    }
+
+    /// Shows or hides the overlay, dropping any error from a previous write so a
+    /// stale message cannot reappear when it is reopened.
+    pub(super) fn toggle_open(&mut self) {
+        self.open = !self.open;
+        self.error = None;
+    }
+
+    pub(super) fn error(&self) -> Option<&SharedString> {
+        self.error.as_ref()
+    }
+
+    pub(super) fn set_error(&mut self, error: Option<SharedString>) {
+        self.error = error;
+    }
+}
+
 impl TinytextApp {
     /// Builds the full-window settings overlay.
     pub(super) fn render_settings(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -153,8 +198,8 @@ impl TinytextApp {
         let mono_family = cx.theme().mono_font_family.to_string();
         let mono_size = cx.theme().mono_font_size.as_f32();
 
-        let editor = &self.settings.editor;
-        let ui = &self.settings.ui;
+        let editor = &self.settings.values.editor;
+        let ui = &self.settings.values.ui;
         let font_family = editor
             .font_family
             .clone()
@@ -636,7 +681,7 @@ impl TinytextApp {
             .ghost()
             .label("Open settings.json")
             .on_click(cx.listener(|this, _, window, cx| {
-                this.settings_open = false;
+                this.settings.set_open(false);
                 this.open_settings_file(window, cx);
                 cx.notify();
             }));
@@ -644,7 +689,7 @@ impl TinytextApp {
             .small()
             .label("Done")
             .on_click(cx.listener(|this, _, _window, cx| {
-                this.settings_open = false;
+                this.settings.set_open(false);
                 cx.notify();
             }));
 
@@ -667,7 +712,7 @@ impl TinytextApp {
                     .child(done),
             );
 
-        let banner = self.settings_error.clone().map(|message| {
+        let banner = self.settings.error().cloned().map(|message| {
             div()
                 .flex_none()
                 .px_4()
@@ -699,74 +744,74 @@ impl TinytextApp {
     /// Records the outcome of a settings write that had no window to report
     /// through, keeping the message for the overlay's inline banner.
     fn record_write(&mut self, result: Result<String, String>, cx: &mut Context<Self>) {
-        self.settings_error = match result {
+        self.settings.set_error(match result {
             Ok(_) => None,
             Err(message) => Some(format!("Could not save settings: {message}").into()),
-        };
+        });
         cx.notify();
     }
 
     fn set_editor_font_family(&mut self, family: String, cx: &mut Context<Self>) {
-        self.settings.editor.font_family = Some(family.clone());
+        self.settings.values.editor.font_family = Some(family.clone());
         self.record_write(save_font_family(&family), cx);
     }
 
     fn set_editor_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
-        self.settings.editor.font_size = Some(size);
+        self.settings.values.editor.font_size = Some(size);
         self.record_write(save_font_size(Some(size)), cx);
     }
 
     fn set_editor_font_weight(&mut self, weight: f32, cx: &mut Context<Self>) {
-        self.settings.editor.font_weight = Some(weight);
+        self.settings.values.editor.font_weight = Some(weight);
         crate::markdown::apply_emphasis(cx, weight);
         self.record_write(save_font_weight(weight), cx);
     }
 
     fn set_editor_tab_size(&mut self, size: usize, cx: &mut Context<Self>) {
-        self.settings.editor.tab_size = Some(size);
+        self.settings.values.editor.tab_size = Some(size);
         self.apply_tab_options(cx);
         self.record_write(save_tab_size(size), cx);
     }
 
     fn set_editor_hard_tabs(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.settings.editor.hard_tabs = Some(enabled);
+        self.settings.values.editor.hard_tabs = Some(enabled);
         self.apply_tab_options(cx);
         self.record_write(save_hard_tabs(enabled), cx);
     }
 
     fn set_ui_theme(&mut self, theme: String, cx: &mut Context<Self>) {
-        self.settings.ui.theme = Some(theme.clone());
+        self.settings.values.ui.theme = Some(theme.clone());
         self.apply_theme_choice(&theme, None, cx);
         self.record_write(save_theme(&theme), cx);
     }
 
     fn set_ui_color_scheme_light(&mut self, name: String, cx: &mut Context<Self>) {
-        self.settings.ui.color_scheme_light = Some(name.clone());
+        self.settings.values.ui.color_scheme_light = Some(name.clone());
         self.reapply_theme_choice(cx);
         self.record_write(save_color_scheme_light(&name), cx);
     }
 
     fn set_ui_color_scheme_dark(&mut self, name: String, cx: &mut Context<Self>) {
-        self.settings.ui.color_scheme_dark = Some(name.clone());
+        self.settings.values.ui.color_scheme_dark = Some(name.clone());
         self.reapply_theme_choice(cx);
         self.record_write(save_color_scheme_dark(&name), cx);
     }
 
     fn set_ui_font_family(&mut self, family: String, cx: &mut Context<Self>) {
-        self.settings.ui.font_family = Some(family.clone());
+        self.settings.values.ui.font_family = Some(family.clone());
         self.reapply_theme_choice(cx);
         self.record_write(save_ui_font_family(Some(&family)), cx);
     }
 
     fn set_ui_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
-        self.settings.ui.font_size = Some(size);
+        self.settings.values.ui.font_size = Some(size);
         self.reapply_theme_choice(cx);
         self.record_write(save_ui_font_size(Some(size)), cx);
     }
 
     /// Clears the interface font override so the system UI font applies again.
     fn reset_ui_font_family(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.ui.font_family = None;
+        self.settings.values.ui.font_family = None;
         self.reapply_theme_choice(cx);
         self.after_setting_write(save_ui_font_family(None), window, cx);
         cx.notify();
@@ -774,7 +819,7 @@ impl TinytextApp {
 
     /// Clears the interface size override so the theme's base size applies again.
     fn reset_ui_font_size(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.ui.font_size = None;
+        self.settings.values.ui.font_size = None;
         self.reapply_theme_choice(cx);
         self.after_setting_write(save_ui_font_size(None), window, cx);
         cx.notify();
@@ -783,32 +828,32 @@ impl TinytextApp {
     /// Re-applies the theme after a settings change while keeping the
     /// Appearance menu's check mark on the current mode.
     fn reapply_theme_choice(&self, cx: &mut Context<Self>) {
-        let choice = self.settings.ui.theme().to_string();
+        let choice = self.settings.values.ui.theme().to_string();
         self.apply_theme_choice(&choice, None, cx);
     }
 
     fn set_ui_tab_icons(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.settings.ui.tab_icons = Some(enabled);
+        self.settings.values.ui.tab_icons = Some(enabled);
         self.record_write(save_tab_icons(enabled), cx);
     }
 
     fn set_ui_icon_color(&mut self, style: String, cx: &mut Context<Self>) {
-        self.settings.ui.icon_color = Some(style.clone());
+        self.settings.values.ui.icon_color = Some(style.clone());
         self.record_write(save_icon_color(&style), cx);
     }
 
     fn set_ui_sidebar_position(&mut self, position: String, cx: &mut Context<Self>) {
-        self.settings.ui.sidebar_position = Some(position.clone());
+        self.settings.values.ui.sidebar_position = Some(position.clone());
         // Panel sizes are tracked per slot index, so a flip would otherwise
         // leave the sidebar with whatever the editor's old slot held. Clearing
         // re-seeds both panels, with the sidebar's width preference.
-        self.panels_state.update(cx, |state, _| state.clear());
+        self.workspace.panels().update(cx, |state, _| state.clear());
         cx.notify();
         self.record_write(save_sidebar_position(&position), cx);
     }
 
     fn set_editor_soft_wrap(&mut self, wrap: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.editor.soft_wrap = Some(wrap);
+        self.settings.values.editor.soft_wrap = Some(wrap);
         self.apply_editor_options_to_all(window, cx);
         self.after_setting_write(save_soft_wrap(wrap), window, cx);
         cx.notify();
@@ -820,7 +865,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings.editor.show_whitespace = Some(show);
+        self.settings.values.editor.show_whitespace = Some(show);
         self.apply_editor_options_to_all(window, cx);
         self.after_setting_write(save_show_whitespace(show), window, cx);
         cx.notify();
@@ -832,7 +877,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings.editor.cursor_surrounding_lines = Some(lines);
+        self.settings.values.editor.cursor_surrounding_lines = Some(lines);
         self.apply_editor_options_to_all(window, cx);
         self.after_setting_write(save_cursor_surrounding_lines(Some(lines)), window, cx);
         cx.notify();
@@ -842,7 +887,7 @@ impl TinytextApp {
     /// short viewport, three otherwise. No typed value reproduces that, which is
     /// why this setting resets to unset rather than to a number.
     fn reset_cursor_surrounding_lines(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.editor.cursor_surrounding_lines = None;
+        self.settings.values.editor.cursor_surrounding_lines = None;
         self.apply_editor_options_to_all(window, cx);
         self.after_setting_write(save_cursor_surrounding_lines(None), window, cx);
         cx.notify();
@@ -852,8 +897,8 @@ impl TinytextApp {
     /// whitespace, this needs no window.
     fn apply_tab_options(&mut self, cx: &mut Context<Self>) {
         let tab = TabSize {
-            tab_size: self.settings.editor.tab_size(),
-            hard_tabs: self.settings.editor.hard_tabs(),
+            tab_size: self.settings.values.editor.tab_size(),
+            hard_tabs: self.settings.values.editor.hard_tabs(),
         };
         let editors: Vec<_> = self.tabs.iter().map(|tab| tab.editor.clone()).collect();
         for editor in editors {
@@ -868,6 +913,26 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use crate::app::test_support::open_app;
+    use crate::settings::Settings;
+
+    use super::SettingsState;
+
+    /// Opening the overlay drops any error left over from an earlier write, so a
+    /// stale banner cannot reappear when it is reopened.
+    #[test]
+    fn toggle_open_clears_a_stale_error() {
+        let mut state = SettingsState::new(Settings::default());
+        assert!(!state.is_open());
+        assert_eq!(state.error(), None);
+
+        state.set_error(Some("Could not save settings".into()));
+        state.toggle_open();
+        assert!(state.is_open());
+        assert_eq!(state.error(), None, "opening discards the stale error");
+
+        state.toggle_open();
+        assert!(!state.is_open());
+    }
 
     /// The overlay builds every field it offers, including the custom number
     /// input for the cursor scroll margin, and renders again with that field's
@@ -880,12 +945,12 @@ mod tests {
             let focus_handle = app.read(cx).focus_handle.clone();
             window.focus(&focus_handle, cx);
             app.update(cx, |app, cx| {
-                app.settings_open = true;
+                app.settings.set_open(true);
                 cx.notify();
             });
             window.render_frame(cx);
             window.render_frame(cx);
-            assert!(app.read(cx).settings_open, "the overlay stays open");
+            assert!(app.read(cx).settings.is_open(), "the overlay stays open");
         })
         .unwrap();
         cx.run_until_parked();

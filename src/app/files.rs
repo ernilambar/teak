@@ -10,13 +10,11 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::language::{editor_language_id, language_for};
-use crate::paths::{
-    RootConflict, copy_entry, duplicate_name, file_name, is_valid_entry_name, remap_prefix,
-    root_conflict,
-};
+use crate::paths::{copy_entry, duplicate_name, file_name, is_valid_entry_name, remap_prefix};
 use crate::{AddFolder, CloseAllFolders, NewFile, OpenFile, SaveAll, SaveFile, SaveFileAs};
 
-use super::{FileClipboard, TinytextApp};
+use super::TinytextApp;
+use super::workspace::{AddRoot, FileClipboard};
 
 /// A file read for a new tab: text for the editor, or a raster image to view.
 pub(super) enum FileContent {
@@ -180,9 +178,9 @@ impl TinytextApp {
     /// Adds a folder to the sidebar. Exact duplicates are ignored silently;
     /// folders that overlap an open root are rejected with a message.
     pub(super) fn add_root(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        match root_conflict(&self.workspace_roots, &path) {
-            Some(RootConflict::Duplicate) => return,
-            Some(RootConflict::Overlap) => {
+        match self.workspace.add_root(path.clone()) {
+            AddRoot::Duplicate => return,
+            AddRoot::Overlap => {
                 window.push_notification(
                     Notification::error(format!(
                         "Cannot add \"{}\": it overlaps an open folder",
@@ -192,13 +190,9 @@ impl TinytextApp {
                 );
                 return;
             }
-            None => {}
+            AddRoot::Added => {}
         }
 
-        self.workspace_roots.push(path.clone());
-        self.expanded.insert(path);
-        self.sidebar_visible = true;
-        self.reload_tree();
         self.save_session();
         cx.notify();
     }
@@ -215,17 +209,7 @@ impl TinytextApp {
     /// Removes one workspace root and its subtree expansion state. Open tabs
     /// stay open, and the sidebar stays visible.
     pub(super) fn remove_root(&mut self, path: &Path, cx: &mut Context<Self>) {
-        self.workspace_roots.retain(|root| root != path);
-        self.expanded
-            .retain(|entry| entry.as_path() != path && !entry.starts_with(path));
-        if self
-            .selected_path
-            .as_deref()
-            .is_some_and(|selected| selected == path || selected.starts_with(path))
-        {
-            self.selected_path = None;
-        }
-        self.reload_tree();
+        self.workspace.remove_root(path);
         self.save_session();
         cx.notify();
     }
@@ -233,10 +217,7 @@ impl TinytextApp {
     /// Removes every workspace root. Open tabs stay open and the sidebar stays
     /// visible, showing its empty state.
     pub(super) fn close_all_roots(&mut self, cx: &mut Context<Self>) {
-        self.workspace_roots.clear();
-        self.expanded.clear();
-        self.selected_path = None;
-        self.reload_tree();
+        self.workspace.close_all();
         self.save_session();
         cx.notify();
     }
@@ -247,7 +228,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(ix) = self.active_tab else {
+        let Some(ix) = self.tabs.active_index() else {
             return;
         };
         let Some(tab) = self.tabs.get(ix) else {
@@ -261,7 +242,8 @@ impl TinytextApp {
         }
 
         let directory = self
-            .workspace_roots
+            .workspace
+            .roots()
             .first()
             .cloned()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -284,7 +266,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(ix) = self.active_tab else {
+        let Some(ix) = self.tabs.active_index() else {
             return;
         };
         let Some(tab) = self.tabs.get(ix) else {
@@ -304,7 +286,7 @@ impl TinytextApp {
             .as_deref()
             .and_then(Path::parent)
             .map(Path::to_path_buf)
-            .or_else(|| self.workspace_roots.first().cloned())
+            .or_else(|| self.workspace.roots().first().cloned())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
         let receiver = cx.prompt_for_new_path(&directory, Some(suggested.as_str()));
@@ -344,7 +326,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.iter().find(|tab| tab.editor.entity_id() == id) else {
+        let Some(tab) = self.tabs.find(id) else {
             return;
         };
         // A raster tab's editor is empty; writing it would wipe the image.
@@ -509,11 +491,11 @@ impl TinytextApp {
                     return;
                 }
 
-                this.expanded.insert(parent.clone());
+                this.workspace.expand(parent.clone());
                 if is_dir {
-                    this.expanded.insert(path.clone());
+                    this.workspace.expand(path.clone());
                 }
-                this.selected_path = Some(path.clone());
+                this.workspace.set_selected(Some(path.clone()));
                 this.reload_tree();
                 this.save_session();
                 if is_dir {
@@ -645,10 +627,10 @@ impl TinytextApp {
                 match copy_entry(&path, &destination) {
                     Ok(()) => {
                         if let Some(parent) = destination.parent() {
-                            this.expanded.insert(parent.to_path_buf());
+                            this.workspace.expand(parent.to_path_buf());
                         }
                         let name = file_name(&destination);
-                        this.selected_path = Some(destination);
+                        this.workspace.set_selected(Some(destination));
                         this.reload_tree();
                         this.save_session();
                         cx.notify();
@@ -737,7 +719,7 @@ impl TinytextApp {
                 match std::fs::rename(&path, &destination) {
                     Ok(()) => {
                         if let Some(parent) = destination.parent() {
-                            this.expanded.insert(parent.to_path_buf());
+                            this.workspace.expand(parent.to_path_buf());
                         }
                         let name = file_name(&destination);
                         this.after_rename(&path, &destination, cx);
@@ -759,7 +741,7 @@ impl TinytextApp {
     /// Moves every open tab, expansion entry, and workspace root from the
     /// old path prefix to the new one after a rename or move.
     fn after_rename(&mut self, old: &Path, new: &Path, cx: &mut Context<Self>) {
-        for tab in &mut self.tabs {
+        for tab in self.tabs.iter_mut() {
             let Some(current) = tab.path.clone() else {
                 continue;
             };
@@ -777,10 +759,7 @@ impl TinytextApp {
             tab.path = Some(mapped);
         }
 
-        let remap = |path: &PathBuf| remap_prefix(path, old, new).unwrap_or_else(|| path.clone());
-        self.expanded = self.expanded.iter().map(remap).collect();
-        self.selected_path = self.selected_path.as_ref().map(remap);
-        self.workspace_roots = self.workspace_roots.iter().map(remap).collect();
+        self.workspace.remap(old, new);
 
         self.reload_tree();
         self.save_session();
@@ -838,15 +817,7 @@ impl TinytextApp {
         match result {
             Ok(()) => {
                 let name = file_name(path);
-                self.expanded
-                    .retain(|entry| entry.as_path() != path && !entry.starts_with(path));
-                if self
-                    .selected_path
-                    .as_deref()
-                    .is_some_and(|selected| selected == path || selected.starts_with(path))
-                {
-                    self.selected_path = None;
-                }
+                self.workspace.forget(path);
                 self.reload_tree();
                 self.save_session();
                 cx.notify();
@@ -860,7 +831,8 @@ impl TinytextApp {
     }
 
     pub(super) fn set_file_clipboard(&mut self, path: PathBuf, cut: bool, cx: &mut Context<Self>) {
-        self.file_clipboard = Some(FileClipboard { path, cut });
+        self.workspace
+            .set_clipboard(Some(FileClipboard { path, cut }));
         cx.notify();
     }
 
@@ -870,7 +842,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(clipboard) = self.file_clipboard.clone() else {
+        let Some(clipboard) = self.workspace.clipboard().cloned() else {
             return;
         };
         let source = clipboard.path.clone();
@@ -904,12 +876,12 @@ impl TinytextApp {
             Ok(()) => {
                 let name = file_name(&destination);
                 if clipboard.cut {
-                    self.file_clipboard = None;
+                    self.workspace.set_clipboard(None);
                     self.after_rename(&source, &destination, cx);
                     window.push_notification(Notification::success(format!("Moved {name}")), cx);
                 } else {
-                    self.expanded.insert(target_dir);
-                    self.selected_path = Some(destination.clone());
+                    self.workspace.expand(target_dir);
+                    self.workspace.set_selected(Some(destination.clone()));
                     self.reload_tree();
                     self.save_session();
                     cx.notify();

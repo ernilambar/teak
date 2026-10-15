@@ -50,12 +50,31 @@ in headless environments.
   `.h_flex()` / `.v_flex()`, and `use gpui_kit::component::ActiveTheme as _;` for
   `cx.theme()`.
 - Never edit `Cargo.lock` by hand; regenerate it with a `cargo` command.
-- Module layout: `main.rs` (entry, actions, keybindings), `app/` (`TinytextApp` state;
-  `files.rs`, `tabs.rs`, `ui.rs` hold further `impl TinytextApp` blocks), and GPUI-free
-  helpers in `cli.rs`, `language.rs`, `paths.rs`, `session.rs`, `settings.rs`,
-  `update.rs`. Code under `app/` reads private fields directly; cross-file methods use
-  `pub(super)`. Add a new module only once a feature is large enough to justify the
-  boundary.
+- Module layout: `main.rs` (entry, actions, keybindings) and `app/`, which is one
+  coordinator type plus five state groups. `TinytextApp` holds `focus_handle` and one
+  field per group — `Workspace` (`app/workspace.rs`), `TabSet` (`app/tabs.rs`),
+  `Overlays` (`app/overlays.rs`), `Chrome` (`app/chrome.rs`), `SettingsState`
+  (`app/preferences.rs`) — and keeps every method that takes a `cx`/`Window`, since a
+  plain field has no `Context`. A group's fields are private to its own module: callers
+  go through methods, and each group needs a `new()` because `mod.rs` cannot initialize
+  private fields. Leaf records (`OpenTab`, `TreeRow`, `Settings`) keep `pub(super)`
+  fields so rendering can read them directly. `app/files.rs`, `editor.rs`, `palette.rs`,
+  `quick_open.rs` and `ui.rs` hold further `impl TinytextApp` orchestration blocks;
+  GPUI-free helpers live in `cli.rs`, `language.rs`, `paths.rs`, `session.rs`,
+  `settings.rs`, `update.rs`. Add a new module only once a feature is large enough to
+  justify the boundary.
+- Every user-invokable command is declared once in `commands.rs`: label, action,
+  chords, menu placement, palette placement and search keywords. The menu bar, the
+  command palette and the keymap are all derived from that table, so a new command
+  means one row there plus its type in `actions!` and its handler — not three
+  separate lists that can drift. Two things stay hand-written: each menu's `Entry`
+  skeleton, because the menu bar also shows gpui-kit's own actions and two
+  hand-written surfaces (a command's cluster number picks its slot there), and the
+  handler registration, because GPUI dispatches by concrete type.
+  The table holds `Box<dyn Action>`, which does not satisfy `KeyBinding::new`'s or
+  `MenuItem::action`'s `impl Action` bound, so `commands.rs` builds those through
+  `KeyBinding::load` and the `MenuItem::Action` variant directly — both public, but
+  lower-level than the ergonomic constructors.
 - `session.json` (app-written state) and `settings.json` (user-authored preferences) both
   live in `paths::support_dir()`. The app writes `settings.json` only to create a starter
   file or to record a choice made from the Settings overlay or a view toggle. Each write is

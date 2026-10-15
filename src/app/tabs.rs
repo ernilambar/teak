@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use gpui_kit::component::{
     WindowExt as _,
     button::ButtonVariant,
     input::{EditorState, InputEvent, TabSize},
+    text::TextViewState,
 };
 use gpui_kit::*;
 
@@ -11,8 +13,221 @@ use crate::CloseTab;
 use crate::language::{editor_language_id, language_for};
 use crate::paths::file_name;
 
+use super::TinytextApp;
 use super::files::FileContent;
-use super::{ClosedTab, MAX_CLOSED_TABS, OpenTab, Preview, TinytextApp};
+
+/// How many recently closed tabs to remember for `ReopenClosedTab`.
+const MAX_CLOSED_TABS: usize = 10;
+
+pub(super) struct OpenTab {
+    pub(super) path: Option<PathBuf>,
+    pub(super) title: SharedString,
+    pub(super) language: SharedString,
+    /// True when the language was picked in the status bar, so saving or
+    /// renaming must not re-derive it from the file extension.
+    pub(super) language_override: bool,
+    pub(super) dirty: bool,
+    pub(super) editor: Entity<EditorState>,
+    /// The rendered view shown in place of the editor while preview is on.
+    /// Kept in sync with the buffer by the change subscription.
+    pub(super) preview: Option<Preview>,
+    /// A binary image opened view-only: it always shows its preview, its
+    /// editor stays empty, and it is never saved.
+    pub(super) raster: bool,
+    pub(super) _subscriptions: Vec<Subscription>,
+}
+
+pub(super) enum Preview {
+    Markdown(Entity<TextViewState>),
+    /// An SVG rendered from the buffer, or a raster image read from disk.
+    Image(Arc<Image>),
+}
+
+impl Preview {
+    /// Builds the preview for `text` in `language`, if that language has one.
+    pub(super) fn for_text(language: &str, text: &str, cx: &mut App) -> Option<Self> {
+        match language {
+            "Markdown" => Some(Self::Markdown(
+                cx.new(|cx| TextViewState::markdown(text, cx)),
+            )),
+            "SVG" => Some(Self::Image(Arc::new(Image::from_bytes(
+                ImageFormat::Svg,
+                text.as_bytes().to_vec(),
+            )))),
+            _ => None,
+        }
+    }
+
+    /// Drops a decoded image from GPUI's asset cache, which otherwise keeps
+    /// every rendered SVG revision for the life of the app.
+    pub(super) fn release(self, cx: &mut App) {
+        if let Self::Image(image) = self {
+            ImageSource::Image(image).remove_asset(cx);
+        }
+    }
+}
+
+impl OpenTab {
+    /// The preview to show instead of the editor. A tab whose language was
+    /// switched away from the previewed one falls back to the editor.
+    pub(super) fn previewing(&self) -> Option<&Preview> {
+        self.preview.as_ref().filter(|preview| match preview {
+            Preview::Markdown(_) => self.language.as_ref() == "Markdown",
+            Preview::Image(_) => self.raster || self.language.as_ref() == "SVG",
+        })
+    }
+}
+
+/// A tab captured on close so `ReopenClosedTab` can bring it back. Untitled
+/// tabs restore their content; file tabs are re-read from disk on reopen.
+pub(super) struct ClosedTab {
+    pub(super) path: Option<PathBuf>,
+    pub(super) content: String,
+}
+
+/// The open tabs, plus the indexes that track which one is focused and which the
+/// context menu targets.
+///
+/// `active` and `context` are indexes into `tabs`, so every insert, removal and
+/// reorder has to fix them up together — that is why the list is private and
+/// callers go through methods. `OpenTab` itself is a leaf record with no
+/// invariant and keeps `pub(super)` fields, so rendering can read it directly.
+pub(super) struct TabSet {
+    tabs: Vec<OpenTab>,
+    active: Option<usize>,
+    context: Option<usize>,
+    scroll: ScrollHandle,
+    closed: Vec<ClosedTab>,
+}
+
+impl TabSet {
+    pub(super) fn new() -> Self {
+        Self {
+            tabs: Vec::new(),
+            active: None,
+            context: None,
+            scroll: ScrollHandle::new(),
+            closed: Vec::new(),
+        }
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.tabs.len()
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.tabs.is_empty()
+    }
+
+    pub(super) fn get(&self, ix: usize) -> Option<&OpenTab> {
+        self.tabs.get(ix)
+    }
+
+    pub(super) fn get_mut(&mut self, ix: usize) -> Option<&mut OpenTab> {
+        self.tabs.get_mut(ix)
+    }
+
+    pub(super) fn iter(&self) -> std::slice::Iter<'_, OpenTab> {
+        self.tabs.iter()
+    }
+
+    pub(super) fn iter_mut(&mut self) -> std::slice::IterMut<'_, OpenTab> {
+        self.tabs.iter_mut()
+    }
+
+    pub(super) fn active_index(&self) -> Option<usize> {
+        self.active
+    }
+
+    pub(super) fn active(&self) -> Option<&OpenTab> {
+        self.active.and_then(|ix| self.tabs.get(ix))
+    }
+
+    pub(super) fn set_active(&mut self, ix: Option<usize>) {
+        self.active = ix;
+    }
+
+    pub(super) fn context(&self) -> Option<usize> {
+        self.context
+    }
+
+    pub(super) fn set_context(&mut self, ix: Option<usize>) {
+        self.context = ix;
+    }
+
+    pub(super) fn scroll(&self) -> &ScrollHandle {
+        &self.scroll
+    }
+
+    /// True when any open tab has unsaved edits.
+    pub(super) fn any_dirty(&self) -> bool {
+        self.tabs.iter().any(|tab| tab.dirty)
+    }
+
+    pub(super) fn position_of(&self, id: EntityId) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.editor.entity_id() == id)
+    }
+
+    pub(super) fn find(&self, id: EntityId) -> Option<&OpenTab> {
+        self.tabs.iter().find(|tab| tab.editor.entity_id() == id)
+    }
+
+    /// Appends `tab`, returning its index. Activating it is the caller's call.
+    pub(super) fn push(&mut self, tab: OpenTab) -> usize {
+        self.tabs.push(tab);
+        self.tabs.len() - 1
+    }
+
+    /// Moves the tab at `from` to `gap`, reporting whether anything moved:
+    /// dropping into the tab's own slot, before or after itself, changes
+    /// nothing. `from` must be a valid index.
+    pub(super) fn reorder(&mut self, from: usize, gap: usize) -> bool {
+        let gap = gap.min(self.tabs.len());
+        if gap == from || gap == from + 1 {
+            return false;
+        }
+
+        let to = if gap > from { gap - 1 } else { gap };
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.active = self.active.map(|ix| remap_moved_index(ix, from, to));
+        self.context = self.context.map(|ix| remap_moved_index(ix, from, to));
+        true
+    }
+
+    /// Removes the tab at `ix` and re-points the active index at a neighbour,
+    /// handing back the preview so the caller can release it. `None` when `ix`
+    /// is out of range.
+    pub(super) fn drop_at(&mut self, ix: usize) -> Option<Preview> {
+        if ix >= self.tabs.len() {
+            return None;
+        }
+
+        let preview = self.tabs.remove(ix).preview;
+        self.active = if self.tabs.is_empty() {
+            None
+        } else {
+            let active = self.active.unwrap_or(0);
+            let active = if ix < active { active - 1 } else { active };
+            Some(active.min(self.tabs.len() - 1))
+        };
+        preview
+    }
+
+    /// Records `tab` for `ReopenClosedTab`, dropping the oldest past the cap.
+    pub(super) fn push_closed(&mut self, tab: ClosedTab) {
+        self.closed.push(tab);
+        if self.closed.len() > MAX_CLOSED_TABS {
+            self.closed.remove(0);
+        }
+    }
+
+    pub(super) fn pop_closed(&mut self) -> Option<ClosedTab> {
+        self.closed.pop()
+    }
+}
 
 impl TinytextApp {
     pub(super) fn add_tab(
@@ -62,20 +277,22 @@ impl TinytextApp {
             EditorState::new(window, cx)
                 .language(editor_language_id(&language))
                 .default_value(content)
-                .soft_wrap(self.settings.editor.soft_wrap())
-                .show_whitespaces(self.settings.editor.show_whitespace())
+                .soft_wrap(self.settings.values.editor.soft_wrap())
+                .show_whitespaces(self.settings.values.editor.show_whitespace())
                 .tab_size(TabSize {
-                    tab_size: self.settings.editor.tab_size(),
-                    hard_tabs: self.settings.editor.hard_tabs(),
+                    tab_size: self.settings.values.editor.tab_size(),
+                    hard_tabs: self.settings.values.editor.hard_tabs(),
                 })
-                .line_number(self.settings.editor.line_numbers())
-                .indent_guides(self.settings.editor.indent_guides())
-                .folding(self.settings.editor.folding())
-                .auto_close(self.settings.editor.auto_close())
-                .smart_indent(self.settings.editor.smart_indent())
-                .wrapping_indent(super::wrapping_indent(&self.settings.editor))
-                .scroll_beyond_last_line(super::scroll_beyond_last_line(&self.settings.editor))
-                .cursor_surrounding_lines(self.settings.editor.cursor_surrounding_lines)
+                .line_number(self.settings.values.editor.line_numbers())
+                .indent_guides(self.settings.values.editor.indent_guides())
+                .folding(self.settings.values.editor.folding())
+                .auto_close(self.settings.values.editor.auto_close())
+                .smart_indent(self.settings.values.editor.smart_indent())
+                .wrapping_indent(super::wrapping_indent(&self.settings.values.editor))
+                .scroll_beyond_last_line(super::scroll_beyond_last_line(
+                    &self.settings.values.editor,
+                ))
+                .cursor_surrounding_lines(self.settings.values.editor.cursor_surrounding_lines)
         });
 
         let change_subscription = cx.subscribe(&editor, |this, editor, event: &InputEvent, cx| {
@@ -88,7 +305,7 @@ impl TinytextApp {
             this.sync_cursor(editor.entity_id(), cx);
         });
 
-        self.tabs.push(OpenTab {
+        let ix = self.tabs.push(OpenTab {
             path,
             title,
             language,
@@ -99,13 +316,13 @@ impl TinytextApp {
             raster: false,
             _subscriptions: vec![change_subscription, cursor_subscription],
         });
-        self.active_tab = Some(self.tabs.len() - 1);
+        self.tabs.set_active(Some(ix));
         self.reveal_active_tab();
 
         editor.update(cx, |state, cx| state.focus(window, cx));
         let position = editor.read(cx).cursor_position();
-        self.cursor_line = position.line as usize + 1;
-        self.cursor_col = position.character as usize + 1;
+        self.chrome
+            .set_cursor(position.line as usize + 1, position.character as usize + 1);
         self.save_session();
         cx.notify();
     }
@@ -124,9 +341,10 @@ impl TinytextApp {
             FileContent::Image(image) => {
                 self.add_tab(Some(path), String::new(), window, cx);
                 let ix = self.tabs.len() - 1;
-                let tab = &mut self.tabs[ix];
-                tab.raster = true;
-                tab.preview = Some(Preview::Image(image));
+                if let Some(tab) = self.tabs.get_mut(ix) {
+                    tab.raster = true;
+                    tab.preview = Some(Preview::Image(image));
+                }
                 self.focus_tab(ix, window, cx);
             }
         }
@@ -138,7 +356,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(ix) = self.active_tab {
+        if let Some(ix) = self.tabs.active_index() {
             self.close_tab(ix, window, cx);
         }
     }
@@ -146,20 +364,20 @@ impl TinytextApp {
     /// Reveals the active tab in the horizontally scrolling tab strip. The
     /// strip only scrolls when tabs overflow; with few tabs this is a no-op.
     fn reveal_active_tab(&self) {
-        if let Some(ix) = self.active_tab {
-            self.tab_scroll.scroll_to_item(ix);
+        if let Some(ix) = self.tabs.active_index() {
+            self.tabs.scroll().scroll_to_item(ix);
         }
     }
 
     pub(super) fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.active_tab = Some(ix);
+        self.tabs.set_active(Some(ix));
         self.reveal_active_tab();
         if let Some(tab) = self.tabs.get(ix) {
             let editor = tab.editor.clone();
             self.focus_tab(ix, window, cx);
             let position = editor.read(cx).cursor_position();
-            self.cursor_line = position.line as usize + 1;
-            self.cursor_col = position.character as usize + 1;
+            self.chrome
+                .set_cursor(position.line as usize + 1, position.character as usize + 1);
         }
         // Switching tabs is a natural cue to pick up external filesystem
         // changes, since the tree cache is otherwise only refreshed on
@@ -179,29 +397,17 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(from) = self
-            .tabs
-            .iter()
-            .position(|tab| tab.editor.entity_id() == id)
-        else {
+        let Some(from) = self.tabs.position_of(id) else {
             return;
         };
-        let gap = gap.min(self.tabs.len());
         // Dropping into the tab's own slot, before or after itself, moves nothing.
-        if gap == from || gap == from + 1 {
+        if !self.tabs.reorder(from, gap) {
             cx.notify();
             return;
         }
-
-        let to = if gap > from { gap - 1 } else { gap };
-        let tab = self.tabs.remove(from);
-        self.tabs.insert(to, tab);
-
-        self.active_tab = self.active_tab.map(|ix| remap_moved_index(ix, from, to));
-        self.context_tab = self.context_tab.map(|ix| remap_moved_index(ix, from, to));
         self.reveal_active_tab();
 
-        if let Some(ix) = self.active_tab {
+        if let Some(ix) = self.tabs.active_index() {
             self.focus_tab(ix, window, cx);
         }
         self.save_session();
@@ -328,7 +534,7 @@ impl TinytextApp {
 
     /// True when any open tab has unsaved edits.
     pub(super) fn any_dirty(&self) -> bool {
-        self.tabs.iter().any(|tab| tab.dirty)
+        self.tabs.any_dirty()
     }
 
     /// Quits after confirming that unsaved edits are discarded.
@@ -345,7 +551,7 @@ impl TinytextApp {
                 .cancel_text("Keep Editing")
                 .on_ok(move |_, _window, cx| {
                     entity.update(cx, |this, cx| {
-                        this.allow_close = true;
+                        this.chrome.set_allow_close(true);
                         cx.quit();
                     });
                     true
@@ -361,7 +567,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.allow_close || !self.any_dirty() {
+        if self.chrome.allow_close() || !self.any_dirty() {
             return true;
         }
         self.confirm_close_window(window, cx);
@@ -381,7 +587,7 @@ impl TinytextApp {
                 .ok_variant(ButtonVariant::Danger)
                 .cancel_text("Keep Editing")
                 .on_ok(move |_, window, cx| {
-                    entity.update(cx, |this, _cx| this.allow_close = true);
+                    entity.update(cx, |this, _cx| this.chrome.set_allow_close(true));
                     window.remove_window();
                     true
                 })
@@ -389,38 +595,24 @@ impl TinytextApp {
     }
 
     pub(super) fn remove_tab(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self
-            .tabs
-            .iter()
-            .position(|tab| tab.editor.entity_id() == id)
-        else {
+        let Some(ix) = self.tabs.position_of(id) else {
             return;
         };
 
         if let Some(tab) = self.tabs.get(ix) {
-            self.closed_tabs.push(ClosedTab {
+            self.tabs.push_closed(ClosedTab {
                 path: tab.path.clone(),
                 content: tab.editor.read(cx).text().to_string(),
             });
-            if self.closed_tabs.len() > MAX_CLOSED_TABS {
-                self.closed_tabs.remove(0);
-            }
         }
 
-        if let Some(preview) = self.tabs.remove(ix).preview {
+        if let Some(preview) = self.tabs.drop_at(ix) {
             preview.release(cx);
         }
 
-        self.active_tab = if self.tabs.is_empty() {
-            None
-        } else {
-            let active = self.active_tab.unwrap_or(0);
-            let active = if ix < active { active - 1 } else { active };
-            Some(active.min(self.tabs.len() - 1))
-        };
         self.reveal_active_tab();
 
-        if let Some(ix) = self.active_tab {
+        if let Some(ix) = self.tabs.active_index() {
             self.focus_tab(ix, window, cx);
         } else {
             // The closed editor held focus; without it no window action (About,
@@ -483,7 +675,7 @@ impl TinytextApp {
     }
 
     pub(super) fn sync_cursor(&mut self, id: EntityId, cx: &mut Context<Self>) {
-        let Some(ix) = self.active_tab else {
+        let Some(ix) = self.tabs.active_index() else {
             return;
         };
         let position = {
@@ -496,8 +688,8 @@ impl TinytextApp {
             tab.editor.read(cx).cursor_position()
         };
 
-        self.cursor_line = position.line as usize + 1;
-        self.cursor_col = position.character as usize + 1;
+        self.chrome
+            .set_cursor(position.line as usize + 1, position.character as usize + 1);
         cx.notify();
     }
 }
@@ -515,7 +707,43 @@ fn remap_moved_index(index: usize, from: usize, to: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::remap_moved_index;
+    use std::path::PathBuf;
+
+    use gpui_kit::component::input::EditorState;
+    use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
+
+    use crate::app::test_support::open_app;
+
+    use super::{OpenTab, TabSet, remap_moved_index};
+
+    /// `n` tabs whose editors are real (empty) editor entities, so the entity
+    /// ids the index bookkeeping matches on are distinct.
+    fn tab_set(cx: &mut TestAppContext, handle: AnyWindowHandle, n: usize) -> TabSet {
+        let mut set = TabSet::new();
+        for ix in 0..n {
+            let editor = cx
+                .update_window(handle, |_, window, cx| {
+                    cx.new(|cx| EditorState::new(window, cx))
+                })
+                .unwrap();
+            set.push(OpenTab {
+                path: Some(PathBuf::from(format!("/tmp/tinytext-tab-{ix}.txt"))),
+                title: format!("tab-{ix}").into(),
+                language: "Plain Text".into(),
+                language_override: false,
+                dirty: false,
+                editor,
+                preview: None,
+                raster: false,
+                _subscriptions: Vec::new(),
+            });
+        }
+        set
+    }
+
+    fn titles(set: &TabSet) -> Vec<String> {
+        set.iter().map(|tab| tab.title.to_string()).collect()
+    }
 
     #[test]
     fn remaps_indices_when_moving_a_tab_to_the_front() {
@@ -536,5 +764,60 @@ mod tests {
         // [A, B, C, D] with B (1) moved to index 3.
         let moved = |ix| remap_moved_index(ix, 1, 3);
         assert_eq!([moved(0), moved(1), moved(2), moved(3)], [0, 3, 1, 2]);
+    }
+
+    #[gpui_kit::test]
+    async fn dropping_a_tab_before_the_active_one_shifts_the_active_index(cx: &mut TestAppContext) {
+        let (handle, _app) = open_app(cx);
+        let mut set = tab_set(cx, handle, 3);
+        set.set_active(Some(2));
+
+        assert!(set.drop_at(0).is_none(), "an editor tab has no preview");
+        assert_eq!(titles(&set), ["tab-1", "tab-2"]);
+        assert_eq!(set.active_index(), Some(1), "active follows its tab down");
+    }
+
+    #[gpui_kit::test]
+    async fn dropping_the_last_tab_clears_the_active_index(cx: &mut TestAppContext) {
+        let (handle, _app) = open_app(cx);
+        let mut set = tab_set(cx, handle, 1);
+        set.set_active(Some(0));
+
+        set.drop_at(0);
+
+        assert!(set.is_empty());
+        assert_eq!(set.active_index(), None);
+    }
+
+    #[gpui_kit::test]
+    async fn dropping_past_the_end_is_a_no_op(cx: &mut TestAppContext) {
+        let (handle, _app) = open_app(cx);
+        let mut set = tab_set(cx, handle, 2);
+
+        assert!(set.drop_at(2).is_none());
+        assert_eq!(set.len(), 2);
+    }
+
+    #[gpui_kit::test]
+    async fn reorder_ignores_a_drop_into_the_tabs_own_slot(cx: &mut TestAppContext) {
+        let (handle, _app) = open_app(cx);
+        let mut set = tab_set(cx, handle, 3);
+
+        assert!(!set.reorder(1, 1), "dropping before itself moves nothing");
+        assert!(!set.reorder(1, 2), "dropping after itself moves nothing");
+        assert_eq!(titles(&set), ["tab-0", "tab-1", "tab-2"]);
+    }
+
+    #[gpui_kit::test]
+    async fn reorder_carries_the_active_index_with_the_tab(cx: &mut TestAppContext) {
+        let (handle, _app) = open_app(cx);
+        let mut set = tab_set(cx, handle, 3);
+        set.set_active(Some(0));
+
+        // Move the first tab to the end.
+        assert!(set.reorder(0, 3));
+
+        assert_eq!(titles(&set), ["tab-1", "tab-2", "tab-0"]);
+        assert_eq!(set.active_index(), Some(2), "active follows its tab");
     }
 }

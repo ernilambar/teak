@@ -1,29 +1,34 @@
+mod chrome;
 mod editor;
 mod files;
+mod overlays;
 mod palette;
 mod preferences;
 mod quick_open;
 mod tabs;
 mod ui;
+mod workspace;
 
-use std::collections::{HashMap, HashSet};
+use self::chrome::Chrome;
+use self::overlays::Overlays;
+use self::preferences::SettingsState;
+use self::tabs::{OpenTab, Preview, TabSet};
+use self::workspace::Workspace;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _,
-    command::CommandState,
-    input::{EditorState, TabSize, WrappingIndent},
+    input::{TabSize, WrappingIndent},
     link::Link,
     notification::Notification,
     resizable::ResizableState,
-    text::TextViewState,
 };
 use gpui_kit::*;
 
 use crate::cli::{app_bundle_path, install_cli};
-use crate::paths::{DirEntry, read_dir};
 use crate::session::{SessionState, session_path};
 use crate::settings::{
     DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, UiSettings,
@@ -57,157 +62,18 @@ pub(super) fn scroll_beyond_last_line(editor: &EditorSettings) -> Option<usize> 
 /// The app name shown in the window title, before the focused tab's path.
 pub(crate) const WINDOW_TITLE: &str = "Tinytext";
 
-struct OpenTab {
-    path: Option<PathBuf>,
-    title: SharedString,
-    language: SharedString,
-    /// True when the language was picked in the status bar, so saving or
-    /// renaming must not re-derive it from the file extension.
-    language_override: bool,
-    dirty: bool,
-    editor: Entity<EditorState>,
-    /// The rendered view shown in place of the editor while preview is on.
-    /// Kept in sync with the buffer by the change subscription.
-    preview: Option<Preview>,
-    /// A binary image opened view-only: it always shows its preview, its
-    /// editor stays empty, and it is never saved.
-    raster: bool,
-    _subscriptions: Vec<Subscription>,
-}
-
-enum Preview {
-    Markdown(Entity<TextViewState>),
-    /// An SVG rendered from the buffer, or a raster image read from disk.
-    Image(Arc<Image>),
-}
-
-impl Preview {
-    /// Builds the preview for `text` in `language`, if that language has one.
-    fn for_text(language: &str, text: &str, cx: &mut App) -> Option<Self> {
-        match language {
-            "Markdown" => Some(Self::Markdown(
-                cx.new(|cx| TextViewState::markdown(text, cx)),
-            )),
-            "SVG" => Some(Self::Image(Arc::new(Image::from_bytes(
-                ImageFormat::Svg,
-                text.as_bytes().to_vec(),
-            )))),
-            _ => None,
-        }
-    }
-
-    /// Drops a decoded image from GPUI's asset cache, which otherwise keeps
-    /// every rendered SVG revision for the life of the app.
-    fn release(self, cx: &mut App) {
-        if let Self::Image(image) = self {
-            ImageSource::Image(image).remove_asset(cx);
-        }
-    }
-}
-
-impl OpenTab {
-    /// The preview to show instead of the editor. A tab whose language was
-    /// switched away from the previewed one falls back to the editor.
-    fn previewing(&self) -> Option<&Preview> {
-        self.preview.as_ref().filter(|preview| match preview {
-            Preview::Markdown(_) => self.language.as_ref() == "Markdown",
-            Preview::Image(_) => self.raster || self.language.as_ref() == "SVG",
-        })
-    }
-}
-
-/// A pending Cut/Copy of a single tree entry, applied on the next Paste.
-#[derive(Clone)]
-struct FileClipboard {
-    path: PathBuf,
-    cut: bool,
-}
-
-/// A tab captured on close so `ReopenClosedTab` can bring it back. Untitled
-/// tabs restore their content; file tabs are re-read from disk on reopen.
-/// Bounded by MAX_CLOSED_TABS so the stack cannot grow without limit.
-struct ClosedTab {
-    path: Option<PathBuf>,
-    content: String,
-}
-
-/// How many recently closed tabs to remember for `ReopenClosedTab`.
-const MAX_CLOSED_TABS: usize = 10;
-
-/// Sidebar width used when `sidebar_width` is absent from the session.
-const DEFAULT_SIDEBAR_WIDTH: u32 = 240;
-/// Floor and ceiling for dragging the sidebar, shared with the workspace
-/// layout's panel size range.
-const SIDEBAR_MIN_WIDTH: u32 = 160;
-const SIDEBAR_MAX_WIDTH: u32 = 480;
-
-/// One flattened, currently-visible row of the sidebar tree. A root row is a
-/// workspace folder itself; every other row is one of its entries.
-struct TreeRow {
-    path: PathBuf,
-    depth: usize,
-    is_dir: bool,
-    is_root: bool,
-}
-
 pub(crate) struct TinytextApp {
     pub(crate) focus_handle: FocusHandle,
-    /// The workspace folders shown in the sidebar, in the order they were added.
-    workspace_roots: Vec<PathBuf>,
-    expanded: HashSet<PathBuf>,
-    selected_path: Option<PathBuf>,
-    /// Directory listings for every root and expanded folder, so rendering
-    /// the tree never touches the disk. Invalidated on filesystem changes.
-    dir_cache: HashMap<PathBuf, Vec<DirEntry>>,
-    /// The flattened, visible rows derived from `dir_cache` + `expanded`,
-    /// rebuilt only when the tree changes.
-    visible_rows: Vec<TreeRow>,
-    /// Scroll position and extent of the virtualized sidebar list.
-    tree_scroll: UniformListScrollHandle,
-    tabs: Vec<OpenTab>,
-    active_tab: Option<usize>,
-    context_tab: Option<usize>,
-    /// Tracks the horizontal scroll of the tab strip so the active tab can be
-    /// revealed when it would otherwise be off-screen.
-    tab_scroll: ScrollHandle,
-    file_clipboard: Option<FileClipboard>,
-    closed_tabs: Vec<ClosedTab>,
-    /// Label for a background task in progress, shown with a spinner in the
-    /// status bar. `None` when idle.
-    busy: Option<SharedString>,
-    /// The command palette's interaction state while the overlay is open.
-    palette: Option<Entity<CommandState>>,
-    /// The focus that was active when the palette opened, restored on close.
-    palette_return_focus: Option<FocusHandle>,
-    /// The quick-open finder's interaction state while the overlay is open.
-    quick_open: Option<Entity<CommandState>>,
-    /// The focus that was active when the finder opened, restored on close.
-    quick_open_return_focus: Option<FocusHandle>,
-    /// The quick-open file index: every file under the workspace roots, walked
-    /// on the last finder open. Cached until it is rebuilt on the next open.
-    open_paths: Vec<PathBuf>,
-    sidebar_visible: bool,
-    /// Sidebar width in pixels, persisted to the session and applied to the
-    /// workspace layout on each render.
-    sidebar_width: u32,
-    /// Sizes for the resizable workspace panels. The sidebar's `.size()`
-    /// preference only takes hold while its slot is unset, so a position flip
-    /// clears this to re-seed it from [`TinytextApp::sidebar_width`].
-    panels_state: Entity<ResizableState>,
-    cursor_line: usize,
-    cursor_col: usize,
-    settings: Settings,
-    /// Whether the Settings overlay is showing.
-    settings_open: bool,
-    /// A settings write that could not be reported through a notification,
-    /// surfaced in the overlay instead.
-    settings_error: Option<SharedString>,
-    /// The window title currently applied, so it is only pushed to the platform
-    /// when the focused tab changes.
-    window_title: String,
-    /// Set once the user has confirmed discarding unsaved work in the quit or
-    /// window-close alert, so the follow-up close callback stops re-prompting.
-    allow_close: bool,
+    /// The open folders, the expanded set, and the rows rendered from them.
+    workspace: Workspace,
+    /// The open tabs and the indexes that track the focused one.
+    tabs: TabSet,
+    /// The palette, the finder and the finder's file index.
+    overlays: Overlays,
+    /// The window title, the close guard, and the status-bar readouts.
+    chrome: Chrome,
+    /// The user's preferences and the Settings overlay's own state.
+    settings: SettingsState,
 }
 
 impl TinytextApp {
@@ -218,51 +84,15 @@ impl TinytextApp {
     ) -> Self {
         // The sidebar starts open only when there is a folder to show. Toggling
         // it later is independent of the roots, and reveals the empty state.
-        let mut roots: Vec<PathBuf> = Vec::new();
-        for root in workspace_roots {
-            if root.is_dir() && !roots.contains(&root) {
-                roots.push(root);
-            }
-        }
-        let sidebar_visible = !roots.is_empty();
-
-        let mut expanded = HashSet::new();
-        for root in &roots {
-            expanded.insert(root.clone());
-        }
-
         let mut app = Self {
             focus_handle: cx.focus_handle(),
-            workspace_roots: roots,
-            expanded,
-            selected_path: None,
-            dir_cache: HashMap::new(),
-            visible_rows: Vec::new(),
-            tree_scroll: UniformListScrollHandle::default(),
-            tabs: Vec::new(),
-            active_tab: None,
-            context_tab: None,
-            tab_scroll: ScrollHandle::new(),
-            file_clipboard: None,
-            closed_tabs: Vec::new(),
-            busy: None,
-            palette: None,
-            palette_return_focus: None,
-            quick_open: None,
-            quick_open_return_focus: None,
-            open_paths: Vec::new(),
-            sidebar_visible,
-            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
-            panels_state: cx.new(|_| ResizableState::default()),
-            cursor_line: 1,
-            cursor_col: 1,
-            settings,
-            settings_open: false,
-            settings_error: None,
-            window_title: WINDOW_TITLE.to_string(),
-            allow_close: false,
+            workspace: Workspace::new(workspace_roots, cx.new(|_| ResizableState::default())),
+            tabs: TabSet::new(),
+            overlays: Overlays::new(),
+            chrome: Chrome::new(),
+            settings: SettingsState::new(settings),
         };
-        app.reload_tree();
+        app.workspace.reload();
         app
     }
 
@@ -277,9 +107,8 @@ impl TinytextApp {
             None => WINDOW_TITLE.to_string(),
         };
 
-        if title != self.window_title {
+        if self.chrome.title_changed(&title) {
             window.set_window_title(&title);
-            self.window_title = title;
         }
     }
 
@@ -289,32 +118,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.workspace_roots = session.roots.into_iter().filter(|path| path.is_dir()).fold(
-            Vec::new(),
-            |mut roots, root| {
-                if !roots.contains(&root) {
-                    roots.push(root);
-                }
-                roots
-            },
-        );
-
-        self.expanded = session
-            .expanded
-            .into_iter()
-            .filter(|path| path.is_dir())
-            .collect();
-        for root in &self.workspace_roots {
-            self.expanded.insert(root.clone());
-        }
-
-        self.selected_path = session.selected_path.filter(|path| path.exists());
-        self.sidebar_visible = session.sidebar_visible;
-        self.sidebar_width = session
-            .sidebar_width
-            .unwrap_or(self.sidebar_width)
-            .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
-        self.reload_tree();
+        self.workspace.restore(&session);
 
         let mut paths = session.tabs;
         paths.retain(|path| path.is_file());
@@ -360,11 +164,11 @@ impl TinytextApp {
             return;
         };
 
-        let mut expanded: Vec<PathBuf> = self.expanded.iter().cloned().collect();
+        let mut expanded: Vec<PathBuf> = self.workspace.expanded().iter().cloned().collect();
         expanded.sort();
 
         let state = SessionState {
-            roots: self.workspace_roots.clone(),
+            roots: self.workspace.roots().to_vec(),
             tabs: self
                 .tabs
                 .iter()
@@ -372,9 +176,9 @@ impl TinytextApp {
                 .collect(),
             active_tab: self.active().and_then(|tab| tab.path.clone()),
             expanded,
-            selected_path: self.selected_path.clone(),
-            sidebar_visible: self.sidebar_visible,
-            sidebar_width: Some(self.sidebar_width),
+            selected_path: self.workspace.selected().map(Path::to_path_buf),
+            sidebar_visible: self.workspace.sidebar_visible(),
+            sidebar_width: Some(self.workspace.width()),
         };
 
         let Ok(json) = serde_json::to_string_pretty(&state) else {
@@ -393,61 +197,15 @@ impl TinytextApp {
     }
 
     /// Clears the directory cache and re-reads every workspace tree from disk.
-    /// Call after any filesystem change or when the roots change.
+    /// Call after any filesystem change or when the roots change. Kept on the
+    /// app because `main` triggers it on window activation and cannot reach the
+    /// workspace internals.
     pub(crate) fn reload_tree(&mut self) {
-        self.dir_cache.clear();
-        self.rebuild_visible_rows();
-    }
-
-    /// Re-flattens the visible rows, reading and caching any expanded directory
-    /// that is not cached yet. Cheap to call on every expand/collapse.
-    fn rebuild_visible_rows(&mut self) {
-        let mut rows = std::mem::take(&mut self.visible_rows);
-        rows.clear();
-        let roots = self.workspace_roots.clone();
-        for root in &roots {
-            rows.push(TreeRow {
-                path: root.clone(),
-                depth: 0,
-                is_dir: true,
-                is_root: true,
-            });
-            if self.expanded.contains(root) {
-                self.cache_dir(root);
-                self.collect_rows(root, 1, &mut rows);
-            }
-        }
-        self.visible_rows = rows;
-    }
-
-    fn cache_dir(&mut self, dir: &Path) {
-        if !self.dir_cache.contains_key(dir) {
-            self.dir_cache.insert(dir.to_path_buf(), read_dir(dir));
-        }
-    }
-
-    /// Walks `dir`'s cached entries in display order, pushing a row per entry
-    /// and descending into expanded folders.
-    fn collect_rows(&mut self, dir: &Path, depth: usize, rows: &mut Vec<TreeRow>) {
-        let Some(entries) = self.dir_cache.get(dir).cloned() else {
-            return;
-        };
-        for entry in entries {
-            rows.push(TreeRow {
-                path: entry.path.clone(),
-                depth,
-                is_dir: entry.is_dir,
-                is_root: false,
-            });
-            if entry.is_dir && self.expanded.contains(&entry.path) {
-                self.cache_dir(&entry.path);
-                self.collect_rows(&entry.path, depth + 1, rows);
-            }
-        }
+        self.workspace.reload();
     }
 
     fn active(&self) -> Option<&OpenTab> {
-        self.active_tab.and_then(|ix| self.tabs.get(ix))
+        self.tabs.active()
     }
 
     fn active_language(&self) -> SharedString {
@@ -469,7 +227,7 @@ impl TinytextApp {
     }
 
     fn on_quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.any_dirty() || self.allow_close {
+        if !self.any_dirty() || self.chrome.allow_close() {
             cx.quit();
         } else {
             self.confirm_quit(window, cx);
@@ -486,7 +244,7 @@ impl TinytextApp {
     }
 
     fn on_refresh(&mut self, _: &Refresh, _window: &mut Window, cx: &mut Context<Self>) {
-        self.reload_tree();
+        self.workspace.reload();
         cx.notify();
     }
 
@@ -536,7 +294,7 @@ impl TinytextApp {
     }
 
     pub(super) fn copy_relative_path(&self, path: &Path, cx: &mut Context<Self>) {
-        let text = match crate::paths::nearest_root(&self.workspace_roots, path) {
+        let text = match crate::paths::nearest_root(self.workspace.roots(), path) {
             Some(root) => crate::paths::relative_display(path, root),
             None => path.display().to_string(),
         };
@@ -544,7 +302,7 @@ impl TinytextApp {
     }
 
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_visible = !self.sidebar_visible;
+        self.workspace.toggle_sidebar_visible();
         self.save_session();
         cx.notify();
     }
@@ -558,22 +316,28 @@ impl TinytextApp {
     }
 
     fn on_zoom_reset(&mut self, _: &ZoomReset, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.editor.font_size = None;
+        self.settings.values.editor.font_size = None;
         self.after_setting_write(save_font_size(None), window, cx);
         cx.notify();
     }
 
     /// Shifts the editor font size by a whole-point step, clamped to the same
     /// bounds the settings accessor enforces. Applies across every open tab
-    /// because the size is read from `self.settings` at render time.
+    /// because the size is read from `self.settings.values` at render time.
     fn step_font_size(&mut self, step: f32, window: &mut Window, cx: &mut Context<Self>) {
         let base = self
             .settings
+            .values
             .editor
             .font_size()
             .unwrap_or_else(|| cx.theme().mono_font_size.as_f32());
-        self.settings.editor.font_size = Some((base + step).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE));
-        self.after_setting_write(save_font_size(self.settings.editor.font_size), window, cx);
+        self.settings.values.editor.font_size =
+            Some((base + step).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE));
+        self.after_setting_write(
+            save_font_size(self.settings.values.editor.font_size),
+            window,
+            cx,
+        );
         cx.notify();
     }
 
@@ -583,9 +347,13 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings.editor.soft_wrap = Some(!self.settings.editor.soft_wrap());
+        self.settings.values.editor.soft_wrap = Some(!self.settings.values.editor.soft_wrap());
         self.apply_editor_options_to_all(window, cx);
-        self.after_setting_write(save_soft_wrap(self.settings.editor.soft_wrap()), window, cx);
+        self.after_setting_write(
+            save_soft_wrap(self.settings.values.editor.soft_wrap()),
+            window,
+            cx,
+        );
         cx.notify();
     }
 
@@ -595,10 +363,11 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings.editor.show_whitespace = Some(!self.settings.editor.show_whitespace());
+        self.settings.values.editor.show_whitespace =
+            Some(!self.settings.values.editor.show_whitespace());
         self.apply_editor_options_to_all(window, cx);
         self.after_setting_write(
-            save_show_whitespace(self.settings.editor.show_whitespace()),
+            save_show_whitespace(self.settings.values.editor.show_whitespace()),
             window,
             cx,
         );
@@ -611,7 +380,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let enabled = !self.settings.editor.line_numbers();
+        let enabled = !self.settings.values.editor.line_numbers();
         self.set_editor_flag("line_numbers", |e| &mut e.line_numbers, enabled, window, cx);
     }
 
@@ -621,7 +390,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let enabled = !self.settings.editor.indent_guides();
+        let enabled = !self.settings.values.editor.indent_guides();
         self.set_editor_flag(
             "indent_guides",
             |e| &mut e.indent_guides,
@@ -637,7 +406,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let enabled = !self.settings.editor.folding();
+        let enabled = !self.settings.values.editor.folding();
         self.set_editor_flag("folding", |e| &mut e.folding, enabled, window, cx);
     }
 
@@ -647,7 +416,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let enabled = !self.settings.editor.auto_close();
+        let enabled = !self.settings.values.editor.auto_close();
         self.set_editor_flag("auto_close", |e| &mut e.auto_close, enabled, window, cx);
     }
 
@@ -657,7 +426,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let enabled = !self.settings.editor.smart_indent();
+        let enabled = !self.settings.values.editor.smart_indent();
         self.set_editor_flag("smart_indent", |e| &mut e.smart_indent, enabled, window, cx);
     }
 
@@ -669,7 +438,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(ix) = self.active_tab else {
+        let Some(ix) = self.tabs.active_index() else {
             return;
         };
         let Some(tab) = self.tabs.get_mut(ix) else {
@@ -704,7 +473,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        *field(&mut self.settings.editor) = Some(enabled);
+        *field(&mut self.settings.values.editor) = Some(enabled);
         self.apply_editor_options_to_all(window, cx);
         self.after_setting_write(save_editor_flag(key, enabled), window, cx);
         cx.notify();
@@ -714,7 +483,7 @@ impl TinytextApp {
     /// palette, persisting it and refreshing the menu's check mark.
     fn on_set_theme(&mut self, action: &SetTheme, window: &mut Window, cx: &mut Context<Self>) {
         let choice = action.0.clone();
-        self.settings.ui.theme = Some(choice.clone());
+        self.settings.values.ui.theme = Some(choice.clone());
         self.apply_theme_choice(&choice, Some(window), cx);
         self.after_setting_write(save_theme(&choice), window, cx);
         cx.notify();
@@ -727,7 +496,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let choice = self.settings.ui.theme();
+        let choice = self.settings.values.ui.theme();
         if choice != crate::THEME_SYSTEM {
             return;
         }
@@ -743,15 +512,15 @@ impl TinytextApp {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        crate::theme::apply(&self.settings, window, cx);
-        cx.set_menus(crate::app_menus(choice));
+        crate::theme::apply(&self.settings.values, window, cx);
+        cx.set_menus(crate::commands::menus(choice));
     }
 
     /// Re-applies the current appearance and color scheme without a window, used
     /// after the themes directory finishes loading so a scheme named in settings
     /// that only just became available takes effect.
     pub(super) fn reapply_theme(&mut self, cx: &mut Context<Self>) {
-        let choice = self.settings.ui.theme().to_string();
+        let choice = self.settings.values.ui.theme().to_string();
         self.apply_theme_choice(&choice, None, cx);
         cx.notify();
     }
@@ -808,7 +577,7 @@ impl TinytextApp {
     }
 
     fn shift_active_tab(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(active) = self.active_tab else {
+        let Some(active) = self.tabs.active_index() else {
             return;
         };
         let n = self.tabs.len();
@@ -833,7 +602,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(closed) = self.closed_tabs.pop() else {
+        let Some(closed) = self.tabs.pop_closed() else {
             return;
         };
         match closed.path {
@@ -845,7 +614,7 @@ impl TinytextApp {
     /// Pushes the currently active editor settings onto every open editor, so
     /// a live toggle or a settings reload re-applies without reopening any tab.
     fn apply_editor_options_to_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let editor = self.settings.editor.clone();
+        let editor = self.settings.values.editor.clone();
         let tab = TabSize {
             tab_size: editor.tab_size(),
             hard_tabs: editor.hard_tabs(),
@@ -879,7 +648,8 @@ impl TinytextApp {
             return;
         };
 
-        self.busy = Some("Installing command-line tool…".into());
+        self.chrome
+            .set_busy(Some("Installing command-line tool…".into()));
         cx.notify();
 
         cx.spawn_in(window, async move |this, cx| {
@@ -889,7 +659,7 @@ impl TinytextApp {
                 .await;
 
             this.update_in(cx, |this, window, cx| {
-                this.busy = None;
+                this.chrome.set_busy(None);
                 match result {
                     Ok(path) => window.push_notification(
                         Notification::success(format!("Installed command at {}", path.display())),
@@ -913,7 +683,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.busy = Some("Checking for updates…".into());
+        self.chrome.set_busy(Some("Checking for updates…".into()));
         cx.notify();
 
         cx.spawn_in(window, async move |this, cx| {
@@ -923,7 +693,7 @@ impl TinytextApp {
                 .await;
 
             this.update_in(cx, |this, window, cx| {
-                this.busy = None;
+                this.chrome.set_busy(None);
                 let current = env!("CARGO_PKG_VERSION");
                 match result {
                     Ok(latest) if is_newer(&latest, current) => {
@@ -972,8 +742,7 @@ impl TinytextApp {
     }
 
     fn on_open_settings(&mut self, _: &OpenSettings, _window: &mut Window, cx: &mut Context<Self>) {
-        self.settings_open = !self.settings_open;
-        self.settings_error = None;
+        self.settings.toggle_open();
         cx.notify();
     }
 
@@ -1064,11 +833,11 @@ impl TinytextApp {
 
         match load_settings() {
             Ok(settings) => {
-                self.settings = settings;
+                self.settings.values = settings;
                 // Re-run the editor-only options and the theme on top of what
                 // was already open, so editing the settings file re-applies.
                 self.apply_editor_options_to_all(window, cx);
-                let choice = self.settings.ui.theme().to_string();
+                let choice = self.settings.values.ui.theme().to_string();
                 self.apply_theme_choice(&choice, Some(window), cx);
                 self.check_font_family(window, cx);
                 cx.notify();
@@ -1080,8 +849,8 @@ impl TinytextApp {
     /// Warns when a configured editor or interface font is not installed. Font
     /// enumeration is slow on macOS, so it runs off the main thread.
     pub(crate) fn check_font_family(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let editor = self.settings.editor.font_family.clone();
-        let interface = self.settings.ui.font_family.clone();
+        let editor = self.settings.values.editor.font_family.clone();
+        let interface = self.settings.values.ui.font_family.clone();
         if editor.is_none() && interface.is_none() {
             return;
         }
@@ -1186,14 +955,16 @@ impl Render for TinytextApp {
         self.sync_window_title(window);
 
         let palette = self
-            .palette
-            .clone()
+            .overlays
+            .palette()
+            .cloned()
             .map(|state| self.render_palette(&state, cx));
         let quick_open = self
-            .quick_open
-            .clone()
+            .overlays
+            .quick_open()
+            .cloned()
             .map(|state| self.render_quick_open(&state, cx));
-        let settings_overlay = self.settings_open.then(|| self.render_settings(cx));
+        let settings_overlay = self.settings.is_open().then(|| self.render_settings(cx));
         // Only worth hinting while an editor is open; other panes have no carets.
         let alt_held = window.modifiers().alt && self.active().is_some();
 
