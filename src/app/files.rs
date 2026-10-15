@@ -336,6 +336,10 @@ impl TinytextApp {
         let Some(tab) = self.tabs.get(ix) else {
             return;
         };
+        // The results tab is generated; there is nothing to save.
+        if tab.find_results.is_some() {
+            return;
+        }
         let id = tab.editor.entity_id();
 
         if let Some(path) = tab.path.clone() {
@@ -374,7 +378,7 @@ impl TinytextApp {
         let Some(tab) = self.tabs.get(ix) else {
             return;
         };
-        if tab.raster {
+        if tab.raster || tab.find_results.is_some() {
             return;
         }
         let id = tab.editor.entity_id();

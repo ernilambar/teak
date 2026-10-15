@@ -30,14 +30,16 @@ use gpui_kit::*;
 use crate::paths::display_path;
 use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
-    ClearRecent, CloseAllFolders, CloseTab, CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp,
-    CopyRelativePath, DeleteLine, GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow,
-    InstallCli, JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextTab, OpenDefaultSettings,
-    OpenFile, OpenPath, OpenSettings, OpenThemesFolder, PreviousTab, QuickOpen, Quit, Refresh,
-    ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll,
-    SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
-    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
-    ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CommandPalette, CopyFilePath,
+    CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, FindInFiles, FindNextField,
+    FindPreviousField, GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow, InstallCli,
+    JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextResult, NextTab, OpenDefaultSettings,
+    OpenFile, OpenPath, OpenResult, OpenSettings, OpenThemesFolder, PreviousResult, PreviousTab,
+    QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll, RevealInFinder, RunFind, SaveAll,
+    SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll, SplitSelectionIntoLines, THEME_CHOICES,
+    ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers,
+    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
+    ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -69,6 +71,10 @@ pub(crate) enum Scope {
     Global,
     /// Fires only while a text editor has focus.
     Editor,
+    /// Fires only in a Find panel field.
+    FindPanel,
+    /// Fires only in the Find Results tab's editor.
+    FindResults,
 }
 
 /// One user-facing command.
@@ -199,6 +205,85 @@ static COMMANDS: &[Command] = &[
         keywords: &["recent", "history"],
     },
     // Edit
+    Command {
+        label: "Find in Files…",
+        make: || Box::new(FindInFiles),
+        // The editor binds this chord to Replace, so the editor scope is needed
+        // for Find in Files to win while an editor has focus.
+        bindings: &[
+            ("cmd-shift-f", Scope::Global),
+            ("cmd-shift-f", Scope::Editor),
+        ],
+        menu: Some((MenuKind::Edit, 6)),
+        palette: Some((PaletteGroup::Edit, 16)),
+        keywords: &["search", "grep", "project"],
+    },
+    Command {
+        label: "Next Result",
+        make: || Box::new(NextResult),
+        bindings: &[("f4", Scope::Global)],
+        menu: Some((MenuKind::Edit, 6)),
+        palette: Some((PaletteGroup::Edit, 17)),
+        keywords: &["find", "search", "match"],
+    },
+    Command {
+        label: "Previous Result",
+        make: || Box::new(PreviousResult),
+        bindings: &[("shift-f4", Scope::Global)],
+        menu: Some((MenuKind::Edit, 6)),
+        palette: Some((PaletteGroup::Edit, 18)),
+        keywords: &["find", "search", "match"],
+    },
+    // Keys that only mean something inside the Find panel or the results tab;
+    // on no menu or palette.
+    Command {
+        label: "Run Find",
+        make: || Box::new(RunFind),
+        bindings: &[("enter", Scope::FindPanel)],
+        menu: None,
+        palette: None,
+        keywords: &[],
+    },
+    Command {
+        label: "Replace All",
+        make: || Box::new(ReplaceAll),
+        bindings: &[("alt-enter", Scope::FindPanel)],
+        menu: None,
+        palette: None,
+        keywords: &[],
+    },
+    Command {
+        label: "Close Find Panel",
+        make: || Box::new(CloseFindPanel),
+        bindings: &[("escape", Scope::FindPanel)],
+        menu: None,
+        palette: None,
+        keywords: &[],
+    },
+    Command {
+        label: "Next Find Field",
+        make: || Box::new(FindNextField),
+        bindings: &[("tab", Scope::FindPanel)],
+        menu: None,
+        palette: None,
+        keywords: &[],
+    },
+    Command {
+        label: "Previous Find Field",
+        make: || Box::new(FindPreviousField),
+        bindings: &[("shift-tab", Scope::FindPanel)],
+        menu: None,
+        palette: None,
+        keywords: &[],
+    },
+    Command {
+        label: "Open Result",
+        make: || Box::new(OpenResult),
+        bindings: &[("enter", Scope::FindResults)],
+        menu: None,
+        palette: None,
+        keywords: &[],
+    },
     Command {
         label: "Copy Path",
         make: || Box::new(CopyFilePath),
@@ -701,6 +786,7 @@ const EDIT_MENU: &[Entry] = &[
     Entry::Item(MenuItem::separator),
     Entry::Item(find),
     Entry::Item(find_and_replace),
+    Entry::Cluster(6),
     Entry::Item(MenuItem::separator),
     Entry::Item(select_all),
     Entry::Item(MenuItem::separator),
@@ -813,6 +899,16 @@ pub(crate) fn editor_bindings() -> Vec<KeyBinding> {
     bindings(Scope::Editor)
 }
 
+/// Enter, Escape and Tab in the Find panel's fields, and Enter in the Find
+/// Results tab. Their contexts nest the engine's `"Input"`, and they are
+/// registered after the engine's own bindings, so they win over its Enter
+/// (newline / submit), Escape and Tab (indent).
+pub(crate) fn find_bindings() -> Vec<KeyBinding> {
+    let mut list = bindings(Scope::FindPanel);
+    list.extend(bindings(Scope::FindResults));
+    list
+}
+
 fn bindings(context: Scope) -> Vec<KeyBinding> {
     let mut bindings = Vec::new();
     for command in COMMANDS {
@@ -831,11 +927,16 @@ fn bindings(context: Scope) -> Vec<KeyBinding> {
 /// `impl Action` bound, so the equivalent public constructor is used with the
 /// same arguments (`new` passes `false`, `None` and `DummyKeyboardMapper`).
 fn binding(chord: &str, action: Box<dyn Action>, context: Scope) -> KeyBinding {
+    let parse = |source: &str| {
+        Some(Rc::new(
+            KeyBindingContextPredicate::parse(source).expect("the key context parses"),
+        ))
+    };
     let predicate = match context {
         Scope::Global => None,
-        Scope::Editor => Some(Rc::new(
-            KeyBindingContextPredicate::parse(EDITOR).expect("the editor context parses"),
-        )),
+        Scope::Editor => parse(EDITOR),
+        Scope::FindPanel => parse(&format!("FindPanel > {EDITOR}")),
+        Scope::FindResults => parse(&format!("FindResults > {EDITOR}")),
     };
     KeyBinding::load(chord, action, predicate, false, None, &DummyKeyboardMapper)
         .unwrap_or_else(|_| panic!("`{chord}` is a valid chord"))
@@ -949,7 +1050,7 @@ mod tests {
 
     use super::{
         COMMANDS, Entry, MenuKind, PALETTE, PaletteGroup, PaletteSlot, Scope, app_bindings,
-        editor_bindings,
+        editor_bindings, find_bindings,
     };
 
     /// The palette groups in display order, skipping the hand-written Appearance
@@ -986,8 +1087,9 @@ mod tests {
     fn every_binding_parses() {
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
-        assert_eq!(app_bindings().len(), 37);
-        assert_eq!(editor_bindings().len(), 17);
+        assert_eq!(app_bindings().len(), 40);
+        assert_eq!(editor_bindings().len(), 18);
+        assert_eq!(find_bindings().len(), 6);
     }
 
     #[test]
@@ -1016,6 +1118,7 @@ mod tests {
             ("alt-cmd-r", "RevealInFinder"),
             ("alt-cmd-c", "CopyFilePath"),
             ("alt-cmd-shift-c", "CopyRelativePath"),
+            ("cmd-shift-f", "FindInFiles"),
         ] {
             assert!(resolve(&keymap, keys, &[])[0].ends_with(action));
             assert!(resolve(&keymap, keys, &["Input"])[0].ends_with(action));
@@ -1125,6 +1228,9 @@ mod tests {
                 &[
                     "Copy Path",
                     "Copy Relative Path",
+                    "Find in Files…",
+                    "Next Result",
+                    "Previous Result",
                     "Add Cursor Above",
                     "Add Cursor Below",
                     "Split into Lines",
@@ -1241,7 +1347,12 @@ mod tests {
 
     #[test]
     fn chords_do_not_collide_within_a_context() {
-        for context in [Scope::Global, Scope::Editor] {
+        for context in [
+            Scope::Global,
+            Scope::Editor,
+            Scope::FindPanel,
+            Scope::FindResults,
+        ] {
             let mut chords: Vec<&str> = COMMANDS
                 .iter()
                 .flat_map(|command| command.bindings.iter())
@@ -1275,7 +1386,7 @@ mod tests {
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 49);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 47);
+        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 52);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 50);
     }
 }

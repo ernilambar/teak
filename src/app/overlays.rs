@@ -1,5 +1,5 @@
-//! State for the mutually exclusive overlay surfaces: the command palette, the
-//! quick-open finder and the file index the finder searches.
+//! State for the transient surfaces: the mutually exclusive command palette and
+//! quick-open finder, the file index the finder searches, and the Find panel.
 //!
 //! Opening and closing stays on `TinytextApp`: mounting an overlay needs a
 //! `Window` (`window.defer` for the focus request, `cx.spawn_in` for the index
@@ -7,9 +7,40 @@
 //! and the focus-to-restore bookkeeping those methods move around.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use gpui_kit::component::command::CommandState;
+use gpui_kit::component::{command::CommandState, input::InputState};
 use gpui_kit::*;
+
+use crate::search::SearchOptions;
+
+/// The Find panel's text fields, alive while the panel is shown.
+pub(super) struct FindFields {
+    pub(super) query: Entity<InputState>,
+    pub(super) scope: Entity<InputState>,
+    pub(super) replace: Entity<InputState>,
+}
+
+/// The Find panel's text, kept while the panel is hidden.
+#[derive(Clone, Default)]
+pub(super) struct FindText {
+    pub(super) query: String,
+    pub(super) scope: String,
+    pub(super) replace: String,
+}
+
+/// What the Find panel's status line reports.
+#[derive(Default)]
+pub(super) enum FindStatus {
+    #[default]
+    Idle,
+    Searching,
+    /// The last search's summary.
+    Done(String),
+    /// The query or the Where field does not compile; holds the reason.
+    Invalid(String),
+}
 
 /// The palette's and the finder's state, plus the focus each returns to.
 #[derive(Default)]
@@ -25,6 +56,17 @@ pub(super) struct Overlays {
     /// The quick-open file index: every file under the workspace roots, walked
     /// on the last finder open. Cached until it is rebuilt on the next open.
     open_paths: Vec<PathBuf>,
+    /// The Find panel's fields while it is shown.
+    find: Option<FindFields>,
+    /// The focus that was active when the Find panel opened, restored on close.
+    find_return_focus: Option<FocusHandle>,
+    /// The panel's text, kept while it is hidden and across relaunches.
+    find_text: FindText,
+    find_options: SearchOptions,
+    find_status: FindStatus,
+    /// Bumped by every new search; a search whose number no longer matches
+    /// stops early and drops its results.
+    find_generation: Arc<AtomicU64>,
 }
 
 impl Overlays {
@@ -89,5 +131,54 @@ impl Overlays {
 
     pub(super) fn set_open_paths(&mut self, paths: Vec<PathBuf>) {
         self.open_paths = paths;
+    }
+
+    pub(super) fn find(&self) -> Option<&FindFields> {
+        self.find.as_ref()
+    }
+
+    /// Shows the Find panel with `fields`, remembering `return_focus`.
+    pub(super) fn set_find(&mut self, fields: FindFields, return_focus: Option<FocusHandle>) {
+        self.find = Some(fields);
+        self.find_return_focus = return_focus;
+    }
+
+    /// Hides the Find panel, handing back its fields and the focus to restore.
+    pub(super) fn take_find(&mut self) -> Option<(FindFields, Option<FocusHandle>)> {
+        let fields = self.find.take()?;
+        Some((fields, self.find_return_focus.take()))
+    }
+
+    pub(super) fn find_text(&self) -> &FindText {
+        &self.find_text
+    }
+
+    pub(super) fn set_find_text(&mut self, text: FindText) {
+        self.find_text = text;
+    }
+
+    pub(super) fn find_options(&self) -> SearchOptions {
+        self.find_options
+    }
+
+    pub(super) fn find_options_mut(&mut self) -> &mut SearchOptions {
+        &mut self.find_options
+    }
+
+    pub(super) fn find_status(&self) -> &FindStatus {
+        &self.find_status
+    }
+
+    pub(super) fn set_find_status(&mut self, status: FindStatus) {
+        self.find_status = status;
+    }
+
+    pub(super) fn find_generation(&self) -> Arc<AtomicU64> {
+        self.find_generation.clone()
+    }
+
+    /// Starts a new search generation, cancelling the previous one.
+    pub(super) fn next_find_generation(&mut self) -> u64 {
+        self.find_generation.fetch_add(1, Ordering::Relaxed) + 1
     }
 }

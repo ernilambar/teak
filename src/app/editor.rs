@@ -483,31 +483,36 @@ fn tidy_edit(text: &str, trim: bool, final_newline: bool) -> Option<(Range<usize
     if tidy == text {
         return None;
     }
+    Some(changed_span(text, &tidy))
+}
 
-    // Both strings share these bytes, so a char boundary in one is a boundary
-    // in the other.
-    let mut prefix = text
+/// The single replacement that turns `old` into `new`: the byte range of `old`
+/// between their common prefix and suffix, and what goes there.
+pub(super) fn changed_span(old: &str, new: &str) -> (Range<usize>, String) {
+    // Both strings share these bytes, and a UTF-8 lead byte fixes how many
+    // continuation bytes follow, so a char boundary in one is one in the other.
+    let mut prefix = old
         .bytes()
-        .zip(tidy.bytes())
+        .zip(new.bytes())
         .take_while(|(a, b)| a == b)
         .count();
-    while !text.is_char_boundary(prefix) {
+    while !old.is_char_boundary(prefix) {
         prefix -= 1;
     }
-    let mut suffix = text
+    let mut suffix = old
         .bytes()
         .rev()
-        .zip(tidy.bytes().rev())
-        .take(text.len().min(tidy.len()) - prefix)
+        .zip(new.bytes().rev())
+        .take(old.len().min(new.len()) - prefix)
         .take_while(|(a, b)| a == b)
         .count();
-    while !text.is_char_boundary(text.len() - suffix) {
+    while !old.is_char_boundary(old.len() - suffix) {
         suffix -= 1;
     }
-    Some((
-        prefix..text.len() - suffix,
-        tidy[prefix..tidy.len() - suffix].to_string(),
-    ))
+    (
+        prefix..old.len() - suffix,
+        new[prefix..new.len() - suffix].to_string(),
+    )
 }
 
 fn split_indent(line: &str) -> (&str, &str) {

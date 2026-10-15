@@ -32,6 +32,8 @@
 | `⌘↩` | `Cmd + Enter` | Insert Line Below |
 | `⌘⇧↩` | `Cmd + Shift + Enter` | Insert Line Above |
 | `⌘G` | `Cmd + G` | Go to Line… |
+| `⌘⇧F` | `Cmd + Shift + F` | Find in Files… |
+| `F4` / `⇧F4` | `F4` / `Shift + F4` | Next / Previous Result |
 
 The usual macOS editing shortcuts also work: `⌘Z` / `⌘⇧Z` (undo / redo),
 `⌘X` / `⌘C` / `⌘V`, `⌘A`, `⌘F` (find and replace), word and line navigation,
@@ -79,3 +81,24 @@ of the selected text on each press, wrapping past the end of the file.
 | `⇧` | Shift |
 | `⌥` | Option |
 | `↩` | Return (Enter) |
+
+## Find in Files
+
+`⌘⇧F` opens the Find panel above the status bar. **Find** takes the query;
+**Where** narrows the files with comma-separated globs, where a leading `-`
+excludes (`src/**, -**/*.min.js`). Files listed in `.gitignore` and in the
+`search.exclude` setting are always skipped.
+
+**Replace All…** searches again, asks with the counts, then replaces. Open files
+change in their tabs, unsaved, and one `⌘Z` reverts each. Closed files are saved
+to disk with their line endings and byte order mark kept; a file changed since the
+search is skipped. In regex mode `$1` and `${name}` insert capture groups. A search
+that hits the 1,000-match limit is not replaced; narrow it with **Where** first.
+
+| Key | In | Action |
+| --- | --- | --- |
+| `↩` | Find panel | Search into the Find Results tab |
+| `⌥↩` | Find panel | Replace All… (asks first) |
+| `⇥` / `⇧⇥` | Find panel | Move between Find, Where and Replace |
+| `⎋` | Find panel | Hide the panel |
+| `↩` or double-click | Find Results | Open the match on that line |

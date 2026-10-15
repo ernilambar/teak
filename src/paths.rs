@@ -1,9 +1,17 @@
 use std::path::{Path, PathBuf};
 
+use globset::{Glob, GlobSet, GlobSetBuilder};
+use ignore::WalkBuilder;
+
 const BUNDLE_ID: &str = "net.nilambar.tinytext";
 
 /// `~/Library/Application Support/<bundle id>`, home of session and settings files.
+/// Test builds use a per-run temp directory instead, so no test can overwrite
+/// the user's session, settings or themes.
 pub(crate) fn support_dir() -> Option<PathBuf> {
+    if cfg!(test) {
+        return Some(std::env::temp_dir().join(format!("tinytext-test-{}", std::process::id())));
+    }
     let home = std::env::var_os("HOME")?;
     Some(
         PathBuf::from(home)
@@ -84,33 +92,67 @@ pub(crate) fn read_dir(dir: &Path) -> Vec<DirEntry> {
 /// Directories whose contents never belong in the quick-open file index.
 const IGNORED_DIRS: &[&str] = &[".git", "node_modules", "target", "__pycache__"];
 
-/// Collects the files under every root with a breadth-first walk, stopping
-/// once `limit` paths are collected. Dot directories and dependency/build
-/// directories are skipped, and symlinks are not followed, so a symlinked
-/// folder appears as a file entry instead of being walked.
-pub(crate) fn collect_files(roots: &[PathBuf], limit: usize) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let mut queue: Vec<PathBuf> = roots.to_vec();
+/// Compiles `search.exclude` globs, matched against paths relative to their
+/// workspace root. A `dir/**` pattern also matches `dir` itself, so the walk
+/// skips the whole folder instead of visiting every file in it.
+pub(crate) fn exclude_set(patterns: &[String]) -> Result<GlobSet, String> {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        let glob = |pattern: &str| Glob::new(pattern).map_err(|error| error.to_string());
+        builder.add(glob(pattern)?);
+        if let Some(dir) = pattern.strip_suffix("/**") {
+            builder.add(glob(dir)?);
+        }
+    }
+    builder.build().map_err(|error| error.to_string())
+}
 
-    while let Some(dir) = queue.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
+/// Collects the files under every root in path order, stopping once `limit`
+/// paths are collected. Skips what the project's `.gitignore` and `.ignore`
+/// files list, paths matching `exclude`, dot directories and dependency/build
+/// directories. A non-empty `include` keeps only files matching it. Symlinks
+/// are not followed, so a symlinked folder appears as a file entry instead of
+/// being walked.
+pub(crate) fn collect_files(
+    roots: &[PathBuf],
+    limit: usize,
+    exclude: &GlobSet,
+    include: &GlobSet,
+) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for root in roots {
+        let base = root.clone();
+        let exclude = exclude.clone();
+        let walk = WalkBuilder::new(root)
+            // Dot files stay searchable; dot directories are skipped below.
+            .hidden(false)
+            // Honor a `.gitignore` even in a folder that is not a repository.
+            .require_git(false)
+            // Only the project's own ignore files count, as in VS Code; the
+            // user's global git excludes would make results differ per machine.
+            .git_global(false)
+            .sort_by_file_name(|a, b| a.cmp(b))
+            .filter_entry(move |entry| {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                let path = entry.path();
+                if entry.file_type().is_some_and(|kind| kind.is_dir()) && is_ignored_dir(path) {
+                    return false;
+                }
+                !exclude.is_match(path.strip_prefix(&base).unwrap_or(path))
+            })
+            .build();
+        for entry in walk.flatten() {
             if files.len() >= limit {
                 return files;
             }
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
             let path = entry.path();
-            if kind.is_dir() {
-                if is_ignored_dir(&path) {
-                    continue;
-                }
-                queue.push(path);
-            } else {
-                files.push(path);
+            let rel = path.strip_prefix(root).unwrap_or(path);
+            if entry.file_type().is_some_and(|kind| !kind.is_dir())
+                && (include.is_empty() || include.is_match(rel))
+            {
+                files.push(entry.into_path());
             }
         }
     }
@@ -349,7 +391,12 @@ mod tests {
         std::fs::write(root.join(".hidden/c.txt"), "c").unwrap();
         std::fs::write(root.join("node_modules/d.txt"), "d").unwrap();
 
-        let files = collect_files(std::slice::from_ref(&root), usize::MAX);
+        let files = collect_files(
+            std::slice::from_ref(&root),
+            usize::MAX,
+            &GlobSet::empty(),
+            &GlobSet::empty(),
+        );
         let mut names: Vec<String> = files.iter().map(|path| file_name(path)).collect();
         names.sort();
 
@@ -367,15 +414,102 @@ mod tests {
             std::fs::write(root.join(format!("file-{index}.txt")), "").unwrap();
         }
 
-        assert_eq!(collect_files(std::slice::from_ref(&root), 0).len(), 0);
-        assert_eq!(collect_files(std::slice::from_ref(&root), 3).len(), 3);
-        assert_eq!(collect_files(&[root], 5).len(), 5);
+        let none = GlobSet::empty();
+        assert_eq!(
+            collect_files(std::slice::from_ref(&root), 0, &none, &none).len(),
+            0
+        );
+        assert_eq!(
+            collect_files(std::slice::from_ref(&root), 3, &none, &none).len(),
+            3
+        );
+        assert_eq!(collect_files(&[root], 5, &none, &none).len(), 5);
     }
 
     #[test]
     fn collect_files_tolerates_missing_roots() {
-        assert!(collect_files(&[PathBuf::from("/nonexistent/tinytext")], usize::MAX).is_empty());
-        assert!(collect_files(&[], usize::MAX).is_empty());
+        let none = GlobSet::empty();
+        assert!(
+            collect_files(
+                &[PathBuf::from("/nonexistent/tinytext")],
+                usize::MAX,
+                &none,
+                &none
+            )
+            .is_empty()
+        );
+        assert!(collect_files(&[], usize::MAX, &none, &none).is_empty());
+    }
+
+    #[test]
+    fn collect_files_honors_gitignore_and_exclude_globs() {
+        let root = std::env::temp_dir().join(format!("tinytext-collect-3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in ["dist", "vendor/lib", "src/fixtures"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        std::fs::write(root.join(".gitignore"), "dist/\n*.log\n").unwrap();
+        for file in [
+            "dist/bundle.js",
+            "debug.log",
+            "vendor/lib/x.php",
+            "app.min.js",
+            "src/main.js",
+            "src/fixtures/data.json",
+            ".env",
+        ] {
+            std::fs::write(root.join(file), "x").unwrap();
+        }
+
+        let exclude = exclude_set(&[
+            "vendor/**".to_string(),
+            "**/*.min.js".to_string(),
+            "**/fixtures/**".to_string(),
+        ])
+        .unwrap();
+        let files = collect_files(
+            std::slice::from_ref(&root),
+            usize::MAX,
+            &exclude,
+            &GlobSet::empty(),
+        );
+        let rel: Vec<String> = files
+            .iter()
+            .map(|path| path.strip_prefix(&root).unwrap().display().to_string())
+            .collect();
+
+        // Sorted by path; dot files stay, ignored and excluded paths go.
+        assert_eq!(rel, [".env", ".gitignore", "src/main.js"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn collect_files_keeps_only_included_files() {
+        let root = std::env::temp_dir().join(format!("tinytext-collect-4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src/deep")).unwrap();
+        for file in ["src/a.rs", "src/deep/b.rs", "src/c.md", "top.rs"] {
+            std::fs::write(root.join(file), "x").unwrap();
+        }
+        let include = exclude_set(&["src/**/*.rs".to_string()]).unwrap();
+        let files = collect_files(
+            std::slice::from_ref(&root),
+            usize::MAX,
+            &GlobSet::empty(),
+            &include,
+        );
+        let rel: Vec<String> = files
+            .iter()
+            .map(|path| path.strip_prefix(&root).unwrap().display().to_string())
+            .collect();
+        assert_eq!(rel, ["src/a.rs", "src/deep/b.rs"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn exclude_set_rejects_invalid_globs() {
+        assert!(exclude_set(&["**/*.{js".to_string()]).is_err());
+        assert!(exclude_set(&[]).unwrap().is_empty());
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::paths::support_dir;
+use crate::paths::{exclude_set, support_dir};
 
 pub(crate) const MIN_FONT_SIZE: f32 = 6.;
 pub(crate) const MAX_FONT_SIZE: f32 = 72.;
@@ -100,6 +100,22 @@ const MAX_SUGGESTIONS: usize = 3;
 pub(crate) struct Settings {
     pub(crate) editor: EditorSettings,
     pub(crate) ui: UiSettings,
+    pub(crate) search: SearchSettings,
+}
+
+/// Quick Open and Find in Files preferences.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct SearchSettings {
+    /// Globs relative to each workspace folder, such as `vendor/**` or
+    /// `**/*.min.js`, skipped on top of what `.gitignore` already hides.
+    pub(crate) exclude: Option<Vec<String>>,
+}
+
+impl SearchSettings {
+    pub(crate) fn exclude(&self) -> &[String] {
+        self.exclude.as_deref().unwrap_or_default()
+    }
 }
 
 /// `None` keeps the theme's monospace default.
@@ -283,7 +299,10 @@ pub(crate) fn load_settings() -> Result<Settings, String> {
         }
         Err(error) => return Err(format!("Could not read settings: {error}")),
     };
-    parse_settings(&data).map_err(|error| format!("Invalid settings: {error}"))
+    let settings = parse_settings(&data).map_err(|error| format!("Invalid settings: {error}"))?;
+    exclude_set(settings.search.exclude())
+        .map_err(|error| format!("Invalid settings: search.exclude: {error}"))?;
+    Ok(settings)
 }
 
 /// Every settings key at the value it takes when left unset, as pretty JSON in
@@ -328,6 +347,9 @@ pub(crate) fn defaults_document(
             tab_icons: Some(ui.tab_icons()),
             icon_color: Some(ui.icon_color().to_string()),
             sidebar_position: Some(ui.sidebar_position().to_string()),
+        },
+        search: SearchSettings {
+            exclude: Some(Vec::new()),
         },
     };
     serde_json::to_string_pretty(&defaults).expect("settings serialize as JSON")
@@ -611,6 +633,15 @@ fn quoted(names: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_search_exclude() {
+        let settings =
+            parse_settings(r#"{"search": {"exclude": ["vendor/**", "**/*.min.js"]}}"#).unwrap();
+        assert_eq!(settings.search.exclude(), ["vendor/**", "**/*.min.js"]);
+        assert!(Settings::default().search.exclude().is_empty());
+        assert!(parse_settings(r#"{"search": {"exclud": []}}"#).is_err());
+    }
 
     #[test]
     fn parses_editor_section() {

@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use globset::GlobSet;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{
     ActiveTheme as _,
@@ -18,7 +19,7 @@ use gpui_kit::*;
 
 use crate::file_icons::file_icon;
 use crate::fuzzy;
-use crate::paths::{collect_files, file_name, nearest_root, relative_display};
+use crate::paths::{collect_files, exclude_set, file_name, nearest_root, relative_display};
 use crate::settings::IconStyle;
 use crate::{OpenPath, QuickOpen};
 
@@ -85,6 +86,8 @@ impl TinytextApp {
         // removals are picked up; the walk runs off the main thread. With no
         // workspace roots the open tabs stand in for the project.
         let roots = self.workspace.roots().to_vec();
+        // Settings were validated on load, so a bad glob cannot reach here.
+        let exclude = exclude_set(self.settings.values.search.exclude()).unwrap_or_default();
         let fallback: Vec<PathBuf> = self
             .tabs
             .iter()
@@ -97,7 +100,7 @@ impl TinytextApp {
                     if roots.is_empty() {
                         fallback
                     } else {
-                        collect_files(&roots, MAX_INDEX_FILES)
+                        collect_files(&roots, MAX_INDEX_FILES, &exclude, &GlobSet::empty())
                     }
                 })
                 .await;
@@ -260,37 +263,39 @@ fn quick_open_item(rel: String, path: PathBuf, icon_style: IconStyle) -> Command
         _ => String::new().into(),
     };
 
-    CommandItem::new().child(move |_window, cx| {
-        let mut row = div()
-            .h_flex()
-            .flex_1()
-            .min_w_0()
-            .items_center()
-            .gap_2()
-            .child(file_type_icon(file_icon(&path), icon_style, cx))
-            .child(
-                div()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(name.clone()),
-            );
-        if !directory.is_empty() {
-            row = row.child(
-                div()
-                    .ml_auto()
-                    .max_w(px(220.))
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(directory.clone()),
-            );
-        }
-        row.into_any_element()
-    })
+    CommandItem::new()
+        .action(Box::new(OpenPath(path.clone())))
+        .child(move |_window, cx| {
+            let mut row = div()
+                .h_flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .child(file_type_icon(file_icon(&path), icon_style, cx))
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(name.clone()),
+                );
+            if !directory.is_empty() {
+                row = row.child(
+                    div()
+                        .ml_auto()
+                        .max_w(px(220.))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(directory.clone()),
+                );
+            }
+            row.into_any_element()
+        })
 }
 
 #[cfg(test)]
@@ -356,6 +361,47 @@ mod tests {
             );
         })
         .expect("the headless finder window must survive Escape");
+    }
+
+    /// Confirming a row opens its file in a tab.
+    #[gpui_kit::test]
+    async fn confirming_a_row_opens_the_file(cx: &mut TestAppContext) {
+        let (handle, app) = open_app(cx);
+        let dir = crate::paths::support_dir().unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quick-open-target.txt");
+        std::fs::write(&path, "hello").unwrap();
+
+        cx.update_window(handle, |_, window, cx| {
+            let focus_handle = app.read(cx).focus_handle.clone();
+            window.focus(&focus_handle, cx);
+            window.render_frame(cx);
+            window.press("cmd-p", cx);
+        })
+        .unwrap();
+        // Let the index walk land before replacing its result.
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, _| {
+                this.overlays.set_open_paths(vec![path.clone()])
+            });
+            window.render_frame(cx);
+            window.click(IndexPath::new(0).section(0), cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, _, cx| {
+            let app = app.read(cx);
+            assert!(!app.overlays.is_quick_open_open(), "the finder closes");
+            assert!(
+                app.tabs
+                    .iter()
+                    .any(|tab| tab.path.as_deref() == Some(path.as_path())),
+                "the confirmed file opens in a tab"
+            );
+        })
+        .unwrap();
     }
 
     /// Picking "Quick Open…" from the command palette closes the palette and
