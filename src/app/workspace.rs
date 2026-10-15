@@ -13,7 +13,7 @@ use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::*;
 
 use crate::paths::{DirEntry, RootConflict, read_dir, remap_prefix, root_conflict};
-use crate::session::SessionState;
+use crate::session::{SessionState, push_recent};
 
 /// Sidebar width used when the session does not carry one.
 const DEFAULT_SIDEBAR_WIDTH: u32 = 240;
@@ -68,6 +68,8 @@ pub(super) struct Workspace {
     /// clears this to re-seed it from [`Workspace::width`].
     panels: Entity<ResizableState>,
     clipboard: Option<FileClipboard>,
+    /// Recently opened files and folders, newest first.
+    recent: Vec<PathBuf>,
 }
 
 impl Workspace {
@@ -99,6 +101,7 @@ impl Workspace {
             width: DEFAULT_SIDEBAR_WIDTH,
             panels,
             clipboard: None,
+            recent: Vec::new(),
         }
     }
 
@@ -284,6 +287,24 @@ impl Workspace {
 
     /// Adopts the folders, expansion state, selection and sidebar geometry from
     /// a saved session, then rebuilds the rows.
+    pub(super) fn recent(&self) -> &[PathBuf] {
+        &self.recent
+    }
+
+    /// Seeds the recent list at launch, dropping entries that no longer exist.
+    pub(super) fn set_recent(&mut self, mut recent: Vec<PathBuf>) {
+        recent.retain(|path| path.exists());
+        self.recent = recent;
+    }
+
+    pub(super) fn note_recent(&mut self, path: PathBuf) {
+        push_recent(&mut self.recent, path);
+    }
+
+    pub(super) fn clear_recent(&mut self) {
+        self.recent.clear();
+    }
+
     pub(super) fn restore(&mut self, session: &SessionState) {
         self.roots = session.roots.iter().filter(|path| path.is_dir()).fold(
             Vec::new(),

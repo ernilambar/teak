@@ -15,6 +15,19 @@ pub(crate) struct SessionState {
     pub(crate) sidebar_visible: bool,
     /// Sidebar width in pixels, as last dragged by the user.
     pub(crate) sidebar_width: Option<u32>,
+    /// Recently opened files and folders, newest first, for File > Open Recent.
+    pub(crate) recent: Vec<PathBuf>,
+}
+
+/// How many entries File > Open Recent keeps.
+pub(crate) const MAX_RECENT: usize = 10;
+
+/// Moves `path` to the front of `recent`, dropping its older entry and any
+/// beyond [`MAX_RECENT`].
+pub(crate) fn push_recent(recent: &mut Vec<PathBuf>, path: PathBuf) {
+    recent.retain(|existing| *existing != path);
+    recent.insert(0, path);
+    recent.truncate(MAX_RECENT);
 }
 
 pub(crate) fn session_path() -> Option<PathBuf> {
@@ -41,6 +54,7 @@ mod tests {
             selected_path: None,
             sidebar_visible: true,
             sidebar_width: Some(260),
+            recent: vec![PathBuf::from("/tmp/project/a.rs")],
         };
         let json = serde_json::to_string(&state).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -52,6 +66,20 @@ mod tests {
         assert_eq!(restored.selected_path, state.selected_path);
         assert!(restored.sidebar_visible);
         assert_eq!(restored.sidebar_width, Some(260));
+        assert_eq!(restored.recent, state.recent);
+    }
+
+    #[test]
+    fn push_recent_moves_to_front_without_duplicates() {
+        let mut recent = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+        push_recent(&mut recent, PathBuf::from("/b"));
+        assert_eq!(recent, [PathBuf::from("/b"), PathBuf::from("/a")]);
+
+        for ix in 0..MAX_RECENT + 5 {
+            push_recent(&mut recent, PathBuf::from(format!("/f{ix}")));
+        }
+        assert_eq!(recent.len(), MAX_RECENT);
+        assert_eq!(recent[0], PathBuf::from(format!("/f{}", MAX_RECENT + 4)));
     }
 
     #[test]

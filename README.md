@@ -15,8 +15,14 @@ A fast, lightweight text editor for macOS.
 - Quick Open (`Cmd+P`) to fuzzy-find a file across the workspace folders
 - Markdown preview (`Cmd+Shift+V`)
 - Reopens your tabs and folder where you left off
+- File → Open Recent for recently opened files and folders
+- Drag files and folders from Finder onto the window to open them
 - Warns before closing a file with unsaved changes
-- Cursor position, encoding, and language in the status bar
+- Reloads files changed by other apps, and asks first if you have unsaved edits
+- Deleting from the sidebar moves files to the Trash
+- Keeps each file's line endings (LF or CRLF) and byte order mark
+- Optional trim trailing whitespace and final newline on save
+- Cursor position, encoding, line endings, and language in the status bar
 - `tinytext` command to open files from the terminal
 - Light, dark, and system-following themes
 

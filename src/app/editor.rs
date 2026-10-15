@@ -13,7 +13,7 @@ use gpui_kit::base::input::{
 };
 use gpui_kit::component::{
     WindowExt as _,
-    input::{Input, InputState, Position, RopeExt as _},
+    input::{EditorState, Input, InputState, Position, RopeExt as _},
 };
 use gpui_kit::*;
 
@@ -371,9 +371,11 @@ enum CommentStyle {
 /// no comments (plain text).
 fn comment_style(language: &str) -> Option<CommentStyle> {
     match language {
-        "Rust" | "JavaScript" | "TypeScript" | "PHP" | "JSON" => Some(CommentStyle::Line("//")),
-        "Python" | "TOML" => Some(CommentStyle::Line("#")),
-        "HTML" | "Markdown" => Some(CommentStyle::Block {
+        "Rust" | "JavaScript" | "TypeScript" | "TSX" | "PHP" | "JSON" => {
+            Some(CommentStyle::Line("//"))
+        }
+        "Python" | "TOML" | "YAML" | "Shell" => Some(CommentStyle::Line("#")),
+        "HTML" | "XML" | "Markdown" => Some(CommentStyle::Block {
             open: "<!--",
             close: "-->",
         }),
@@ -454,6 +456,60 @@ fn toggle_comment(buf: &LineBuffer, selection: &Range<usize>, style: CommentStyl
     }
 }
 
+/// The single edit that strips trailing spaces and tabs from every line
+/// and/or ends the text with a newline, or `None` when nothing changes. The
+/// range covers only the span between the first and last change, so undo and
+/// scrolling stay local.
+fn tidy_edit(text: &str, trim: bool, final_newline: bool) -> Option<(Range<usize>, String)> {
+    let mut tidy = String::with_capacity(text.len() + 1);
+    if trim {
+        for line in text.split_inclusive('\n') {
+            let (body, ending) = match line.strip_suffix("\r\n") {
+                Some(body) => (body, "\r\n"),
+                None => match line.strip_suffix('\n') {
+                    Some(body) => (body, "\n"),
+                    None => (line, ""),
+                },
+            };
+            tidy.push_str(body.trim_end_matches([' ', '\t']));
+            tidy.push_str(ending);
+        }
+    } else {
+        tidy.push_str(text);
+    }
+    if final_newline && !tidy.is_empty() && !tidy.ends_with('\n') {
+        tidy.push('\n');
+    }
+    if tidy == text {
+        return None;
+    }
+
+    // Both strings share these bytes, so a char boundary in one is a boundary
+    // in the other.
+    let mut prefix = text
+        .bytes()
+        .zip(tidy.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !text.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+    let mut suffix = text
+        .bytes()
+        .rev()
+        .zip(tidy.bytes().rev())
+        .take(text.len().min(tidy.len()) - prefix)
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !text.is_char_boundary(text.len() - suffix) {
+        suffix -= 1;
+    }
+    Some((
+        prefix..text.len() - suffix,
+        tidy[prefix..tidy.len() - suffix].to_string(),
+    ))
+}
+
 fn split_indent(line: &str) -> (&str, &str) {
     let indent = leading_indent(line);
     (indent, &line[indent.len()..])
@@ -484,6 +540,34 @@ impl TinytextApp {
             let offset = commit.cursor.min(state.text().len());
             let position = state.text().offset_to_position(offset);
             state.set_cursor_position(position, window, cx);
+        });
+    }
+
+    /// Applies `editor.trim_trailing_whitespace` and `editor.ensure_final_newline`
+    /// to the buffer before a save, as one undoable edit.
+    pub(super) fn tidy_for_save(
+        &mut self,
+        editor: &Entity<EditorState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let trim = self.settings.values.editor.trim_trailing_whitespace();
+        let final_newline = self.settings.values.editor.ensure_final_newline();
+        if !trim && !final_newline {
+            return;
+        }
+        editor.update(cx, |state, cx| {
+            let text = state.text().to_string();
+            let Some((range, replacement)) = tidy_edit(&text, trim, final_newline) else {
+                return;
+            };
+            let caret = state.cursor_position();
+            state.set_selected_range(range, cx);
+            state.replace(replacement, window, cx);
+            // Back to the caret's line; trimming may have shortened it. Setting
+            // the range directly avoids focusing a background tab's editor.
+            let offset = state.text().position_to_offset(&caret);
+            state.set_selected_range(offset..offset, cx);
         });
     }
 
@@ -743,7 +827,7 @@ mod tests {
     // macro and shadow the built-in one, making `#[test]` recurse.
     use super::{
         CommentStyle, Commit, LineBuffer, add_next_occurrence, comment_style, delete_lines,
-        duplicate_lines, insert_line, move_lines, select_line_range, split_into_lines,
+        duplicate_lines, insert_line, move_lines, select_line_range, split_into_lines, tidy_edit,
         toggle_comment,
     };
 
@@ -1027,6 +1111,18 @@ mod tests {
             Some(CommentStyle::Block { .. })
         ));
         assert!(matches!(
+            comment_style("YAML"),
+            Some(CommentStyle::Line("#"))
+        ));
+        assert!(matches!(
+            comment_style("Shell"),
+            Some(CommentStyle::Line("#"))
+        ));
+        assert!(matches!(
+            comment_style("TSX"),
+            Some(CommentStyle::Line("//"))
+        ));
+        assert!(matches!(
             comment_style("CSS"),
             Some(CommentStyle::Block { .. })
         ));
@@ -1104,5 +1200,44 @@ mod tests {
             [3..5, 6..8, 0..2]
         );
         assert!(add_next_occurrence(text, &[0..2, 3..5, 6..8]).is_none());
+    }
+
+    fn tidied(text: &str, trim: bool, final_newline: bool) -> String {
+        match tidy_edit(text, trim, final_newline) {
+            Some((range, replacement)) => {
+                let mut out = String::from(&text[..range.start]);
+                out.push_str(&replacement);
+                out.push_str(&text[range.end..]);
+                out
+            }
+            None => text.to_string(),
+        }
+    }
+
+    #[test]
+    fn tidy_trims_line_ends_and_keeps_crlf() {
+        assert_eq!(
+            tidied("a  \r\n\tb\t\n   \nc ", true, false),
+            "a\r\n\tb\n\nc"
+        );
+        assert_eq!(tidied("é  \nü", true, false), "é\nü");
+    }
+
+    #[test]
+    fn tidy_adds_one_final_newline() {
+        assert_eq!(tidied("a", false, true), "a\n");
+        assert_eq!(tidied("a  ", true, true), "a\n");
+        assert!(
+            tidy_edit("", false, true).is_none(),
+            "an empty file stays empty"
+        );
+        assert!(tidy_edit("a\n", true, true).is_none());
+    }
+
+    #[test]
+    fn tidy_replaces_only_the_changed_span() {
+        let (range, replacement) = tidy_edit("keep\nx  \nkeep\n", true, false).unwrap();
+        assert_eq!(range, 6..8);
+        assert_eq!(replacement, "");
     }
 }

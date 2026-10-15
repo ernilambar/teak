@@ -31,6 +31,7 @@ gpui_kit::actions!(
         QuickOpen,
         AddFolder,
         CloseAllFolders,
+        ClearRecent,
         SaveFile,
         SaveFileAs,
         SaveAll,
@@ -170,7 +171,8 @@ fn main() {
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
-        cx.set_menus(commands::menus(&theme_choice));
+        // The app replaces these once it has loaded the recent list.
+        cx.set_menus(commands::menus(&theme_choice, &[]));
 
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions {
@@ -225,8 +227,11 @@ fn main() {
             // Re-render whenever the window is (de)activated so a file deleted
             // while the app was in the background is reflected in its tab.
             app.update(cx, |_this, cx| {
-                cx.observe_window_activation(window, |this, _window, cx| {
+                cx.observe_window_activation(window, |this, window, cx| {
                     this.reload_tree();
+                    if window.is_window_active() {
+                        this.check_outside_change(window, cx);
+                    }
                     cx.notify()
                 })
                 .detach();
