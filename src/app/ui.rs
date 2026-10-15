@@ -33,7 +33,8 @@ use crate::{
     RevealInFinder,
 };
 
-use super::{Preview, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TinytextApp};
+use super::workspace::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
+use super::{Preview, TinytextApp};
 
 /// Floor on a tab's width. Tabs size to their full titles while the strip has
 /// room, shrink with an ellipsis down to this floor as it fills, and past that
@@ -151,7 +152,7 @@ fn colored_icon(bytes: &'static [u8], cx: &App) -> Option<Arc<RenderImage>> {
 impl TinytextApp {
     pub(super) fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
-        let active = self.active_tab;
+        let active = self.tabs.active_index();
         let theme = cx.theme();
         let dirty_color = theme.foreground;
         let deleted_color = theme.red;
@@ -165,8 +166,8 @@ impl TinytextApp {
         let fg = theme.muted_foreground;
         let active_fg = theme.foreground;
         let accent = theme.blue;
-        let show_icons = self.settings.ui.tab_icons();
-        let icon_style = self.settings.ui.icon_style();
+        let show_icons = self.settings.values.ui.tab_icons();
+        let icon_style = self.settings.values.ui.icon_style();
 
         let tabs: Vec<Stateful<Div>> = self
             .tabs
@@ -272,7 +273,7 @@ impl TinytextApp {
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, _, _, _cx| {
-                            this.context_tab = Some(ix);
+                            this.tabs.set_context(Some(ix));
                         }),
                     )
             })
@@ -289,11 +290,11 @@ impl TinytextApp {
             .bg(bar_bg)
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _cx| {
                 if event.button == MouseButton::Right {
-                    this.context_tab = None;
+                    this.tabs.set_context(None);
                 }
             }))
             .context_menu(move |menu, _, cx| {
-                let Some(ix) = menu_entity.read(cx).context_tab else {
+                let Some(ix) = menu_entity.read(cx).tabs.context() else {
                     return menu;
                 };
                 let (tab_count, has_deleted) = {
@@ -373,7 +374,7 @@ impl TinytextApp {
                     .h_flex()
                     .overflow_x_scroll()
                     .lock_scroll_axis()
-                    .track_scroll(&self.tab_scroll)
+                    .track_scroll(self.tabs.scroll())
                     .children(tabs)
                     // The empty area right of the last tab. Dropping here moves the
                     // dragged tab to the end; the border marks that final gap. It is
@@ -428,9 +429,9 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        if self.sidebar_visible {
+        if self.workspace.sidebar_visible() {
             let sidebar = resizable_panel()
-                .size(px(self.sidebar_width as f32))
+                .size(px(self.workspace.width() as f32))
                 .size_range(px(SIDEBAR_MIN_WIDTH as f32)..px(SIDEBAR_MAX_WIDTH as f32))
                 .child(self.render_sidebar(cx));
             let editor = resizable_panel().child(self.render_editor_panel(window, cx));
@@ -442,14 +443,14 @@ impl TinytextApp {
                         // The panel sized by the drag is the one the sidebar
                         // sits in: slot 0 on the left, the leftover slot on the
                         // right.
-                        let ix = usize::from(this.settings.ui.sidebar_right());
+                        let ix = usize::from(this.settings.values.ui.sidebar_right());
                         let Some(width) = state.read(cx).sizes().get(ix).copied() else {
                             return;
                         };
                         let width = (width.as_f32().round() as u32)
                             .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
-                        if width != this.sidebar_width {
-                            this.sidebar_width = width;
+                        if width != this.workspace.width() {
+                            this.workspace.set_width(width);
                             this.save_session();
                         }
                     })
@@ -458,9 +459,9 @@ impl TinytextApp {
             };
 
             let group = h_resizable("workspace-panels")
-                .with_state(&self.panels_state)
+                .with_state(self.workspace.panels())
                 .on_resize(on_resize);
-            let group = if self.settings.ui.sidebar_right() {
+            let group = if self.settings.values.ui.sidebar_right() {
                 group.child(editor).child(sidebar)
             } else {
                 group.child(sidebar).child(editor)
@@ -488,7 +489,7 @@ impl TinytextApp {
                 this.child(self.render_tab_bar(cx))
             })
             .child(div().flex_1().min_h_0().child(self.render_editor_for(
-                self.active_tab,
+                self.tabs.active_index(),
                 window,
                 cx,
             )))
@@ -522,7 +523,7 @@ impl TinytextApp {
                             })),
                     ),
             )
-            .child(if self.workspace_roots.is_empty() {
+            .child(if self.workspace.roots().is_empty() {
                 self.render_sidebar_empty(cx).into_any_element()
             } else {
                 self.render_tree(cx).into_any_element()
@@ -560,7 +561,7 @@ impl TinytextApp {
     /// The virtualized list of the flattened workspace tree. Roots are the
     /// first rows at depth 0, each followed by its expanded subtree.
     fn render_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let row_count = self.visible_rows.len();
+        let row_count = self.workspace.rows().len();
         div()
             .id("explorer-scroll")
             .flex_1()
@@ -573,7 +574,7 @@ impl TinytextApp {
                     cx.processor(|this, range: Range<usize>, _window, cx| {
                         range
                             .map(|ix| {
-                                let row = &this.visible_rows[ix];
+                                let row = &this.workspace.rows()[ix];
                                 let (path, depth, is_dir, is_root) =
                                     (row.path.clone(), row.depth, row.is_dir, row.is_root);
                                 this.tree_row(&path, is_dir, depth, is_root, cx)
@@ -582,9 +583,9 @@ impl TinytextApp {
                     }),
                 )
                 .size_full()
-                .track_scroll(&self.tree_scroll),
+                .track_scroll(self.workspace.scroll()),
             )
-            .vertical_scrollbar(&self.tree_scroll)
+            .vertical_scrollbar(self.workspace.scroll())
     }
 
     pub(super) fn tree_row(
@@ -595,8 +596,8 @@ impl TinytextApp {
         is_root: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let selected = self.selected_path.as_deref() == Some(path);
-        let expanded = self.expanded.contains(path);
+        let selected = self.workspace.selected() == Some(path);
+        let expanded = self.workspace.is_expanded(path);
         let muted = cx.theme().muted_foreground;
 
         let leading = if is_dir {
@@ -612,7 +613,7 @@ impl TinytextApp {
             div().w(px(14.)).into_any_element()
         };
 
-        let icon_style = self.settings.ui.icon_style();
+        let icon_style = self.settings.values.ui.icon_style();
         let type_icon = if is_dir {
             file_type_icon(folder_icon(), icon_style, cx)
         } else {
@@ -640,14 +641,9 @@ impl TinytextApp {
                     .child(div().text_sm().whitespace_nowrap().child(label)),
             )
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                this.selected_path = Some(click_path.clone());
+                this.workspace.set_selected(Some(click_path.clone()));
                 if is_dir {
-                    if this.expanded.contains(&click_path) {
-                        this.expanded.remove(&click_path);
-                    } else {
-                        this.expanded.insert(click_path.clone());
-                    }
-                    this.rebuild_visible_rows();
+                    this.workspace.toggle_expanded(&click_path);
                 } else if event.click_count() == 1 {
                     this.request_open(click_path.clone(), window, cx);
                 }
@@ -663,7 +659,7 @@ impl TinytextApp {
                         .map(Path::to_path_buf)
                         .unwrap_or_default()
                 };
-                let can_paste = menu_entity.read(cx).file_clipboard.is_some();
+                let can_paste = menu_entity.read(cx).workspace.clipboard().is_some();
 
                 let menu = if is_dir {
                     let new_file_entity = menu_entity.clone();
@@ -880,15 +876,16 @@ impl TinytextApp {
                             .appearance(false)
                             .bordered(false)
                             .when_some(
-                                self.settings.editor.font_family.clone(),
+                                self.settings.values.editor.font_family.clone(),
                                 |editor, family| editor.font_family(family),
                             )
-                            .when_some(self.settings.editor.font_size(), |editor, size| {
+                            .when_some(self.settings.values.editor.font_size(), |editor, size| {
                                 editor.text_size(px(size))
                             })
-                            .when_some(self.settings.editor.font_weight(), |editor, weight| {
-                                editor.font_weight(FontWeight::from(weight))
-                            })
+                            .when_some(
+                                self.settings.values.editor.font_weight(),
+                                |editor, weight| editor.font_weight(FontWeight::from(weight)),
+                            )
                             .context_menu(move |menu, _, _| {
                                 // Built while the editor state is mid-update, so it must not
                                 // read that state. Cut and Copy no-op without a selection.
@@ -980,7 +977,10 @@ impl TinytextApp {
                     let item = PopupMenuItem::new(value.clone()).on_click(move |_, _, cx| {
                         let value = value.clone();
                         entity.update(cx, |this, cx| {
-                            if let Some(tab) = this.active_tab.and_then(|ix| this.tabs.get_mut(ix))
+                            if let Some(tab) = this
+                                .tabs
+                                .active_index()
+                                .and_then(|ix| this.tabs.get_mut(ix))
                             {
                                 tab.language = value.clone();
                                 tab.language_override = true;
@@ -1025,7 +1025,7 @@ impl TinytextApp {
                 format_size(image.bytes.len())
             )));
         }
-        if let Some(label) = self.busy.clone() {
+        if let Some(label) = self.chrome.busy().cloned() {
             status = status.left(
                 div()
                     .h_flex()
@@ -1046,8 +1046,10 @@ impl TinytextApp {
             );
         }
 
+        let (cursor_line, cursor_col) = self.chrome.cursor();
+
         status
-            .left(div().child(format!("Ln {}, Col {}", self.cursor_line, self.cursor_col)))
+            .left(div().child(format!("Ln {cursor_line}, Col {cursor_col}")))
             .left(divider())
             .left(div().child("UTF-8"))
             .right(language_button)

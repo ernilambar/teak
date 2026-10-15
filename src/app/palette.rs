@@ -11,20 +11,11 @@
 
 use gpui_kit::component::{
     ActiveTheme as _,
-    command::{Command, CommandGroup, CommandItem, CommandState},
+    command::{Command, CommandState},
 };
 use gpui_kit::*;
 
-use crate::{
-    About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
-    CloseAllFolders, CloseTab, CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp,
-    CopyRelativePath, DeleteLine, GoToLine, InsertLineAbove, InsertLineBelow, MoveLineDown,
-    MoveLineUp, NewFile, NextTab, OpenDefaultSettings, OpenFile, OpenSettings, PreviousTab,
-    QuickOpen, Refresh, ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine,
-    SetTheme, SplitSelectionIntoLines, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
-    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
-    ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
-};
+use crate::CommandPalette;
 
 use super::TinytextApp;
 
@@ -32,88 +23,6 @@ use super::TinytextApp;
 const PALETTE_WIDTH: Pixels = px(560.);
 /// Gap between the top of the window and the palette panel.
 const PALETTE_TOP: Pixels = px(72.);
-
-/// The actions the palette offers, grouped like the menu bar. Each item carries
-/// its action, so the default row also shows that action's keybinding.
-fn palette_groups() -> Vec<CommandGroup> {
-    let item = |label: &'static str, action: Box<dyn Action>| {
-        CommandItem::new().label(label).action(action)
-    };
-
-    vec![
-        CommandGroup::new().label("File").items([
-            item("New File", Box::new(NewFile)),
-            item("Open…", Box::new(OpenFile)),
-            item("Quick Open…", Box::new(QuickOpen)),
-            item("Add Folder…", Box::new(AddFolder)),
-            item("Close All Folders", Box::new(CloseAllFolders)),
-            item("Save", Box::new(SaveFile)),
-            item("Save As…", Box::new(SaveFileAs)),
-            item("Save All", Box::new(SaveAll)),
-            item("Close Tab", Box::new(CloseTab)),
-            item("Reopen Closed Tab", Box::new(ReopenClosedTab)),
-            item("Reveal in Finder", Box::new(RevealInFinder)),
-        ]),
-        CommandGroup::new().label("Edit").items([
-            item("Toggle Line Comment", Box::new(ToggleLineComment)),
-            item("Delete Line", Box::new(DeleteLine)),
-            item("Select Line", Box::new(SelectLine)),
-            item("Move Line Up", Box::new(MoveLineUp)),
-            item("Move Line Down", Box::new(MoveLineDown)),
-            item("Copy Line Up", Box::new(CopyLineUp)),
-            item("Copy Line Down", Box::new(CopyLineDown)),
-            item("Insert Line Above", Box::new(InsertLineAbove)),
-            item("Insert Line Below", Box::new(InsertLineBelow)),
-            CommandItem::new()
-                .label("Go to Line…")
-                .keywords(["goto"])
-                .action(Box::new(GoToLine)),
-            item("Add Cursor Above", Box::new(AddCursorAbove)),
-            item("Add Cursor Below", Box::new(AddCursorBelow)),
-            item("Split into Lines", Box::new(SplitSelectionIntoLines)),
-            item("Add Next Occurrence", Box::new(AddNextOccurrence)),
-            item("Copy Path", Box::new(CopyFilePath)),
-            item("Copy Relative Path", Box::new(CopyRelativePath)),
-        ]),
-        CommandGroup::new().label("View").items([
-            item("Toggle Sidebar", Box::new(ToggleSidebar)),
-            item("Refresh", Box::new(Refresh)),
-            item("Zoom In", Box::new(ZoomIn)),
-            item("Zoom Out", Box::new(ZoomOut)),
-            item("Actual Size", Box::new(ZoomReset)),
-            item("Toggle Word Wrap", Box::new(ToggleWordWrap)),
-            item("Toggle Invisible Characters", Box::new(ToggleWhitespace)),
-            item("Toggle Line Numbers", Box::new(ToggleLineNumbers)),
-            item("Toggle Indent Guides", Box::new(ToggleIndentGuides)),
-            item("Toggle Code Folding", Box::new(ToggleFolding)),
-            item("Toggle Preview", Box::new(ToggleMarkdownPreview)),
-            item("Toggle Auto Close Brackets", Box::new(ToggleAutoClose)),
-            item("Toggle Smart Indent", Box::new(ToggleSmartIndent)),
-            item("Next Tab", Box::new(NextTab)),
-            item("Previous Tab", Box::new(PreviousTab)),
-        ]),
-        CommandGroup::new()
-            .label("Appearance")
-            .items(crate::THEME_CHOICES.iter().map(|(value, label)| {
-                CommandItem::new()
-                    .label(*label)
-                    .keywords(["theme", "appearance"])
-                    .action(Box::new(SetTheme((*value).to_string())))
-            })),
-        CommandGroup::new().label("Tinytext").items([
-            CommandItem::new()
-                .label("Settings…")
-                .keywords(["preferences", "config"])
-                .action(Box::new(OpenSettings)),
-            CommandItem::new()
-                .label("Default Settings")
-                .keywords(["defaults", "preferences", "reference"])
-                .action(Box::new(OpenDefaultSettings)),
-            item("Check for Updates…", Box::new(CheckForUpdates)),
-            item("About Tinytext", Box::new(About)),
-        ]),
-    ]
-}
 
 impl TinytextApp {
     /// Opens the palette, or closes it when it is already open.
@@ -123,7 +32,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.palette.is_some() {
+        if self.overlays.is_palette_open() {
             self.close_palette(window, cx);
         } else {
             self.open_palette(window, cx);
@@ -132,14 +41,13 @@ impl TinytextApp {
 
     fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Keep the quick-open finder and the palette from stacking.
-        if self.quick_open.is_some() {
+        if self.overlays.is_quick_open_open() {
             self.close_quick_open(window, cx);
         }
 
         let state = cx.new(|cx| CommandState::new(window, cx));
         // Remember what held focus so it can be restored once the palette closes.
-        self.palette_return_focus = window.focused(cx);
-        self.palette = Some(state.clone());
+        self.overlays.set_palette(state.clone(), window.focused(cx));
         cx.notify();
         // The query input only exists in the tree after the first render, so the
         // focus request is deferred until the overlay has mounted.
@@ -149,7 +57,7 @@ impl TinytextApp {
     }
 
     pub(super) fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(state) = self.palette.take() else {
+        let Some((state, return_focus)) = self.overlays.take_palette() else {
             return;
         };
         // Restore focus only while the palette still holds it. An action that
@@ -157,11 +65,9 @@ impl TinytextApp {
         // there, and stealing it back would break that dialog.
         let command_handle = state.read(cx).focus_handle(cx);
         if window.focused(cx).as_ref() == Some(&command_handle)
-            && let Some(previous) = self.palette_return_focus.take()
+            && let Some(previous) = return_focus
         {
             window.focus(&previous, cx);
-        } else {
-            self.palette_return_focus = None;
         }
         cx.notify();
     }
@@ -200,7 +106,9 @@ impl TinytextApp {
                     });
                 }
             });
-        for group in palette_groups() {
+        // Declared once in `commands.rs`; each row carries its action, so the
+        // default row also shows that action's keybinding.
+        for group in crate::commands::palette_groups() {
             command = command.group(group);
         }
 
@@ -248,10 +156,13 @@ mod tests {
 
             window.press("cmd-shift-p", cx);
             window.render_frame(cx);
-            assert!(app.read(cx).palette.is_some(), "the palette should open");
+            assert!(
+                app.read(cx).overlays.is_palette_open(),
+                "the palette should open"
+            );
             // The app defers its focus request to the next frame, so mirror it
             // explicitly here the way the kit's palette fixtures do.
-            if let Some(palette) = app.read(cx).palette.clone() {
+            if let Some(palette) = app.read(cx).overlays.palette().cloned() {
                 palette.update(cx, |state, cx| state.focus(window, cx));
             }
             window.render_frame(cx);
@@ -262,7 +173,10 @@ mod tests {
         .unwrap();
         cx.run_until_parked();
         cx.update_window(handle, |_, window, cx| {
-            assert!(app.read(cx).palette.is_none(), "Escape closes the palette");
+            assert!(
+                !app.read(cx).overlays.is_palette_open(),
+                "Escape closes the palette"
+            );
             assert_eq!(
                 window.focused(cx).as_ref(),
                 Some(&app.read(cx).focus_handle),

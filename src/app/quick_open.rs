@@ -57,7 +57,7 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.quick_open.is_some() {
+        if self.overlays.is_quick_open_open() {
             self.close_quick_open(window, cx);
         } else {
             self.open_quick_open(window, cx);
@@ -66,14 +66,14 @@ impl TinytextApp {
 
     fn open_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Keep these overlays exclusive, they would stack otherwise.
-        if self.palette.is_some() {
+        if self.overlays.is_palette_open() {
             self.close_palette(window, cx);
         }
 
         let state = cx.new(|cx| CommandState::new(window, cx));
         // Remember what held focus so it can be restored once the finder closes.
-        self.quick_open_return_focus = window.focused(cx);
-        self.quick_open = Some(state.clone());
+        self.overlays
+            .set_quick_open(state.clone(), window.focused(cx));
         cx.notify();
         // The query input only exists in the tree after the first render, so the
         // focus request is deferred until the overlay has mounted.
@@ -84,7 +84,7 @@ impl TinytextApp {
         // The index is rebuilt for every open so late file creation and
         // removals are picked up; the walk runs off the main thread. With no
         // workspace roots the open tabs stand in for the project.
-        let roots = self.workspace_roots.clone();
+        let roots = self.workspace.roots().to_vec();
         let fallback: Vec<PathBuf> = self
             .tabs
             .iter()
@@ -102,7 +102,7 @@ impl TinytextApp {
                 })
                 .await;
             this.update_in(cx, |this, _window, cx| {
-                this.open_paths = files;
+                this.overlays.set_open_paths(files);
                 cx.notify();
             })
             .ok();
@@ -114,16 +114,14 @@ impl TinytextApp {
     /// holds it. An action that opened its own dialog has already moved focus
     /// there, and stealing it back would break that dialog.
     pub(super) fn close_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(state) = self.quick_open.take() else {
+        let Some((state, return_focus)) = self.overlays.take_quick_open() else {
             return;
         };
         let finder_handle = state.read(cx).focus_handle(cx);
         if window.focused(cx).as_ref() == Some(&finder_handle)
-            && let Some(previous) = self.quick_open_return_focus.take()
+            && let Some(previous) = return_focus
         {
             window.focus(&previous, cx);
-        } else {
-            self.quick_open_return_focus = None;
         }
         cx.notify();
     }
@@ -141,7 +139,7 @@ impl TinytextApp {
     /// The rows for the current query: fuzzy matches ranked best first, or with
     /// an empty query the open tabs ahead of the remaining index in path order.
     pub(super) fn quick_open_items(&self, query: &str) -> Vec<CommandItem> {
-        let icon_style = self.settings.ui.icon_style();
+        let icon_style = self.settings.values.ui.icon_style();
         let query = query.trim();
         let opened: HashMap<&Path, usize> = self
             .tabs
@@ -151,10 +149,11 @@ impl TinytextApp {
             .collect();
 
         let mut ranked: Vec<(u32, usize, String, PathBuf)> = self
-            .open_paths
+            .overlays
+            .open_paths()
             .iter()
             .filter_map(|path| {
-                let rel = match nearest_root(&self.workspace_roots, path) {
+                let rel = match nearest_root(self.workspace.roots(), path) {
                     Some(root) => relative_display(path, root),
                     None => path.display().to_string(),
                 };
@@ -320,12 +319,12 @@ mod tests {
             window.press("cmd-p", cx);
             window.render_frame(cx);
             assert!(
-                app.read(cx).quick_open.is_some(),
+                app.read(cx).overlays.is_quick_open_open(),
                 "the finder should be open"
             );
             // The app defers its focus request to the next frame, so mirror it
             // explicitly here the way the kit's palette fixtures do.
-            if let Some(finder) = app.read(cx).quick_open.clone() {
+            if let Some(finder) = app.read(cx).overlays.quick_open().cloned() {
                 finder.update(cx, |state, cx| state.focus(window, cx));
             }
             window.render_frame(cx);
@@ -333,7 +332,7 @@ mod tests {
             window.input("a", cx);
             window.press("escape", cx);
             window.render_frame(cx);
-            let finder = app.read(cx).quick_open.clone();
+            let finder = app.read(cx).overlays.quick_open().cloned();
             assert_eq!(
                 finder.map(|state| state.read(cx).query(cx).to_string()),
                 Some(String::new()),
@@ -347,7 +346,7 @@ mod tests {
         cx.run_until_parked();
         cx.update_window(handle, |_, window, cx| {
             assert!(
-                !app.read(cx).quick_open.is_some(),
+                !app.read(cx).overlays.is_quick_open_open(),
                 "the second Escape closes the finder"
             );
             assert_eq!(
@@ -373,7 +372,10 @@ mod tests {
 
             window.press("cmd-shift-p", cx);
             window.render_frame(cx);
-            assert!(app.read(cx).palette.is_some(), "the palette should open");
+            assert!(
+                app.read(cx).overlays.is_palette_open(),
+                "the palette should open"
+            );
 
             // The File group's third row is "Quick Open…".
             window.click(IndexPath::new(2).section(0), cx);
@@ -383,10 +385,10 @@ mod tests {
         cx.run_until_parked();
         cx.update_window(handle, |_, window, cx| {
             assert!(
-                app.read(cx).palette.is_none(),
+                !app.read(cx).overlays.is_palette_open(),
                 "the palette should close behind the finder"
             );
-            let finder = app.read(cx).quick_open.clone();
+            let finder = app.read(cx).overlays.quick_open().cloned();
             assert!(finder.is_some(), "the finder should be open");
             assert_eq!(
                 window.focused(cx).as_ref(),

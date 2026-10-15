@@ -1,5 +1,6 @@
 mod app;
 mod cli;
+mod commands;
 mod file_icons;
 mod fuzzy;
 mod keymap;
@@ -13,9 +14,7 @@ mod update;
 
 use std::path::PathBuf;
 
-use gpui_kit::component::{
-    ThemeMode, ThemeRegistry, WindowExt as _, input, notification::Notification,
-};
+use gpui_kit::component::{ThemeMode, ThemeRegistry, WindowExt as _, notification::Notification};
 use gpui_kit::*;
 
 use app::{TinytextApp, WINDOW_TITLE};
@@ -171,7 +170,7 @@ fn main() {
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
-        cx.set_menus(app_menus(&theme_choice));
+        cx.set_menus(commands::menus(&theme_choice));
 
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions {
@@ -291,108 +290,4 @@ pub(crate) fn theme_mode_from(theme: &str) -> ThemeMode {
         "light" => ThemeMode::Light,
         _ => ThemeMode::Dark,
     }
-}
-
-pub(crate) fn app_menus(theme: &str) -> Vec<Menu> {
-    vec![
-        Menu::new("Tinytext").items([
-            MenuItem::action("About Tinytext", About),
-            MenuItem::action("Check for Updates…", CheckForUpdates),
-            MenuItem::separator(),
-            MenuItem::action("Settings…", OpenSettings),
-            MenuItem::action("Open Themes Folder", OpenThemesFolder),
-            MenuItem::separator(),
-            MenuItem::action("Install Command Line Tool…", InstallCli),
-            MenuItem::separator(),
-            MenuItem::os_submenu("Services", SystemMenuType::Services),
-            MenuItem::separator(),
-            MenuItem::action("Hide Tinytext", Hide),
-            MenuItem::action("Hide Others", HideOthers),
-            MenuItem::action("Show All", ShowAll),
-            MenuItem::separator(),
-            MenuItem::action("Quit Tinytext", Quit),
-        ]),
-        Menu::new("File").items([
-            MenuItem::action("New File", NewFile),
-            MenuItem::action("Open…", OpenFile),
-            MenuItem::action("Quick Open…", QuickOpen),
-            MenuItem::action("Add Folder…", AddFolder),
-            MenuItem::action("Close All Folders", CloseAllFolders),
-            MenuItem::separator(),
-            MenuItem::action("Save", SaveFile),
-            MenuItem::action("Save As…", SaveFileAs),
-            MenuItem::action("Save All", SaveAll),
-            MenuItem::separator(),
-            MenuItem::action("Close Tab", CloseTab),
-            MenuItem::action("Reopen Last Closed Tab", ReopenClosedTab),
-        ]),
-        Menu::new("Edit").items([
-            MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
-            MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
-            MenuItem::separator(),
-            MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
-            MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
-            MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
-            MenuItem::separator(),
-            MenuItem::action("Copy Path", CopyFilePath),
-            MenuItem::action("Copy Relative Path", CopyRelativePath),
-            MenuItem::separator(),
-            MenuItem::action("Find…", input::Search),
-            MenuItem::action("Find and Replace…", input::Replace),
-            MenuItem::separator(),
-            MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
-            MenuItem::separator(),
-            MenuItem::action("Indent", input::Indent),
-            MenuItem::action("Outdent", input::Outdent),
-            MenuItem::separator(),
-            MenuItem::action("Add Cursor Above", AddCursorAbove),
-            MenuItem::action("Add Cursor Below", AddCursorBelow),
-            MenuItem::action("Split into Lines", SplitSelectionIntoLines),
-            MenuItem::action("Add Next Occurrence", AddNextOccurrence),
-            MenuItem::separator(),
-            MenuItem::action("Toggle Line Comment", ToggleLineComment),
-            MenuItem::action("Delete Line", DeleteLine),
-            MenuItem::action("Select Line", SelectLine),
-            MenuItem::separator(),
-            MenuItem::action("Move Line Up", MoveLineUp),
-            MenuItem::action("Move Line Down", MoveLineDown),
-            MenuItem::action("Copy Line Up", CopyLineUp),
-            MenuItem::action("Copy Line Down", CopyLineDown),
-            MenuItem::separator(),
-            MenuItem::action("Insert Line Above", InsertLineAbove),
-            MenuItem::action("Insert Line Below", InsertLineBelow),
-            MenuItem::separator(),
-            MenuItem::action("Go to Line…", GoToLine),
-        ]),
-        Menu::new("View").items([
-            MenuItem::action("Command Palette…", CommandPalette),
-            MenuItem::separator(),
-            MenuItem::action("Toggle Sidebar", ToggleSidebar),
-            MenuItem::action("Refresh", Refresh),
-            MenuItem::separator(),
-            MenuItem::action("Zoom In", ZoomIn),
-            MenuItem::action("Zoom Out", ZoomOut),
-            MenuItem::action("Actual Size", ZoomReset),
-            MenuItem::separator(),
-            MenuItem::action("Toggle Word Wrap", ToggleWordWrap),
-            MenuItem::action("Toggle Invisible Characters", ToggleWhitespace),
-            MenuItem::action("Toggle Line Numbers", ToggleLineNumbers),
-            MenuItem::action("Toggle Indent Guides", ToggleIndentGuides),
-            MenuItem::action("Toggle Code Folding", ToggleFolding),
-            MenuItem::action("Toggle Preview", ToggleMarkdownPreview),
-            MenuItem::separator(),
-            MenuItem::action("Next Tab", NextTab),
-            MenuItem::action("Previous Tab", PreviousTab),
-            MenuItem::separator(),
-            MenuItem::submenu(theme_menu(theme)),
-        ]),
-    ]
-}
-
-/// The Appearance submenu: one item per choice, with a check mark on the active
-/// one.
-fn theme_menu(theme: &str) -> Menu {
-    Menu::new("Appearance").items(THEME_CHOICES.iter().map(|(value, label)| {
-        MenuItem::action(*label, SetTheme((*value).to_string())).checked(*value == theme)
-    }))
 }
