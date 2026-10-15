@@ -58,10 +58,10 @@ in headless environments.
   plain field has no `Context`. A group's fields are private to its own module: callers
   go through methods, and each group needs a `new()` because `mod.rs` cannot initialize
   private fields. Leaf records (`OpenTab`, `TreeRow`, `Settings`) keep `pub(super)`
-  fields so rendering can read them directly. `app/files.rs`, `editor.rs`, `palette.rs`,
-  `quick_open.rs` and `ui.rs` hold further `impl TinytextApp` orchestration blocks;
-  GPUI-free helpers live in `cli.rs`, `language.rs`, `paths.rs`, `session.rs`,
-  `settings.rs`, `update.rs`. Add a new module only once a feature is large enough to
+  fields so rendering can read them directly. `app/files.rs`, `editor.rs`, `find_in_files.rs`,
+  `palette.rs`, `quick_open.rs` and `ui.rs` hold further `impl TinytextApp`
+  orchestration blocks; GPUI-free helpers live in `cli.rs`, `language.rs`, `paths.rs`,
+  `search.rs`, `session.rs`, `settings.rs`, `update.rs`. Add a new module only once a feature is large enough to
   justify the boundary.
 - Every user-invokable command is declared once in `commands.rs`: label, action,
   chords, menu placement, palette placement and search keywords. The menu bar, the

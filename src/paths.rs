@@ -3,7 +3,12 @@ use std::path::{Path, PathBuf};
 const BUNDLE_ID: &str = "net.nilambar.tinytext";
 
 /// `~/Library/Application Support/<bundle id>`, home of session and settings files.
+/// Test builds use a per-run temp directory instead, so no test can overwrite
+/// the user's session, settings or themes.
 pub(crate) fn support_dir() -> Option<PathBuf> {
+    if cfg!(test) {
+        return Some(std::env::temp_dir().join(format!("tinytext-test-{}", std::process::id())));
+    }
     let home = std::env::var_os("HOME")?;
     Some(
         PathBuf::from(home)

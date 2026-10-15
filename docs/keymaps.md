@@ -32,6 +32,7 @@
 | `⌘↩` | `Cmd + Enter` | Insert Line Below |
 | `⌘⇧↩` | `Cmd + Shift + Enter` | Insert Line Above |
 | `⌘G` | `Cmd + G` | Go to Line… |
+| `⌘⇧F` | `Cmd + Shift + F` | Find in Files… |
 
 The usual macOS editing shortcuts also work: `⌘Z` / `⌘⇧Z` (undo / redo),
 `⌘X` / `⌘C` / `⌘V`, `⌘A`, `⌘F` (find and replace), word and line navigation,

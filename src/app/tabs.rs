@@ -104,6 +104,16 @@ pub(super) struct TabSet {
     context: Option<usize>,
     scroll: ScrollHandle,
     closed: Vec<ClosedTab>,
+    /// A Find in Files match to select once its file finishes opening.
+    pending_jump: Option<(PathBuf, Jump)>,
+}
+
+/// A 0-based line and character columns to select.
+#[derive(Clone, Copy)]
+pub(super) struct Jump {
+    pub(super) line: u32,
+    pub(super) start: u32,
+    pub(super) end: u32,
 }
 
 impl TabSet {
@@ -114,7 +124,20 @@ impl TabSet {
             context: None,
             scroll: ScrollHandle::new(),
             closed: Vec::new(),
+            pending_jump: None,
         }
+    }
+
+    pub(super) fn set_pending_jump(&mut self, path: PathBuf, jump: Jump) {
+        self.pending_jump = Some((path, jump));
+    }
+
+    /// The pending jump, if it is for `path`.
+    pub(super) fn take_pending_jump(&mut self, path: &std::path::Path) -> Option<Jump> {
+        if self.pending_jump.as_ref()?.0 != path {
+            return None;
+        }
+        self.pending_jump.take().map(|(_, jump)| jump)
     }
 
     pub(super) fn len(&self) -> usize {
@@ -361,7 +384,14 @@ impl TinytextApp {
                 } else {
                     language_for(&path, text.lines().next().unwrap_or_default())
                 };
-                self.push_tab(Some(path), name.clone().into(), language, text, window, cx);
+                self.push_tab(
+                    Some(path.clone()),
+                    name.clone().into(),
+                    language,
+                    text,
+                    window,
+                    cx,
+                );
                 if let Some(ix) = self.tabs.active_index()
                     && let Some(tab) = self.tabs.get_mut(ix)
                 {
@@ -376,6 +406,11 @@ impl TinytextApp {
                         )),
                         cx,
                     );
+                }
+                if let Some(jump) = self.tabs.take_pending_jump(&path)
+                    && let Some(ix) = self.tabs.active_index()
+                {
+                    self.select_match(ix, jump, window, cx);
                 }
                 if large {
                     window.push_notification(

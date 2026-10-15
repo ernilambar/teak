@@ -1,6 +1,7 @@
 mod chrome;
 mod editor;
 mod files;
+mod find_in_files;
 mod overlays;
 mod palette;
 mod preferences;
@@ -993,6 +994,11 @@ impl Render for TinytextApp {
             .quick_open()
             .cloned()
             .map(|state| self.render_quick_open(&state, cx));
+        let find_in_files = self
+            .overlays
+            .find()
+            .cloned()
+            .map(|state| self.render_find_in_files(&state, cx));
         let settings_overlay = self.settings.is_open().then(|| self.render_settings(cx));
         // Only worth hinting while an editor is open; other panes have no carets.
         let alt_held = window.modifiers().alt && self.active().is_some();
@@ -1066,6 +1072,8 @@ impl Render for TinytextApp {
             .on_action(cx.listener(Self::on_add_next_occurrence))
             .on_action(cx.listener(Self::on_command_palette))
             .on_action(cx.listener(Self::on_quick_open))
+            .on_action(cx.listener(Self::on_find_in_files))
+            .on_action(cx.listener(Self::on_open_match))
             .on_action(cx.listener(Self::on_open_path))
             .child(self.render_workspace(window, cx))
             .child(self.render_status_bar(alt_held, cx));
@@ -1075,6 +1083,10 @@ impl Render for TinytextApp {
             None => root,
         };
         let root = match quick_open {
+            Some(overlay) => root.child(overlay),
+            None => root,
+        };
+        let root = match find_in_files {
             Some(overlay) => root.child(overlay),
             None => root,
         };

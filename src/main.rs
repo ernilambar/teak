@@ -7,6 +7,7 @@ mod keymap;
 mod language;
 mod markdown;
 mod paths;
+mod search;
 mod session;
 mod settings;
 mod theme;
@@ -29,6 +30,7 @@ gpui_kit::actions!(
         NewFile,
         OpenFile,
         QuickOpen,
+        FindInFiles,
         AddFolder,
         CloseAllFolders,
         ClearRecent,
@@ -94,6 +96,17 @@ pub struct JumpToTab(usize);
 #[derive(Clone, PartialEq, gpui_kit::Action)]
 #[action(namespace = tinytext, no_json)]
 pub struct OpenPath(pub(crate) PathBuf);
+
+/// Opens a Find in Files result with the match selected. `line`, `start` and
+/// `end` are 0-based, the columns in characters.
+#[derive(Clone, PartialEq, gpui_kit::Action)]
+#[action(namespace = tinytext, no_json)]
+pub struct OpenMatch {
+    pub(crate) path: PathBuf,
+    pub(crate) line: u32,
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+}
 
 /// Picks the appearance from the Appearance menu or the command palette. The
 /// payload is the `ui.theme` value: `light`, `dark`, or `system`.

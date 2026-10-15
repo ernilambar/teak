@@ -39,6 +39,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSString",
     "NSURL",
 ] }
+regex = "1.13"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 

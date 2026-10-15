@@ -31,13 +31,13 @@ use crate::paths::display_path;
 use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
     ClearRecent, CloseAllFolders, CloseTab, CommandPalette, CopyFilePath, CopyLineDown, CopyLineUp,
-    CopyRelativePath, DeleteLine, GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow,
-    InstallCli, JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextTab, OpenDefaultSettings,
-    OpenFile, OpenPath, OpenSettings, OpenThemesFolder, PreviousTab, QuickOpen, Quit, Refresh,
-    ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll,
-    SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
-    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
-    ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    CopyRelativePath, DeleteLine, FindInFiles, GoToLine, Hide, HideOthers, InsertLineAbove,
+    InsertLineBelow, InstallCli, JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextTab,
+    OpenDefaultSettings, OpenFile, OpenPath, OpenSettings, OpenThemesFolder, PreviousTab,
+    QuickOpen, Quit, Refresh, ReopenClosedTab, RevealInFinder, SaveAll, SaveFile, SaveFileAs,
+    SelectLine, SetTheme, ShowAll, SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose,
+    ToggleFolding, ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview,
+    ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -199,6 +199,19 @@ static COMMANDS: &[Command] = &[
         keywords: &["recent", "history"],
     },
     // Edit
+    Command {
+        label: "Find in Files…",
+        make: || Box::new(FindInFiles),
+        // The editor binds this chord to Replace, so the editor scope is needed
+        // for Find in Files to win while an editor has focus.
+        bindings: &[
+            ("cmd-shift-f", Scope::Global),
+            ("cmd-shift-f", Scope::Editor),
+        ],
+        menu: Some((MenuKind::Edit, 6)),
+        palette: Some((PaletteGroup::Edit, 16)),
+        keywords: &["search", "grep", "project"],
+    },
     Command {
         label: "Copy Path",
         make: || Box::new(CopyFilePath),
@@ -701,6 +714,7 @@ const EDIT_MENU: &[Entry] = &[
     Entry::Item(MenuItem::separator),
     Entry::Item(find),
     Entry::Item(find_and_replace),
+    Entry::Cluster(6),
     Entry::Item(MenuItem::separator),
     Entry::Item(select_all),
     Entry::Item(MenuItem::separator),
@@ -986,8 +1000,8 @@ mod tests {
     fn every_binding_parses() {
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
-        assert_eq!(app_bindings().len(), 37);
-        assert_eq!(editor_bindings().len(), 17);
+        assert_eq!(app_bindings().len(), 38);
+        assert_eq!(editor_bindings().len(), 18);
     }
 
     #[test]
@@ -1016,6 +1030,7 @@ mod tests {
             ("alt-cmd-r", "RevealInFinder"),
             ("alt-cmd-c", "CopyFilePath"),
             ("alt-cmd-shift-c", "CopyRelativePath"),
+            ("cmd-shift-f", "FindInFiles"),
         ] {
             assert!(resolve(&keymap, keys, &[])[0].ends_with(action));
             assert!(resolve(&keymap, keys, &["Input"])[0].ends_with(action));
@@ -1125,6 +1140,7 @@ mod tests {
                 &[
                     "Copy Path",
                     "Copy Relative Path",
+                    "Find in Files…",
                     "Add Cursor Above",
                     "Add Cursor Below",
                     "Split into Lines",
@@ -1275,7 +1291,7 @@ mod tests {
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 49);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 47);
+        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 50);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 48);
     }
 }
