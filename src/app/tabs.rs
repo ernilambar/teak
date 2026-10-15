@@ -249,9 +249,10 @@ impl TinytextApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let first_line = content.lines().next().unwrap_or_default();
         let language: SharedString = path
             .as_deref()
-            .map(language_for)
+            .map(|path| language_for(path, first_line))
             .unwrap_or_else(|| "Plain Text".into());
         let title: SharedString = path
             .as_deref()
@@ -358,7 +359,7 @@ impl TinytextApp {
                 let language = if large {
                     "Plain Text".into()
                 } else {
-                    language_for(&path)
+                    language_for(&path, text.lines().next().unwrap_or_default())
                 };
                 self.push_tab(Some(path), name.clone().into(), language, text, window, cx);
                 if let Some(ix) = self.tabs.active_index()

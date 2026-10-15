@@ -371,9 +371,11 @@ enum CommentStyle {
 /// no comments (plain text).
 fn comment_style(language: &str) -> Option<CommentStyle> {
     match language {
-        "Rust" | "JavaScript" | "TypeScript" | "PHP" | "JSON" => Some(CommentStyle::Line("//")),
-        "Python" | "TOML" => Some(CommentStyle::Line("#")),
-        "HTML" | "Markdown" => Some(CommentStyle::Block {
+        "Rust" | "JavaScript" | "TypeScript" | "TSX" | "PHP" | "JSON" => {
+            Some(CommentStyle::Line("//"))
+        }
+        "Python" | "TOML" | "YAML" | "Shell" => Some(CommentStyle::Line("#")),
+        "HTML" | "XML" | "Markdown" => Some(CommentStyle::Block {
             open: "<!--",
             close: "-->",
         }),
@@ -1025,6 +1027,18 @@ mod tests {
         assert!(matches!(
             comment_style("HTML"),
             Some(CommentStyle::Block { .. })
+        ));
+        assert!(matches!(
+            comment_style("YAML"),
+            Some(CommentStyle::Line("#"))
+        ));
+        assert!(matches!(
+            comment_style("Shell"),
+            Some(CommentStyle::Line("#"))
+        ));
+        assert!(matches!(
+            comment_style("TSX"),
+            Some(CommentStyle::Line("//"))
         ));
         assert!(matches!(
             comment_style("CSS"),

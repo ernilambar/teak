@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use gpui_kit::component::{
     WindowExt as _,
     button::ButtonVariant,
-    input::{Input, InputState},
+    input::{EditorState, Input, InputState},
     notification::Notification,
 };
 use gpui_kit::*;
@@ -132,6 +132,18 @@ pub(super) fn modified_time(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path)
         .and_then(|meta| meta.modified())
         .ok()
+}
+
+/// The start of the editor's first line, enough to read a shebang without
+/// copying a huge single-line file.
+fn first_line(editor: &Entity<EditorState>, cx: &App) -> String {
+    editor
+        .read(cx)
+        .text()
+        .chars()
+        .take_while(|&c| c != '\n')
+        .take(128)
+        .collect()
 }
 
 /// The notification shown when a file the user asked for cannot be opened.
@@ -537,7 +549,7 @@ impl TinytextApp {
         {
             tab.title = file_name(&path).into();
             if !tab.language_override {
-                let language = language_for(&path);
+                let language = language_for(&path, &first_line(&tab.editor, cx));
                 tab.editor.update(cx, |state, cx| {
                     state.set_highlighter(editor_language_id(&language), cx);
                 });
@@ -1046,7 +1058,7 @@ impl TinytextApp {
             };
             tab.title = file_name(&mapped).into();
             if !tab.language_override {
-                let language = language_for(&mapped);
+                let language = language_for(&mapped, &first_line(&tab.editor, cx));
                 tab.editor.update(cx, |state, cx| {
                     state.set_highlighter(editor_language_id(&language), cx);
                 });
