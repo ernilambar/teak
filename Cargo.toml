@@ -35,17 +35,11 @@ gpui-kit = { version = "0.7.3", features = [
 # Quick Open / Find in Files walk (`.gitignore` and `search.exclude`).
 globset = "0.4.20"
 ignore = "0.4.33"
-# Already in the tree through GPUI; used directly for NSFileManager (Trash).
-objc2-foundation = { version = "0.3.2", default-features = false, features = [
-    "std",
-    "NSError",
-    "NSFileManager",
-    "NSString",
-    "NSURL",
-] }
 regex = "1.13"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# Cross-platform Trash / Recycle Bin / freedesktop.org Trash.
+trash = "5.2"
 
 # The overlay UI tests render the real app in gpui-kit's headless window.
 [dev-dependencies]

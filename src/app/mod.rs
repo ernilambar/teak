@@ -29,7 +29,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-use crate::cli::{app_bundle_path, install_cli};
+use crate::cli::{install_cli, launcher_target};
 use crate::session::{SessionState, load_session, session_path};
 use crate::settings::{
     DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, UiSettings,
@@ -675,10 +675,10 @@ impl TinytextApp {
     }
 
     fn on_install_cli(&mut self, _: &InstallCli, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(bundle) = app_bundle_path() else {
+        let Some(app) = launcher_target() else {
             window.push_notification(
                 Notification::error(
-                    "Run the bundled Tinytext.app to install the command-line tool".to_string(),
+                    "Could not locate Tinytext to install the command-line tool".to_string(),
                 ),
                 cx,
             );
@@ -692,7 +692,7 @@ impl TinytextApp {
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { install_cli(&bundle) })
+                .spawn(async move { install_cli(&app) })
                 .await;
 
             this.update_in(cx, |this, window, cx| {
@@ -801,8 +801,8 @@ impl TinytextApp {
         self.add_document_tab("Default Settings", "JSON", document, window, cx);
     }
 
-    /// Reveals the user themes directory in Finder so installed color schemes
-    /// are easy to find and add to.
+    /// Reveals the user themes directory in the file manager so installed color
+    /// schemes are easy to find and add to.
     fn on_open_themes_folder(
         &mut self,
         _: &OpenThemesFolder,
@@ -1022,7 +1022,7 @@ impl Render for TinytextApp {
             .on_action(cx.listener(Self::on_add_folder))
             .on_action(cx.listener(Self::on_close_all_folders))
             .on_action(cx.listener(Self::on_clear_recent))
-            // Files and folders dragged in from Finder open like Open… does.
+            // Files and folders dragged in from the file manager open like Open… does.
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 for path in paths.paths() {
                     this.request_open(path.clone(), window, cx);
