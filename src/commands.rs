@@ -27,7 +27,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-use crate::paths::display_path;
+use crate::paths::{display_path, reveal_label};
 use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
     ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CommandPalette, CopyFilePath,
@@ -188,7 +188,7 @@ static COMMANDS: &[Command] = &[
         keywords: &[],
     },
     Command {
-        label: "Reveal in Finder",
+        label: reveal_label(),
         make: || Box::new(RevealInFinder),
         bindings: &[("alt-cmd-r", Scope::Global)],
         menu: None,

@@ -1,6 +1,14 @@
 use std::path::{Path, PathBuf};
 
-pub(crate) fn app_bundle_path() -> Option<PathBuf> {
+// Only the Linux and Windows installers write into the user's home directory;
+// the macOS one installs into `/usr/local/bin`.
+#[cfg(not(target_os = "macos"))]
+use crate::paths::home_dir;
+
+/// What the installed command-line tool launches: the `.app` bundle on macOS,
+/// the executable itself elsewhere.
+#[cfg(target_os = "macos")]
+pub(crate) fn launcher_target() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()?
         .ancestors()
@@ -8,7 +16,17 @@ pub(crate) fn app_bundle_path() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-pub(crate) fn launcher_script(bundle: &Path) -> String {
+/// What the installed command-line tool launches: the `.app` bundle on macOS,
+/// the executable itself elsewhere.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn launcher_target() -> Option<PathBuf> {
+    std::env::current_exe().ok()
+}
+
+/// The launcher script for a macOS `.app` bundle: options go to the binary
+/// inside the bundle, and everything else opens the app.
+#[cfg(any(target_os = "macos", test))]
+fn mac_launcher_script(bundle: &Path) -> String {
     let template = r#"#!/usr/bin/env bash
 # Command-line launcher for Tinytext, installed by the app.
 set -euo pipefail
@@ -36,11 +54,35 @@ exec open -a "$APP" -- "$@"
     template.replace("__BUNDLE__", &bundle.display().to_string())
 }
 
+/// The launcher script for a Linux executable: the binary already handles
+/// options and paths, so the script only forwards its arguments.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn linux_launcher_script(executable: &Path) -> String {
+    format!(
+        "#!/bin/sh\n# Command-line launcher for Tinytext, installed by the app.\nexec \"{}\" \"$@\"\n",
+        executable.display()
+    )
+}
+
+/// The launcher script for a Windows executable: a `.cmd` shim that forwards
+/// its arguments to the binary.
+#[cfg(any(target_os = "windows", test))]
+fn windows_launcher_script(executable: &Path) -> String {
+    format!(
+        "@echo off\r\nrem Command-line launcher for Tinytext, installed by the app.\r\n\"{}\" %*\r\n",
+        executable.display()
+    )
+}
+
+/// Installs the `tinytext` command. On macOS this needs an administrator
+/// prompt to write into `/usr/local/bin`; on Linux and Windows the command goes
+/// into a directory the user owns.
+#[cfg(target_os = "macos")]
 pub(crate) fn install_cli(bundle: &Path) -> Result<PathBuf, String> {
     const TARGET: &str = "/usr/local/bin/tinytext";
 
     let temp = std::env::temp_dir().join(format!("tinytext-cli-{}", std::process::id()));
-    std::fs::write(&temp, launcher_script(bundle)).map_err(|error| error.to_string())?;
+    std::fs::write(&temp, mac_launcher_script(bundle)).map_err(|error| error.to_string())?;
 
     let command = format!(
         "mkdir -p /usr/local/bin && install -m 755 \"{}\" {TARGET}",
@@ -70,6 +112,53 @@ pub(crate) fn install_cli(bundle: &Path) -> Result<PathBuf, String> {
     }
 
     Ok(PathBuf::from(TARGET))
+}
+
+/// Installs the `tinytext` command into `~/.local/bin`, which needs no
+/// administrator rights. The directory is created when missing.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn install_cli(executable: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let target = home_dir()
+        .ok_or("Could not find the home directory")?
+        .join(".local")
+        .join("bin")
+        .join("tinytext");
+
+    let temp = std::env::temp_dir().join(format!("tinytext-cli-{}", std::process::id()));
+    std::fs::write(&temp, linux_launcher_script(executable)).map_err(|error| error.to_string())?;
+    std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
+        .map_err(|error| error.to_string())?;
+
+    if let Some(directory) = target.parent() {
+        std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    }
+    std::fs::rename(&temp, &target).map_err(|error| error.to_string())?;
+
+    Ok(target)
+}
+
+/// Installs the `tinytext` command as a `.cmd` shim in
+/// `%LOCALAPPDATA%\Microsoft\WindowsApps`, a directory on `PATH` that the user
+/// owns, so no administrator rights are needed.
+#[cfg(target_os = "windows")]
+pub(crate) fn install_cli(executable: &Path) -> Result<PathBuf, String> {
+    let target = home_dir()
+        .ok_or("Could not find the home directory")?
+        .join("AppData")
+        .join("Local")
+        .join("Microsoft")
+        .join("WindowsApps")
+        .join("tinytext.cmd");
+
+    if let Some(directory) = target.parent() {
+        std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(&target, windows_launcher_script(executable))
+        .map_err(|error| error.to_string())?;
+
+    Ok(target)
 }
 
 #[derive(Debug, PartialEq)]
@@ -122,11 +211,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn launcher_script_embeds_bundle_path() {
-        let script = launcher_script(Path::new("/Applications/Tinytext.app"));
+    fn mac_launcher_script_embeds_bundle_path() {
+        let script = mac_launcher_script(Path::new("/Applications/Tinytext.app"));
         assert!(script.starts_with("#!/usr/bin/env bash\n"));
         assert!(script.contains(r#"APP="${TINYTEXT_APP:-/Applications/Tinytext.app}""#));
         assert!(!script.contains("__BUNDLE__"));
+    }
+
+    #[test]
+    fn linux_launcher_script_forwards_to_the_executable() {
+        let script = linux_launcher_script(Path::new("/opt/tinytext/tinytext"));
+        assert!(script.starts_with("#!/bin/sh\n"));
+        assert!(script.contains(r#"exec "/opt/tinytext/tinytext" "$@""#));
+    }
+
+    #[test]
+    fn windows_launcher_script_shims_to_the_executable() {
+        let script = windows_launcher_script(Path::new(r"C:\Program Files\Tinytext\tinytext.exe"));
+        assert!(script.contains(r#""C:\Program Files\Tinytext\tinytext.exe" %*"#));
+        assert!(script.contains("\r\n"), "the shim keeps CRLF line endings");
     }
 
     fn parse(args: &[&str]) -> CliCommand {
