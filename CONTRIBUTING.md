@@ -1,6 +1,6 @@
-# Contributing to Tinytext
+# Contributing
 
-Tinytext is a small, early-stage project, so contributions are welcome from anyone —
+This is a small, early-stage project, so contributions are welcome from anyone —
 bug reports, fixes, documentation, and feature work. This guide covers setting up the
 project, making changes, and running the checks required before a pull request.
 

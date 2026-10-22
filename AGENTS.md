@@ -4,7 +4,7 @@ Guidance for AI coding agents (Claude, Cursor, Copilot, Codex) working in this r
 
 ## Overview
 
-Tinytext is a native macOS text editor written in Rust. It builds its UI with
+This project is a native macOS text editor written in Rust. It builds its UI with
 [GPUI Kit](https://gpui-kit.com) (`gpui-kit`), which bundles GPUI, GPUI Base, and GPUI
 Component, and uses `ropey` plus `tree-sitter` for text buffering and syntax parsing.
 

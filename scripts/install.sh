@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the latest Tinytext release into /Applications.
+# Install the latest release into /Applications.
 #
 #   curl -fsSL https://raw.githubusercontent.com/ernilambar/tinytext/main/scripts/install.sh | sh
 #
@@ -11,14 +11,14 @@ URL="https://github.com/ernilambar/tinytext/releases/latest/download/Tinytext-ma
 DEST="/Applications/Tinytext.app"
 
 if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
-    echo "Tinytext requires macOS on Apple Silicon." >&2
+    echo "This app requires macOS on Apple Silicon." >&2
     exit 1
 fi
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-echo "Downloading Tinytext..."
+echo "Downloading the app..."
 curl -fsSL "$URL" -o "$tmp/Tinytext.zip"
 ditto -x -k "$tmp/Tinytext.zip" "$tmp"
 

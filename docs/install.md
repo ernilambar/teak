@@ -1,4 +1,4 @@
-# Installing Tinytext
+# Installing
 
 The [README](../README.md#install) covers the recommended Homebrew install. This page
 covers the other install methods, updates, uninstalling, and the command line tool.
@@ -17,7 +17,7 @@ Download `Tinytext-macos-arm64.zip` from the
 [latest release](https://github.com/ernilambar/tinytext/releases/latest), unzip it, and
 move `Tinytext.app` to `/Applications`.
 
-Tinytext is not notarized by Apple, so macOS blocks it the first time you open a copy
+The app is not notarized by Apple, so macOS blocks it the first time you open a copy
 downloaded in a browser. To allow it, run this once:
 
 ```sh

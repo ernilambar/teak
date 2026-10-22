@@ -349,7 +349,7 @@ mod tests {
 
     /// An empty directory named uniquely per test.
     fn fixture(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("tinytext-ws-{name}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("app-ws-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root

@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn search_files_skips_binary_and_stops_when_stale() {
-        let dir = std::env::temp_dir().join(format!("tinytext-search-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("app-search-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let a = dir.join("a.txt");
         let b = dir.join("b.txt");

@@ -3163,7 +3163,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.select_to(end, cx);
     }
 
-    // Tinytext patch (patches/gpui-base.patch): `selected_ranges` is added; it
+    // Local patch (patches/gpui-base.patch): `selected_ranges` is added; it
     // is not part of upstream gpui-base.
 
     /// Return every selection as UTF-8 byte ranges, the active one first.

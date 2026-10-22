@@ -1,6 +1,6 @@
 # Color Schemes
 
-Tinytext separates **appearance** from **palette**:
+The editor separates **appearance** from **palette**:
 
 - **Mode** is the appearance — Light, Dark, or System (follow macOS). It is the
   primary switch and lives in `ui.theme`.
@@ -23,7 +23,7 @@ Open **Settings → Appearance**:
   dark.
 
 The mode can also be switched from the **View → Appearance** menu. When the mode
-is System, Tinytext follows the macOS appearance and swaps between your light
+is System, the app follows the macOS appearance and swaps between your light
 and dark schemes automatically.
 
 Out of the box both slots use the built-in **Default Light** and **Default
@@ -43,13 +43,13 @@ Dark** palettes.
 
 ## Where themes live
 
-Tinytext ships the two default palettes. Themes you install go in:
+The app ships the two default palettes. Themes you install go in:
 
 ```
 ~/Library/Application Support/net.nilambar.tinytext/themes/
 ```
 
-Drop one JSON file per theme (or per set of themes) into that folder. Tinytext
+Drop one JSON file per theme (or per set of themes) into that folder. The app
 watches the folder and reloads it automatically, so a newly added theme appears
 in the Light/Dark Theme dropdowns as soon as the file is saved. Use
 **Tinytext → Open Themes Folder** to reveal the folder in Finder. A fresh install
@@ -272,7 +272,7 @@ Save as `midnight.json`:
 
 ## Notes and limits
 
-- **Names must be unique.** Tinytext keeps the first theme it loads for a given
+- **Names must be unique.** The app keeps the first theme it loads for a given
   name and ignores later ones, so avoid reusing a built-in name such as
   `Default Dark`.
 - **A theme belongs to one appearance.** A `"dark"` theme only appears under
