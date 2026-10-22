@@ -49,7 +49,7 @@ const EDITOR: &str = "Input";
 /// A menu in the menu bar, in bar order.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuKind {
-    Tine,
+    Teak,
     File,
     Edit,
     View,
@@ -61,7 +61,7 @@ pub(crate) enum PaletteGroup {
     File,
     Edit,
     View,
-    Tine,
+    Teak,
 }
 
 /// Which key context a chord is active in.
@@ -552,8 +552,8 @@ static COMMANDS: &[Command] = &[
         label: "Settings…",
         make: || Box::new(OpenSettings),
         bindings: &[("cmd-,", Scope::Global)],
-        menu: Some((MenuKind::Tine, 1)),
-        palette: Some((PaletteGroup::Tine, 0)),
+        menu: Some((MenuKind::Teak, 1)),
+        palette: Some((PaletteGroup::Teak, 0)),
         keywords: &["preferences", "config"],
     },
     Command {
@@ -561,30 +561,30 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(OpenDefaultSettings),
         bindings: NO_KEYS,
         menu: None,
-        palette: Some((PaletteGroup::Tine, 1)),
+        palette: Some((PaletteGroup::Teak, 1)),
         keywords: &["defaults", "preferences", "reference"],
     },
     Command {
-        label: "About Tine",
+        label: "About Teak",
         make: || Box::new(About),
         bindings: NO_KEYS,
-        menu: Some((MenuKind::Tine, 0)),
-        palette: Some((PaletteGroup::Tine, 3)),
+        menu: Some((MenuKind::Teak, 0)),
+        palette: Some((PaletteGroup::Teak, 3)),
         keywords: &[],
     },
     Command {
         label: "Check for Updates…",
         make: || Box::new(CheckForUpdates),
         bindings: NO_KEYS,
-        menu: Some((MenuKind::Tine, 0)),
-        palette: Some((PaletteGroup::Tine, 2)),
+        menu: Some((MenuKind::Teak, 0)),
+        palette: Some((PaletteGroup::Teak, 2)),
         keywords: &[],
     },
     Command {
         label: "Open Themes Folder",
         make: || Box::new(OpenThemesFolder),
         bindings: NO_KEYS,
-        menu: Some((MenuKind::Tine, 1)),
+        menu: Some((MenuKind::Teak, 1)),
         palette: None,
         keywords: &[],
     },
@@ -592,15 +592,15 @@ static COMMANDS: &[Command] = &[
         label: "Install Command Line Tool…",
         make: || Box::new(InstallCli),
         bindings: NO_KEYS,
-        menu: Some((MenuKind::Tine, 2)),
+        menu: Some((MenuKind::Teak, 2)),
         palette: None,
         keywords: &[],
     },
     Command {
-        label: "Hide Tine",
+        label: "Hide Teak",
         make: || Box::new(Hide),
         bindings: &[("cmd-h", Scope::Global)],
-        menu: Some((MenuKind::Tine, 3)),
+        menu: Some((MenuKind::Teak, 3)),
         palette: None,
         keywords: &[],
     },
@@ -608,7 +608,7 @@ static COMMANDS: &[Command] = &[
         label: "Hide Others",
         make: || Box::new(HideOthers),
         bindings: &[("alt-cmd-h", Scope::Global)],
-        menu: Some((MenuKind::Tine, 3)),
+        menu: Some((MenuKind::Teak, 3)),
         palette: None,
         keywords: &[],
     },
@@ -616,15 +616,15 @@ static COMMANDS: &[Command] = &[
         label: "Show All",
         make: || Box::new(ShowAll),
         bindings: NO_KEYS,
-        menu: Some((MenuKind::Tine, 3)),
+        menu: Some((MenuKind::Teak, 3)),
         palette: None,
         keywords: &[],
     },
     Command {
-        label: "Quit Tine",
+        label: "Quit Teak",
         make: || Box::new(Quit),
         bindings: &[("cmd-q", Scope::Global)],
-        menu: Some((MenuKind::Tine, 4)),
+        menu: Some((MenuKind::Teak, 4)),
         palette: None,
         keywords: &[],
     },
@@ -705,11 +705,11 @@ static COMMANDS: &[Command] = &[
 
 impl MenuKind {
     /// Menus in bar order.
-    const ALL: [Self; 4] = [Self::Tine, Self::File, Self::Edit, Self::View];
+    const ALL: [Self; 4] = [Self::Teak, Self::File, Self::Edit, Self::View];
 
     fn label(self) -> &'static str {
         match self {
-            Self::Tine => crate::app::WINDOW_TITLE,
+            Self::Teak => crate::app::WINDOW_TITLE,
             Self::File => "File",
             Self::Edit => "Edit",
             Self::View => "View",
@@ -718,7 +718,7 @@ impl MenuKind {
 
     fn skeleton(self) -> &'static [Entry] {
         match self {
-            Self::Tine => TINE_MENU,
+            Self::Teak => TEAK_MENU,
             Self::File => FILE_MENU,
             Self::Edit => EDIT_MENU,
             Self::View => VIEW_MENU,
@@ -732,7 +732,7 @@ impl PaletteGroup {
             Self::File => "File",
             Self::Edit => "Edit",
             Self::View => "View",
-            Self::Tine => crate::app::WINDOW_TITLE,
+            Self::Teak => crate::app::WINDOW_TITLE,
         }
     }
 }
@@ -751,7 +751,7 @@ enum Entry {
     OpenRecent,
 }
 
-const TINE_MENU: &[Entry] = &[
+const TEAK_MENU: &[Entry] = &[
     Entry::Cluster(0),
     Entry::Item(MenuItem::separator),
     Entry::Cluster(1),
@@ -830,7 +830,7 @@ const PALETTE: &[PaletteSlot] = &[
     PaletteSlot::Group(PaletteGroup::Edit),
     PaletteSlot::Group(PaletteGroup::View),
     PaletteSlot::Appearance,
-    PaletteSlot::Group(PaletteGroup::Tine),
+    PaletteSlot::Group(PaletteGroup::Teak),
 ];
 
 fn services_menu() -> MenuItem {
@@ -1195,17 +1195,17 @@ mod tests {
     fn menu_command_order_is_unchanged() {
         let expected: &[(MenuKind, &[&str])] = &[
             (
-                MenuKind::Tine,
+                MenuKind::Teak,
                 &[
-                    "About Tine",
+                    "About Teak",
                     "Check for Updates…",
                     "Settings…",
                     "Open Themes Folder",
                     "Install Command Line Tool…",
-                    "Hide Tine",
+                    "Hide Teak",
                     "Hide Others",
                     "Show All",
-                    "Quit Tine",
+                    "Quit Teak",
                 ],
             ),
             (

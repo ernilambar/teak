@@ -1,6 +1,6 @@
-# Tine
+# Teak
 
-A fast, lightweight text editor for macOS.
+A fast, lightweight text editor.
 
 ## Screenshot
 
@@ -28,7 +28,7 @@ A fast, lightweight text editor for macOS.
 - Keeps each file's line endings (LF or CRLF) and byte order mark
 - Optional trim trailing whitespace and final newline on save
 - Cursor position, encoding, line endings, and language in the status bar
-- `tine` command to open files from the terminal
+- `teak` command to open files from the terminal
 - Light, dark, and system-following themes
 
 ## Requirements
@@ -43,7 +43,7 @@ Install with [Homebrew](https://brew.sh):
 ```sh
 brew tap ernilambar/tap
 brew trust ernilambar/tap
-brew install --cask ernilambar/tap/tine
+brew install --cask ernilambar/tap/teak
 ```
 
 This installs the app into `/Applications`.

@@ -36,10 +36,10 @@ jobs:
         run: |
           cargo build --release --locked
           cargo bundle --release
-          codesign --force --deep --sign - target/release/bundle/osx/Tine.app
-          ditto -c -k --keepParent target/release/bundle/osx/Tine.app Tine-macos-arm64.zip
+          codesign --force --deep --sign - target/release/bundle/osx/Teak.app
+          ditto -c -k --keepParent target/release/bundle/osx/Teak.app Teak-macos-arm64.zip
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" Tine-macos-arm64.zip --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" Teak-macos-arm64.zip --title "$GITHUB_REF_NAME" --generate-notes

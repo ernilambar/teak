@@ -23,7 +23,7 @@ use crate::paths::{collect_files, exclude_set, file_name, nearest_root, relative
 use crate::settings::IconStyle;
 use crate::{OpenPath, QuickOpen};
 
-use super::{TineApp, ui::file_type_icon};
+use super::{TeakApp, ui::file_type_icon};
 
 /// Width of the finder panel, shared with the command palette.
 const FINDER_WIDTH: Pixels = px(560.);
@@ -50,7 +50,7 @@ fn best_score(query: &str, name: &str, rel: &str) -> Option<u32> {
     }
 }
 
-impl TineApp {
+impl TeakApp {
     /// Opens the finder, or closes it when it is already open.
     pub(super) fn on_quick_open(
         &mut self,

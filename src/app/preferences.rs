@@ -34,10 +34,10 @@ use crate::settings::{
     save_theme, save_ui_font_family, save_ui_font_size,
 };
 
-use super::TineApp;
+use super::TeakApp;
 
 /// A boolean switch's change handler, given the window it needs to apply.
-type WindowSwitchSetter = Rc<dyn Fn(&mut TineApp, bool, &mut Window, &mut Context<TineApp>)>;
+type WindowSwitchSetter = Rc<dyn Fn(&mut TeakApp, bool, &mut Window, &mut Context<TeakApp>)>;
 
 /// A boolean switch that needs the window to apply its change immediately. The
 /// typed `SettingField::switch` callbacks only receive `&mut App`; a custom
@@ -45,7 +45,7 @@ type WindowSwitchSetter = Rc<dyn Fn(&mut TineApp, bool, &mut Window, &mut Contex
 fn window_switch(
     id: &'static str,
     checked: bool,
-    weak: WeakEntity<TineApp>,
+    weak: WeakEntity<TeakApp>,
     apply: WindowSwitchSetter,
 ) -> SettingField<SharedString> {
     SettingField::render(move |options, _window, _cx| {
@@ -64,7 +64,7 @@ fn window_switch(
 }
 
 /// A number field's change handler, given the window it needs to apply.
-type WindowNumberSetter = Rc<dyn Fn(&mut TineApp, usize, &mut Window, &mut Context<TineApp>)>;
+type WindowNumberSetter = Rc<dyn Fn(&mut TeakApp, usize, &mut Window, &mut Context<TeakApp>)>;
 
 /// State for [`window_number_input`], held in the window so the field's text and
 /// caret survive re-renders of the overlay.
@@ -82,7 +82,7 @@ fn window_number_input(
     id: &'static str,
     value: usize,
     options: NumberFieldOptions,
-    weak: WeakEntity<TineApp>,
+    weak: WeakEntity<TeakApp>,
     apply: WindowNumberSetter,
 ) -> SettingField<SharedString> {
     SettingField::render(move |render_options, window, cx| {
@@ -189,7 +189,7 @@ impl SettingsState {
     }
 }
 
-impl TineApp {
+impl TeakApp {
     /// Builds the full-window settings overlay.
     pub(super) fn render_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let weak = cx.entity().downgrade();

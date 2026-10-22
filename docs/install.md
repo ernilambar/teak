@@ -8,29 +8,29 @@ covers the other install methods, updates, uninstalling, and the command line to
 Without Homebrew, run this in Terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ernilambar/tine/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ernilambar/teak/main/scripts/install.sh | sh
 ```
 
 ## Manual download
 
-Download `Tine-macos-arm64.zip` from the
-[latest release](https://github.com/ernilambar/tine/releases/latest), unzip it, and
-move `Tine.app` to `/Applications`.
+Download `Teak-macos-arm64.zip` from the
+[latest release](https://github.com/ernilambar/teak/releases/latest), unzip it, and
+move `Teak.app` to `/Applications`.
 
 The app is not notarized by Apple, so macOS blocks it the first time you open a copy
 downloaded in a browser. To allow it, run this once:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/Tine.app
+xattr -dr com.apple.quarantine /Applications/Teak.app
 ```
 
 ## Update
 
-Choose **Tine → Check for Updates…** to see if a new version is out. To update, save
+Choose **Teak → Check for Updates…** to see if a new version is out. To update, save
 your work and run:
 
 ```sh
-brew upgrade --cask tine
+brew upgrade --cask teak
 ```
 
 If you used the install script, run it again instead. It replaces the existing app with
@@ -38,20 +38,20 @@ the latest release.
 
 ## Open files from Terminal
 
-Choose **Tine → Install Command Line Tool…** and enter your password when asked.
+Choose **Teak → Install Command Line Tool…** and enter your password when asked.
 Then:
 
 ```sh
-tine notes.txt
-tine one.txt two.txt
-tine .
+teak notes.txt
+teak one.txt two.txt
+teak .
 ```
 
 ## Uninstall
 
 ```sh
-brew uninstall --cask --zap tine
-sudo rm -f /usr/local/bin/tine
+brew uninstall --cask --zap teak
+sudo rm -f /usr/local/bin/teak
 ```
 
 `--zap` also removes your saved session and settings. The second line removes the
@@ -60,7 +60,7 @@ command line tool, if you installed it.
 Without Homebrew:
 
 ```sh
-rm -rf /Applications/Tine.app
-sudo rm -f /usr/local/bin/tine
-rm -rf ~/Library/Application\ Support/net.nilambar.tine
+rm -rf /Applications/Teak.app
+sudo rm -f /usr/local/bin/teak
+rm -rf ~/Library/Application\ Support/net.nilambar.teak
 ```

@@ -3,7 +3,7 @@
 #
 #   ./scripts/bundle.sh
 #
-# Produces target/release/bundle/osx/Tine.app and ad-hoc signs it so it
+# Produces target/release/bundle/osx/Teak.app and ad-hoc signs it so it
 # launches locally. To distribute to other Macs without Gatekeeper warnings,
 # sign with a Developer ID and notarize (see below).
 set -euo pipefail
@@ -22,12 +22,12 @@ fi
 
 cargo bundle --release
 
-APP="target/release/bundle/osx/Tine.app"
+APP="target/release/bundle/osx/Teak.app"
 
 # Ad-hoc signature: enough for this machine, not for distribution.
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 
-DMG="target/release/bundle/dmg/Tine.dmg"
+DMG="target/release/bundle/dmg/Teak.dmg"
 
 echo
 echo "Bundled: $APP"
@@ -38,6 +38,6 @@ echo "Run it with: open \"$APP\""
 echo
 echo "To share without Gatekeeper warnings, sign and notarize:"
 echo "  codesign --force --deep --options runtime --sign \"Developer ID Application: NAME (TEAMID)\" \"$APP\""
-echo "  ditto -c -k --keepParent \"$APP\" Tine.zip"
-echo "  xcrun notarytool submit Tine.zip --keychain-profile PROFILE --wait"
+echo "  ditto -c -k --keepParent \"$APP\" Teak.zip"
+echo "  xcrun notarytool submit Teak.zip --keychain-profile PROFILE --wait"
 echo "  xcrun stapler staple \"$APP\""

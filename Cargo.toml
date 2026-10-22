@@ -1,11 +1,11 @@
 [package]
-name = "tine"
+name = "teak"
 version = "0.2.0"
 edition = "2024"
 authors = ["Nilambar Sharma <nilambar@outlook.com>"]
 license = "MIT"
 homepage = "https://nilambar.net/"
-repository = "https://github.com/ernilambar/tine"
+repository = "https://github.com/ernilambar/teak"
 
 # Declared so the package is its own workspace root and dependency features
 # unify across dependency kinds. That is what lets the overlay UI tests turn on
@@ -48,11 +48,11 @@ gpui-kit = { version = "0.7.3", features = ["test-support"] }
 # Produces the shareable macOS app bundle via `cargo bundle --release`
 # (or ./scripts/bundle.sh). Regenerate the icon with scripts/make-icon.py.
 [package.metadata.bundle]
-name = "Tine"
-identifier = "net.nilambar.tine"
+name = "Teak"
+identifier = "net.nilambar.teak"
 icon = ["assets/icon.icns"]
 category = "public.app-category.developer-tools"
-short_description = "A native macOS text editor built with GPUI Kit"
+short_description = "A fast, lightweight text editor"
 copyright = "Copyright © 2026 Nilambar Sharma"
 osx = { minimum_system_version = "15.0", info_plist_exts = ["assets/Info.plist"] }
 

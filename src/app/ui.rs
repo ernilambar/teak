@@ -34,7 +34,7 @@ use crate::{
 };
 
 use super::workspace::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
-use super::{Preview, TineApp};
+use super::{Preview, TeakApp};
 
 /// Floor on a tab's width. Tabs size to their full titles while the strip has
 /// room, shrink with an ellipsis down to this floor as it fills, and past that
@@ -149,7 +149,7 @@ fn colored_icon(bytes: &'static [u8], cx: &App) -> Option<Arc<RenderImage>> {
     Some(image)
 }
 
-impl TineApp {
+impl TeakApp {
     pub(super) fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let active = self.tabs.active_index();
