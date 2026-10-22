@@ -547,7 +547,7 @@ static COMMANDS: &[Command] = &[
         palette: Some((PaletteGroup::View, 14)),
         keywords: &[],
     },
-    // Tinytext
+    // App
     Command {
         label: "Settings…",
         make: || Box::new(OpenSettings),
@@ -709,7 +709,7 @@ impl MenuKind {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Tinytext => "Tinytext",
+            Self::Tinytext => crate::app::WINDOW_TITLE,
             Self::File => "File",
             Self::Edit => "Edit",
             Self::View => "View",
@@ -732,7 +732,7 @@ impl PaletteGroup {
             Self::File => "File",
             Self::Edit => "Edit",
             Self::View => "View",
-            Self::Tinytext => "Tinytext",
+            Self::Tinytext => crate::app::WINDOW_TITLE,
         }
     }
 }
@@ -819,7 +819,7 @@ const VIEW_MENU: &[Entry] = &[
 ];
 
 /// The palette's groups, in display order. The Appearance group sits between
-/// View and Tinytext, and is built from `THEME_CHOICES` rather than the table.
+/// View and the app group, and is built from `THEME_CHOICES` rather than the table.
 enum PaletteSlot {
     Group(PaletteGroup),
     Appearance,

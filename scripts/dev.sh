@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build Tinytext, install it to /Applications, and relaunch it.
+# Build the app, install it to /Applications, and relaunch it.
 #
 #   ./scripts/dev.sh [--release] [file ...]
 #
 # Use this to test behaviour that only works from an app bundle: the
-# `tinytext` launcher, Finder's "Open With", and files opened through
+# command-line launcher, Finder's "Open With", and files opened through
 # LaunchServices. For plain editor changes, `bacon run` is faster.
 #
 # The running /Applications copy is killed, so its unsaved edits are lost.

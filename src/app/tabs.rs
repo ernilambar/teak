@@ -829,7 +829,7 @@ mod tests {
                 })
                 .unwrap();
             set.push(OpenTab {
-                path: Some(PathBuf::from(format!("/tmp/tinytext-tab-{ix}.txt"))),
+                path: Some(PathBuf::from(format!("/tmp/app-tab-{ix}.txt"))),
                 title: format!("tab-{ix}").into(),
                 language: "Plain Text".into(),
                 language_override: false,

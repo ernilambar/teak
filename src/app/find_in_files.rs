@@ -1046,7 +1046,7 @@ mod tests {
     #[gpui_kit::test]
     async fn opening_a_match_selects_it(cx: &mut TestAppContext) {
         let (handle, app) = open_app(cx);
-        let path = PathBuf::from("/tmp/tinytext-find-test.txt");
+        let path = PathBuf::from("/tmp/app-find-test.txt");
 
         cx.update_window(handle, |_, window, cx| {
             let editor =

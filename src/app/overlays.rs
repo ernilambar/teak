@@ -1,7 +1,7 @@
 //! State for the transient surfaces: the mutually exclusive command palette and
 //! quick-open finder, the file index the finder searches, and the Find panel.
 //!
-//! Opening and closing stays on `TinytextApp`: mounting an overlay needs a
+//! Opening and closing stays on the app type: mounting an overlay needs a
 //! `Window` (`window.defer` for the focus request, `cx.spawn_in` for the index
 //! walk), and a plain state group has no `Context`. This type owns the storage
 //! and the focus-to-restore bookkeeping those methods move around.

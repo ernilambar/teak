@@ -1,6 +1,6 @@
 //! The Settings overlay, built from gpui-kit's `Settings` component.
 //!
-//! Field values are read from a snapshot of `TinytextApp::settings` taken at
+//! Field values are read from a snapshot of the app's settings taken at
 //! render time rather than read back through the entity: the component invokes
 //! the value closures while the app's own element tree is being built, and
 //! reading the entity there would re-enter its borrow. The set closures capture
@@ -754,7 +754,7 @@ impl TinytextApp {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .child(Settings::new("tinytext-settings").pages(pages)),
+                    .child(Settings::new("app-settings").pages(pages)),
             )
             .into_any_element()
     }

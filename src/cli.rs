@@ -28,7 +28,7 @@ pub(crate) fn launcher_target() -> Option<PathBuf> {
 #[cfg(any(target_os = "macos", test))]
 fn mac_launcher_script(bundle: &Path) -> String {
     let template = r#"#!/usr/bin/env bash
-# Command-line launcher for Tinytext, installed by the app.
+# Command-line launcher installed by the app.
 set -euo pipefail
 
 APP="${TINYTEXT_APP:-__BUNDLE__}"
@@ -59,7 +59,7 @@ exec open -a "$APP" -- "$@"
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
 fn linux_launcher_script(executable: &Path) -> String {
     format!(
-        "#!/bin/sh\n# Command-line launcher for Tinytext, installed by the app.\nexec \"{}\" \"$@\"\n",
+        "#!/bin/sh\n# Command-line launcher installed by the app.\nexec \"{}\" \"$@\"\n",
         executable.display()
     )
 }
@@ -69,19 +69,19 @@ fn linux_launcher_script(executable: &Path) -> String {
 #[cfg(any(target_os = "windows", test))]
 fn windows_launcher_script(executable: &Path) -> String {
     format!(
-        "@echo off\r\nrem Command-line launcher for Tinytext, installed by the app.\r\n\"{}\" %*\r\n",
+        "@echo off\r\nrem Command-line launcher installed by the app.\r\n\"{}\" %*\r\n",
         executable.display()
     )
 }
 
-/// Installs the `tinytext` command. On macOS this needs an administrator
+/// Installs the command-line tool. On macOS this needs an administrator
 /// prompt to write into `/usr/local/bin`; on Linux and Windows the command goes
 /// into a directory the user owns.
 #[cfg(target_os = "macos")]
 pub(crate) fn install_cli(bundle: &Path) -> Result<PathBuf, String> {
     const TARGET: &str = "/usr/local/bin/tinytext";
 
-    let temp = std::env::temp_dir().join(format!("tinytext-cli-{}", std::process::id()));
+    let temp = std::env::temp_dir().join(format!("cli-launcher-{}", std::process::id()));
     std::fs::write(&temp, mac_launcher_script(bundle)).map_err(|error| error.to_string())?;
 
     let command = format!(
@@ -114,7 +114,7 @@ pub(crate) fn install_cli(bundle: &Path) -> Result<PathBuf, String> {
     Ok(PathBuf::from(TARGET))
 }
 
-/// Installs the `tinytext` command into `~/.local/bin`, which needs no
+/// Installs the command-line tool into `~/.local/bin`, which needs no
 /// administrator rights. The directory is created when missing.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(crate) fn install_cli(executable: &Path) -> Result<PathBuf, String> {
@@ -126,7 +126,7 @@ pub(crate) fn install_cli(executable: &Path) -> Result<PathBuf, String> {
         .join("bin")
         .join("tinytext");
 
-    let temp = std::env::temp_dir().join(format!("tinytext-cli-{}", std::process::id()));
+    let temp = std::env::temp_dir().join(format!("cli-launcher-{}", std::process::id()));
     std::fs::write(&temp, linux_launcher_script(executable)).map_err(|error| error.to_string())?;
     std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
         .map_err(|error| error.to_string())?;
@@ -139,7 +139,7 @@ pub(crate) fn install_cli(executable: &Path) -> Result<PathBuf, String> {
     Ok(target)
 }
 
-/// Installs the `tinytext` command as a `.cmd` shim in
+/// Installs the command-line tool as a `.cmd` shim in
 /// `%LOCALAPPDATA%\Microsoft\WindowsApps`, a directory on `PATH` that the user
 /// owns, so no administrator rights are needed.
 #[cfg(target_os = "windows")]
@@ -193,7 +193,7 @@ pub(crate) fn print_help() {
 A native macOS text editor built with GPUI Kit
 
 Usage:
-  tinytext [OPTIONS] [FOLDER]...
+  {name} [OPTIONS] [FOLDER]...
 
 Arguments:
   [FOLDER]...  Add the given folders to the sidebar
@@ -212,23 +212,23 @@ mod tests {
 
     #[test]
     fn mac_launcher_script_embeds_bundle_path() {
-        let script = mac_launcher_script(Path::new("/Applications/Tinytext.app"));
+        let script = mac_launcher_script(Path::new("/Applications/Example.app"));
         assert!(script.starts_with("#!/usr/bin/env bash\n"));
-        assert!(script.contains(r#"APP="${TINYTEXT_APP:-/Applications/Tinytext.app}""#));
+        assert!(script.contains(r#"APP="${TINYTEXT_APP:-/Applications/Example.app}""#));
         assert!(!script.contains("__BUNDLE__"));
     }
 
     #[test]
     fn linux_launcher_script_forwards_to_the_executable() {
-        let script = linux_launcher_script(Path::new("/opt/tinytext/tinytext"));
+        let script = linux_launcher_script(Path::new("/opt/example/example"));
         assert!(script.starts_with("#!/bin/sh\n"));
-        assert!(script.contains(r#"exec "/opt/tinytext/tinytext" "$@""#));
+        assert!(script.contains(r#"exec "/opt/example/example" "$@""#));
     }
 
     #[test]
     fn windows_launcher_script_shims_to_the_executable() {
-        let script = windows_launcher_script(Path::new(r"C:\Program Files\Tinytext\tinytext.exe"));
-        assert!(script.contains(r#""C:\Program Files\Tinytext\tinytext.exe" %*"#));
+        let script = windows_launcher_script(Path::new(r"C:\Program Files\Example\example.exe"));
+        assert!(script.contains(r#""C:\Program Files\Example\example.exe" %*"#));
         assert!(script.contains("\r\n"), "the shim keeps CRLF line endings");
     }
 

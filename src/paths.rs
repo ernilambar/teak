@@ -27,7 +27,7 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 #[cfg(target_os = "macos")]
 pub(crate) fn support_dir() -> Option<PathBuf> {
     if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("tinytext-test-{}", std::process::id())));
+        return Some(std::env::temp_dir().join(format!("app-test-{}", std::process::id())));
     }
     Some(
         home_dir()?
@@ -46,7 +46,7 @@ pub(crate) fn support_dir() -> Option<PathBuf> {
 #[cfg(target_os = "windows")]
 pub(crate) fn support_dir() -> Option<PathBuf> {
     if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("tinytext-test-{}", std::process::id())));
+        return Some(std::env::temp_dir().join(format!("app-test-{}", std::process::id())));
     }
     let roaming = std::env::var_os("APPDATA")?;
     Some(PathBuf::from(roaming).join(BUNDLE_ID))
@@ -61,7 +61,7 @@ pub(crate) fn support_dir() -> Option<PathBuf> {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn support_dir() -> Option<PathBuf> {
     if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("tinytext-test-{}", std::process::id())));
+        return Some(std::env::temp_dir().join(format!("app-test-{}", std::process::id())));
     }
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn read_dir_lists_directories_before_files_sorted() {
-        let root = std::env::temp_dir().join(format!("tinytext-read-dir-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("app-read-dir-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("zeta")).unwrap();
         std::fs::create_dir_all(root.join("alpha")).unwrap();
@@ -495,12 +495,12 @@ mod tests {
 
     #[test]
     fn read_dir_returns_empty_for_missing_directory() {
-        assert!(read_dir(Path::new("/nonexistent/tinytext")).is_empty());
+        assert!(read_dir(Path::new("/nonexistent/app")).is_empty());
     }
 
     #[test]
     fn collect_files_walks_files_and_skips_ignored_directories() {
-        let root = std::env::temp_dir().join(format!("tinytext-collect-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("app-collect-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src/deep")).unwrap();
         std::fs::create_dir_all(root.join(".hidden")).unwrap();
@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn collect_files_stops_at_the_limit() {
-        let root = std::env::temp_dir().join(format!("tinytext-collect-2-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("app-collect-2-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         for index in 0..5 {
@@ -551,7 +551,7 @@ mod tests {
         let none = GlobSet::empty();
         assert!(
             collect_files(
-                &[PathBuf::from("/nonexistent/tinytext")],
+                &[PathBuf::from("/nonexistent/app")],
                 usize::MAX,
                 &none,
                 &none
@@ -563,7 +563,7 @@ mod tests {
 
     #[test]
     fn collect_files_honors_gitignore_and_exclude_globs() {
-        let root = std::env::temp_dir().join(format!("tinytext-collect-3-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("app-collect-3-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         for dir in ["dist", "vendor/lib", "src/fixtures"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn collect_files_keeps_only_included_files() {
-        let root = std::env::temp_dir().join(format!("tinytext-collect-4-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("app-collect-4-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src/deep")).unwrap();
         for file in ["src/a.rs", "src/deep/b.rs", "src/c.md", "top.rs"] {
@@ -782,7 +782,7 @@ mod tests {
 
     #[test]
     fn copy_entry_duplicates_a_directory_tree() {
-        let root = std::env::temp_dir().join(format!("tinytext-copy-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("app-copy-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let from = root.join("from");
         std::fs::create_dir_all(from.join("nested")).unwrap();
@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn duplicate_name_follows_finder_convention() {
-        let root = std::env::temp_dir().join(format!("tinytext-dup-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("app-dup-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Tinytext app icon.
+"""Generate the app icon.
 
 Renders the "T" lettermark on a navy squircle, resizes it into the standard
 .iconset sizes with `sips`, and packs `assets/icon.icns` with `iconutil`. It

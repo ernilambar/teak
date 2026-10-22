@@ -20,9 +20,9 @@ use crate::settings::{DEFAULT_FONT_WEIGHT, DEFAULT_UI_FONT_SIZE, SYSTEM_UI_FONT,
 /// Seed file written into a freshly created themes directory so the format is
 /// discoverable. Only `*.json` files are parsed, so this is never a theme.
 const README: &str = "\
-# Tinytext themes
+# Themes
 
-Drop Zed-compatible theme files (*.json) in this folder. Tinytext reloads them
+Drop Zed-compatible theme files (*.json) in this folder. The app reloads them
 automatically, and any light or dark theme appears under
 Settings → Appearance → Color Scheme.
 
@@ -71,7 +71,10 @@ where
 {
     ensure_dir(&dir);
     if let Err(error) = ThemeRegistry::watch_dir(dir, cx, on_load) {
-        eprintln!("tinytext: cannot watch themes directory: {error}");
+        eprintln!(
+            "{}: cannot watch themes directory: {error}",
+            env!("CARGO_PKG_NAME")
+        );
     }
 }
 

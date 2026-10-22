@@ -677,9 +677,9 @@ impl TinytextApp {
     fn on_install_cli(&mut self, _: &InstallCli, window: &mut Window, cx: &mut Context<Self>) {
         let Some(app) = launcher_target() else {
             window.push_notification(
-                Notification::error(
-                    "Could not locate Tinytext to install the command-line tool".to_string(),
-                ),
+                Notification::error(format!(
+                    "Could not locate {WINDOW_TITLE} to install the command-line tool"
+                )),
                 cx,
             );
             return;
@@ -742,7 +742,7 @@ impl TinytextApp {
                                         .v_flex()
                                         .gap_1()
                                         .child(format!(
-                                            "Tinytext {latest} is available. You have {current}."
+                                            "{WINDOW_TITLE} {latest} is available. You have {current}."
                                         ))
                                         .child("Save your work, then run this in Terminal:")
                                         .child(INSTALL_COMMAND),
@@ -763,7 +763,9 @@ impl TinytextApp {
                         });
                     }
                     Ok(_) => window.push_notification(
-                        Notification::success(format!("Tinytext {current} is up to date")),
+                        Notification::success(format!(
+                            "{WINDOW_TITLE} {current} is up to date"
+                        )),
                         cx,
                     ),
                     Err(message) => window.push_notification(
@@ -945,7 +947,7 @@ impl TinytextApp {
                                 .text_lg()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(cx.theme().foreground)
-                                .child("Tinytext"),
+                                .child(WINDOW_TITLE),
                         )
                         .child(format!("Version {}", env!("CARGO_PKG_VERSION")))
                         .child("A native macOS text editor built with GPUI Kit.")
@@ -971,7 +973,7 @@ impl TinytextApp {
     }
 }
 
-/// The Tinytext logo image, decoded once and reused across renders.
+/// The app logo image, decoded once and reused across renders.
 fn logo_image() -> Arc<Image> {
     static LOGO: OnceLock<Arc<Image>> = OnceLock::new();
     LOGO.get_or_init(|| {
@@ -1008,7 +1010,7 @@ impl Render for TinytextApp {
         let alt_held = window.modifiers().alt && self.active().is_some();
 
         let root = div()
-            .id("tinytext-root")
+            .id("app-root")
             .relative()
             .v_flex()
             .size_full()

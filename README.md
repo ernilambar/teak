@@ -46,7 +46,7 @@ brew trust ernilambar/tap
 brew install --cask ernilambar/tap/tinytext
 ```
 
-This installs Tinytext into `/Applications`.
+This installs the app into `/Applications`.
 
 ## Docs
 
@@ -57,7 +57,7 @@ This installs Tinytext into `/Applications`.
 ## Contributing
 
 Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) to
-build Tinytext from source.
+build it from source.
 
 ## License
 
