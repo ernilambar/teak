@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 
-const BUNDLE_ID: &str = "net.nilambar.tinytext";
+const BUNDLE_ID: &str = "net.nilambar.tine";
 
 /// The user's home directory, read from the variable the platform sets: `HOME`
 /// on Unix, `USERPROFILE` on Windows.
@@ -21,7 +21,7 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 /// Home of session and settings files:
 /// `~/Library/Application Support/<bundle id>` on macOS,
 /// `%APPDATA%\<bundle id>` on Windows,
-/// `$XDG_CONFIG_HOME/tinytext` (or `~/.config/tinytext`) elsewhere.
+/// `$XDG_CONFIG_HOME/tine` (or `~/.config/tine`) elsewhere.
 /// Test builds use a per-run temp directory instead, so no test can overwrite
 /// the user's session, settings or themes.
 #[cfg(target_os = "macos")]
@@ -40,7 +40,7 @@ pub(crate) fn support_dir() -> Option<PathBuf> {
 /// Home of session and settings files:
 /// `~/Library/Application Support/<bundle id>` on macOS,
 /// `%APPDATA%\<bundle id>` on Windows,
-/// `$XDG_CONFIG_HOME/tinytext` (or `~/.config/tinytext`) elsewhere.
+/// `$XDG_CONFIG_HOME/tine` (or `~/.config/tine`) elsewhere.
 /// Test builds use a per-run temp directory instead, so no test can overwrite
 /// the user's session, settings or themes.
 #[cfg(target_os = "windows")]
@@ -55,7 +55,7 @@ pub(crate) fn support_dir() -> Option<PathBuf> {
 /// Home of session and settings files:
 /// `~/Library/Application Support/<bundle id>` on macOS,
 /// `%APPDATA%\<bundle id>` on Windows,
-/// `$XDG_CONFIG_HOME/tinytext` (or `~/.config/tinytext`) elsewhere.
+/// `$XDG_CONFIG_HOME/tine` (or `~/.config/tine`) elsewhere.
 /// Test builds use a per-run temp directory instead, so no test can overwrite
 /// the user's session, settings or themes.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -66,7 +66,7 @@ pub(crate) fn support_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| home_dir().map(|home| home.join(".config")))?;
-    Some(base.join("tinytext"))
+    Some(base.join("tine"))
 }
 
 /// The file-manager label for revealing a path: Finder on macOS, Explorer on

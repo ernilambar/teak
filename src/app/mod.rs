@@ -61,9 +61,9 @@ pub(super) fn scroll_beyond_last_line(editor: &EditorSettings) -> Option<usize> 
 }
 
 /// The app name shown in the window title, before the focused tab's path.
-pub(crate) const WINDOW_TITLE: &str = "Tinytext";
+pub(crate) const WINDOW_TITLE: &str = "Tine";
 
-pub(crate) struct TinytextApp {
+pub(crate) struct TineApp {
     pub(crate) focus_handle: FocusHandle,
     /// The open folders, the expanded set, and the rows rendered from them.
     workspace: Workspace,
@@ -77,7 +77,7 @@ pub(crate) struct TinytextApp {
     settings: SettingsState,
 }
 
-impl TinytextApp {
+impl TineApp {
     pub(crate) fn new(
         workspace_roots: Vec<PathBuf>,
         settings: Settings,
@@ -990,7 +990,7 @@ pub(super) fn logo(size: f32) -> Img {
     img(logo_image()).w(px(size)).h(px(size))
 }
 
-impl Render for TinytextApp {
+impl Render for TineApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_window_title(window);
 
@@ -1118,19 +1118,19 @@ pub(super) mod test_support {
         AnyWindowHandle, AppContext as _, Entity, TestAppContext, WindowOptions, open_window,
     };
 
-    use super::TinytextApp;
+    use super::TineApp;
     use crate::keymap;
     use crate::settings::Settings;
 
     /// A headless window running the app with no workspace folders open.
-    pub(super) fn open_app(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<TinytextApp>) {
+    pub(super) fn open_app(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<TineApp>) {
         cx.update(|cx| {
             gpui_kit::init(cx);
             keymap::bind_keys(cx);
         });
         cx.update(|cx| {
             open_window(WindowOptions::default(), cx, |_window, cx| {
-                cx.new(|cx| TinytextApp::new(Vec::new(), Settings::default(), cx))
+                cx.new(|cx| TineApp::new(Vec::new(), Settings::default(), cx))
             })
             .unwrap()
         })

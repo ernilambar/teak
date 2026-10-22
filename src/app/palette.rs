@@ -17,14 +17,14 @@ use gpui_kit::*;
 
 use crate::CommandPalette;
 
-use super::TinytextApp;
+use super::TineApp;
 
 /// Width of the palette panel.
 const PALETTE_WIDTH: Pixels = px(560.);
 /// Gap between the top of the window and the palette panel.
 const PALETTE_TOP: Pixels = px(72.);
 
-impl TinytextApp {
+impl TineApp {
     /// Opens the palette, or closes it when it is already open.
     pub(super) fn on_command_palette(
         &mut self,
