@@ -46,13 +46,13 @@ Dark** palettes.
 The app ships the two default palettes. Themes you install go in:
 
 ```
-~/Library/Application Support/net.nilambar.tinytext/themes/
+~/Library/Application Support/net.nilambar.tine/themes/
 ```
 
 Drop one JSON file per theme (or per set of themes) into that folder. The app
 watches the folder and reloads it automatically, so a newly added theme appears
 in the Light/Dark Theme dropdowns as soon as the file is saved. Use
-**Tinytext → Open Themes Folder** to reveal the folder in Finder. A fresh install
+**Tine → Open Themes Folder** to reveal the folder in Finder. A fresh install
 seeds a short `README.md` there.
 
 A file may hold a whole set of themes; each entry's `mode` decides whether it
