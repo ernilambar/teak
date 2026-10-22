@@ -31,13 +31,13 @@ fn mac_launcher_script(bundle: &Path) -> String {
 # Command-line launcher installed by the app.
 set -euo pipefail
 
-APP="${TINYTEXT_APP:-__BUNDLE__}"
+APP="${TINE_APP:-__BUNDLE__}"
 
 # Options are handled by the binary itself; `open` would treat them as files.
 for arg in "$@"; do
     case "$arg" in
         --) break ;;
-        -*) exec "$APP/Contents/MacOS/tinytext" "$@" ;;
+        -*) exec "$APP/Contents/MacOS/tine" "$@" ;;
     esac
 done
 
@@ -79,7 +79,7 @@ fn windows_launcher_script(executable: &Path) -> String {
 /// into a directory the user owns.
 #[cfg(target_os = "macos")]
 pub(crate) fn install_cli(bundle: &Path) -> Result<PathBuf, String> {
-    const TARGET: &str = "/usr/local/bin/tinytext";
+    const TARGET: &str = "/usr/local/bin/tine";
 
     let temp = std::env::temp_dir().join(format!("cli-launcher-{}", std::process::id()));
     std::fs::write(&temp, mac_launcher_script(bundle)).map_err(|error| error.to_string())?;
@@ -124,7 +124,7 @@ pub(crate) fn install_cli(executable: &Path) -> Result<PathBuf, String> {
         .ok_or("Could not find the home directory")?
         .join(".local")
         .join("bin")
-        .join("tinytext");
+        .join("tine");
 
     let temp = std::env::temp_dir().join(format!("cli-launcher-{}", std::process::id()));
     std::fs::write(&temp, linux_launcher_script(executable)).map_err(|error| error.to_string())?;
@@ -150,7 +150,7 @@ pub(crate) fn install_cli(executable: &Path) -> Result<PathBuf, String> {
         .join("Local")
         .join("Microsoft")
         .join("WindowsApps")
-        .join("tinytext.cmd");
+        .join("tine.cmd");
 
     if let Some(directory) = target.parent() {
         std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
@@ -214,7 +214,7 @@ mod tests {
     fn mac_launcher_script_embeds_bundle_path() {
         let script = mac_launcher_script(Path::new("/Applications/Example.app"));
         assert!(script.starts_with("#!/usr/bin/env bash\n"));
-        assert!(script.contains(r#"APP="${TINYTEXT_APP:-/Applications/Example.app}""#));
+        assert!(script.contains(r#"APP="${TINE_APP:-/Applications/Example.app}""#));
         assert!(!script.contains("__BUNDLE__"));
     }
 

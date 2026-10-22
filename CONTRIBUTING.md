@@ -1,8 +1,8 @@
 # Contributing
 
-This is a small, early-stage project, so contributions are welcome from anyone —
-bug reports, fixes, documentation, and feature work. This guide covers setting up the
-project, making changes, and running the checks required before a pull request.
+Contributions are welcome from anyone — bug reports, fixes, documentation, and feature
+work. This guide covers setting up the project, making changes, and running the checks
+required before a pull request.
 
 ## Who can contribute
 
@@ -24,8 +24,8 @@ can agree on the direction before you write code.
 ### Set up
 
 ```sh
-git clone git@github.com:ernilambar/tinytext.git
-cd tinytext
+git clone git@github.com:ernilambar/tine.git
+cd tine
 cargo build
 ```
 
@@ -44,7 +44,7 @@ headless mode yet.
 For a faster loop, `bacon run` (`cargo install bacon`) rebuilds and relaunches the app
 on every save.
 
-Some features only work from an app bundle: the `tinytext` command, Finder's "Open
+Some features only work from an app bundle: the `tine` command, Finder's "Open
 With", and files opened through LaunchServices. To test them, build, install, and
 relaunch the bundle in one step (needs `cargo install cargo-bundle`):
 
@@ -54,7 +54,7 @@ relaunch the bundle in one step (needs `cargo install cargo-bundle`):
 ./scripts/dev.sh file.txt    # relaunch and open a file
 ```
 
-This replaces `/Applications/Tinytext.app` and kills the running copy, so save your work
+This replaces `/Applications/Tine.app` and kills the running copy, so save your work
 in it first.
 
 `./scripts/bundle.sh` builds a release bundle into `target/release/bundle/osx/` without
@@ -63,7 +63,7 @@ installing it. Regenerate the app icon with `python3 scripts/make-icon.py`.
 ### Code layout
 
 - `src/main.rs`: entry point, actions, and keybindings
-- `src/app/`: `TinytextApp` state, split into `files.rs`, `tabs.rs`, and `ui.rs`
+- `src/app/`: `TineApp` state, split into `files.rs`, `tabs.rs`, and `ui.rs`
 - `src/cli.rs`, `src/language.rs`, `src/paths.rs`, `src/session.rs`, `src/update.rs`:
   helpers with no GPUI dependency
 
@@ -102,7 +102,7 @@ let cargo update `Cargo.lock`:
 
 ```sh
 # edit version in Cargo.toml
-cargo update -p tinytext
+cargo update -p tine
 ```
 
 Run the quality gate above, then tag the release so it matches the version:
@@ -113,7 +113,7 @@ git push origin v0.1.2
 ```
 
 The Release workflow checks that the tag matches `Cargo.toml`, builds and ad-hoc signs
-the app, and publishes `Tinytext-macos-arm64.zip` to a GitHub Release.
+the app, and publishes `Tine-macos-arm64.zip` to a GitHub Release.
 
 ## Resources
 

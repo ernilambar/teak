@@ -17,7 +17,7 @@ use crate::paths::{
 };
 use crate::{AddFolder, CloseAllFolders, NewFile, OpenFile, SaveAll, SaveFile, SaveFileAs};
 
-use super::TinytextApp;
+use super::TineApp;
 use super::workspace::{AddRoot, FileClipboard};
 
 /// A file read for a new tab: text for the editor, or a raster image to view.
@@ -165,7 +165,7 @@ struct NamePrompt {
     ok_text: &'static str,
 }
 
-impl TinytextApp {
+impl TineApp {
     pub(crate) fn request_open(
         &mut self,
         path: PathBuf,

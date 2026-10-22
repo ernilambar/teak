@@ -15,7 +15,7 @@ use crate::CloseTab;
 use crate::language::{editor_language_id, language_for};
 use crate::paths::file_name;
 
-use super::TinytextApp;
+use super::TineApp;
 use super::files::{FileContent, LARGE_FILE_BYTES, TextFormat, modified_time};
 use crate::search::ResultTarget;
 
@@ -277,7 +277,7 @@ impl TabSet {
     }
 }
 
-impl TinytextApp {
+impl TineApp {
     pub(super) fn add_tab(
         &mut self,
         path: Option<PathBuf>,

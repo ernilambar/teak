@@ -18,14 +18,14 @@ use std::path::PathBuf;
 use gpui_kit::component::{ThemeMode, ThemeRegistry, WindowExt as _, notification::Notification};
 use gpui_kit::*;
 
-use app::{TinytextApp, WINDOW_TITLE};
+use app::{TineApp, WINDOW_TITLE};
 use cli::{CliCommand, parse_args, print_help};
 use paths::path_from_file_url;
 use session::load_session;
 use settings::{ICON_STYLE_COLORFUL, ICON_STYLE_MONOCHROME, load_settings};
 
 gpui_kit::actions!(
-    tinytext,
+    tine,
     [
         NewFile,
         OpenFile,
@@ -96,19 +96,19 @@ gpui_kit::actions!(
 /// Jump to tab `N` (1-based) from `cmd-1`..`cmd-9`. The `actions!` macro only
 /// builds unit actions, so the index is carried here instead.
 #[derive(Clone, PartialEq, gpui_kit::Action)]
-#[action(namespace = tinytext, no_json)]
+#[action(namespace = tine, no_json)]
 pub struct JumpToTab(usize);
 
 /// Opens the file the quick-open finder confirmed, from `Cmd+P`. The `actions!`
 /// macro only builds unit actions, so the path is carried here instead.
 #[derive(Clone, PartialEq, gpui_kit::Action)]
-#[action(namespace = tinytext, no_json)]
+#[action(namespace = tine, no_json)]
 pub struct OpenPath(pub(crate) PathBuf);
 
 /// Picks the appearance from the Appearance menu or the command palette. The
 /// payload is the `ui.theme` value: `light`, `dark`, or `system`.
 #[derive(Clone, PartialEq, gpui_kit::Action)]
-#[action(namespace = tinytext, no_json)]
+#[action(namespace = tine, no_json)]
 pub struct SetTheme(pub(crate) String);
 
 fn main() {
@@ -197,7 +197,7 @@ fn main() {
                 Ok(settings) => (settings, None),
                 Err(message) => (Default::default(), Some(message)),
             };
-            let app = cx.new(|cx| TinytextApp::new(initial_folders.clone(), settings, cx));
+            let app = cx.new(|cx| TineApp::new(initial_folders.clone(), settings, cx));
             // Block the red close button (and app termination) while there are
             // unsaved edits, prompting instead.
             let close_guard = app.clone();

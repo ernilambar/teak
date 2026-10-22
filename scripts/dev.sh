@@ -27,8 +27,8 @@ fi
 
 cargo bundle $flag
 
-SRC="target/$profile/bundle/osx/Tinytext.app"
-DEST="/Applications/Tinytext.app"
+SRC="target/$profile/bundle/osx/Tine.app"
+DEST="/Applications/Tine.app"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 codesign --force --deep --sign - "$SRC"
