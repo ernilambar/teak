@@ -36,23 +36,6 @@ brew upgrade --cask tine
 If you used the install script, run it again instead. It replaces the existing app with
 the latest release.
 
-## Upgrading from Tinytext
-
-Tine uses a new bundle identifier, so it starts with a fresh support directory. Existing
-settings, session, and themes are not migrated. To keep them, quit Tine and copy the old
-folder into the new location:
-
-```sh
-cp -R ~/Library/Application\ Support/net.nilambar.tinytext/ ~/Library/Application\ Support/net.nilambar.tine/
-```
-
-Remove the old app and command-line tool:
-
-```sh
-rm -rf /Applications/Tinytext.app
-sudo rm -f /usr/local/bin/tinytext
-```
-
 ## Open files from Terminal
 
 Choose **Tine → Install Command Line Tool…** and enter your password when asked.
