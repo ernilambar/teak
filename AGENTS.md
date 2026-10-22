@@ -4,7 +4,7 @@ Guidance for AI coding agents (Claude, Cursor, Copilot, Codex) working in this r
 
 ## Overview
 
-This project is a native macOS text editor written in Rust. It builds its UI with
+This project is a text editor written in Rust. It builds its UI with
 [GPUI Kit](https://gpui-kit.com) (`gpui-kit`), which bundles GPUI, GPUI Base, and GPUI
 Component, and uses `ropey` plus `tree-sitter` for text buffering and syntax parsing.
 
@@ -13,8 +13,8 @@ Component, and uses `ropey` plus `tree-sitter` for text buffering and syntax par
 Requirements: Rust 1.92 or later, macOS 15 or later, and Xcode Command Line Tools.
 
 ```sh
-git clone git@github.com:ernilambar/tine.git
-cd tine
+git clone git@github.com:ernilambar/teak.git
+cd teak
 xcode-select --install
 rustup component add rustfmt clippy
 cargo build
@@ -51,7 +51,7 @@ in headless environments.
   `cx.theme()`.
 - Never edit `Cargo.lock` by hand; regenerate it with a `cargo` command.
 - Module layout: `main.rs` (entry, actions, keybindings) and `app/`, which is one
-  coordinator type plus five state groups. `TineApp` holds `focus_handle` and one
+  coordinator type plus five state groups. `TeakApp` holds `focus_handle` and one
   field per group — `Workspace` (`app/workspace.rs`), `TabSet` (`app/tabs.rs`),
   `Overlays` (`app/overlays.rs`), `Chrome` (`app/chrome.rs`), `SettingsState`
   (`app/preferences.rs`) — and keeps every method that takes a `cx`/`Window`, since a
@@ -59,7 +59,7 @@ in headless environments.
   go through methods, and each group needs a `new()` because `mod.rs` cannot initialize
   private fields. Leaf records (`OpenTab`, `TreeRow`, `Settings`) keep `pub(super)`
   fields so rendering can read them directly. `app/files.rs`, `editor.rs`, `find_in_files.rs`,
-  `palette.rs`, `quick_open.rs` and `ui.rs` hold further `impl TineApp`
+  `palette.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
   orchestration blocks; GPUI-free helpers live in `cli.rs`, `language.rs`, `paths.rs`,
   `search.rs`, `session.rs`, `settings.rs`, `update.rs`. Add a new module only once a feature is large enough to
   justify the boundary.
@@ -99,14 +99,14 @@ anywhere else.
 To release a new version:
 
 1. Bump `version` in `Cargo.toml`.
-2. Run `cargo update -p tine` so `Cargo.lock` picks up the new version (do not edit it
+2. Run `cargo update -p teak` so `Cargo.lock` picks up the new version (do not edit it
    by hand).
 3. If the year changed, update `copyright` under `[package.metadata.bundle]`.
 4. Pass the quality gate and report the changes.
 
 The maintainer tags `vX.Y.Z` and pushes it; the tag must match the `Cargo.toml` version
 exactly. `.github/workflows/release.yml` then builds, ad-hoc signs, and publishes
-`Tine-macos-arm64.zip` to a GitHub Release. Do not rename that asset:
+`Teak-macos-arm64.zip` to a GitHub Release. Do not rename that asset:
 `scripts/install.sh` downloads it by name.
 
 ## Quality gate

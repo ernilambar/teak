@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # Command-line launcher.
 #
-#   tine file.txt
+#   teak file.txt
 #
 # Hands the given paths to the running app (or launches it) through
 # LaunchServices, so files open as tabs in the existing window. This is why
 # repeated invocations reuse one instance instead of starting a new process.
 #
-# Set TINE_APP to point at a bundle outside /Applications.
+# Set TEAK_APP to point at a bundle outside /Applications.
 set -euo pipefail
 
-APP="${TINE_APP:-/Applications/Tine.app}"
+APP="${TEAK_APP:-/Applications/Teak.app}"
 
 # Options are handled by the binary itself; `open` would treat them as files.
 for arg in "$@"; do
     case "$arg" in
         --) break ;;
-        -*) exec "$APP/Contents/MacOS/tine" "$@" ;;
+        -*) exec "$APP/Contents/MacOS/teak" "$@" ;;
     esac
 done
 

@@ -61,9 +61,9 @@ pub(super) fn scroll_beyond_last_line(editor: &EditorSettings) -> Option<usize> 
 }
 
 /// The app name shown in the window title, before the focused tab's path.
-pub(crate) const WINDOW_TITLE: &str = "Tine";
+pub(crate) const WINDOW_TITLE: &str = "Teak";
 
-pub(crate) struct TineApp {
+pub(crate) struct TeakApp {
     pub(crate) focus_handle: FocusHandle,
     /// The open folders, the expanded set, and the rows rendered from them.
     workspace: Workspace,
@@ -77,7 +77,7 @@ pub(crate) struct TineApp {
     settings: SettingsState,
 }
 
-impl TineApp {
+impl TeakApp {
     pub(crate) fn new(
         workspace_roots: Vec<PathBuf>,
         settings: Settings,
@@ -950,7 +950,7 @@ impl TineApp {
                                 .child(WINDOW_TITLE),
                         )
                         .child(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                        .child("A native macOS text editor built with GPUI Kit.")
+                        .child("A fast, lightweight text editor.")
                         .child(
                             div()
                                 .v_flex()
@@ -990,7 +990,7 @@ pub(super) fn logo(size: f32) -> Img {
     img(logo_image()).w(px(size)).h(px(size))
 }
 
-impl Render for TineApp {
+impl Render for TeakApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_window_title(window);
 
@@ -1118,19 +1118,19 @@ pub(super) mod test_support {
         AnyWindowHandle, AppContext as _, Entity, TestAppContext, WindowOptions, open_window,
     };
 
-    use super::TineApp;
+    use super::TeakApp;
     use crate::keymap;
     use crate::settings::Settings;
 
     /// A headless window running the app with no workspace folders open.
-    pub(super) fn open_app(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<TineApp>) {
+    pub(super) fn open_app(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<TeakApp>) {
         cx.update(|cx| {
             gpui_kit::init(cx);
             keymap::bind_keys(cx);
         });
         cx.update(|cx| {
             open_window(WindowOptions::default(), cx, |_window, cx| {
-                cx.new(|cx| TineApp::new(Vec::new(), Settings::default(), cx))
+                cx.new(|cx| TeakApp::new(Vec::new(), Settings::default(), cx))
             })
             .unwrap()
         })

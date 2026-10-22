@@ -6684,6 +6684,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "teak"
+version = "0.2.0"
+dependencies = [
+ "async-channel",
+ "globset",
+ "gpui-kit",
+ "ignore",
+ "regex",
+ "serde",
+ "serde_json",
+ "trash",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6788,20 +6802,6 @@ name = "time-core"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
-
-[[package]]
-name = "tine"
-version = "0.2.0"
-dependencies = [
- "async-channel",
- "globset",
- "gpui-kit",
- "ignore",
- "regex",
- "serde",
- "serde_json",
- "trash",
-]
 
 [[package]]
 name = "tiny-keccak"

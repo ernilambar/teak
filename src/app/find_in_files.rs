@@ -38,7 +38,7 @@ use crate::{
     PreviousResult, ReplaceAll, RunFind,
 };
 
-use super::TineApp;
+use super::TeakApp;
 use super::editor::changed_span;
 use super::files::{TextFormat, modified_time};
 use super::overlays::{FindFields, FindStatus, FindText};
@@ -51,7 +51,7 @@ const RESULTS_TITLE: &str = "Find Results";
 /// Width of the field labels, so the rows line up.
 const LABEL_WIDTH: Pixels = px(52.);
 
-impl TineApp {
+impl TeakApp {
     /// Shows the Find panel with the query field focused, prefilled with the
     /// editor's selection when it is a single line.
     pub(super) fn on_find_in_files(

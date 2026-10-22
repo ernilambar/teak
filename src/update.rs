@@ -1,7 +1,7 @@
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/ernilambar/tine/releases/latest";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/ernilambar/teak/releases/latest";
 
 pub(crate) const INSTALL_COMMAND: &str =
-    "curl -fsSL https://raw.githubusercontent.com/ernilambar/tine/main/scripts/install.sh | sh";
+    "curl -fsSL https://raw.githubusercontent.com/ernilambar/teak/main/scripts/install.sh | sh";
 
 /// Returns the version of the latest GitHub release, without the leading `v`.
 pub(crate) fn latest_version() -> Result<String, String> {

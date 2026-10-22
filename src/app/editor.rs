@@ -23,7 +23,7 @@ use crate::{
     SplitSelectionIntoLines, ToggleLineComment,
 };
 
-use super::TineApp;
+use super::TeakApp;
 
 /// A single replacement to apply to the document.
 struct Commit {
@@ -520,7 +520,7 @@ fn split_indent(line: &str) -> (&str, &str) {
     (indent, &line[indent.len()..])
 }
 
-impl TineApp {
+impl TeakApp {
     /// Runs `edit` against the focused editor's text and selection and applies
     /// the resulting replacement, if any.
     fn apply_to_editor<F>(&mut self, window: &mut Window, cx: &mut Context<Self>, edit: F)
