@@ -9,6 +9,7 @@ extern crate gpui_fast as gpui;
 #[cfg(all(feature = "gpui-fast", test))]
 extern crate gpui_fast_platform as gpui_platform;
 
+mod a11y_disabled;
 mod accordion;
 pub mod actions;
 mod alert_dialog;
@@ -46,6 +47,7 @@ mod nav_stack;
 mod number_input;
 mod observe;
 mod otp_input;
+mod overscroll;
 mod pagination;
 pub mod plot;
 mod popover;
@@ -154,13 +156,13 @@ pub use progress::{Progress, ProgressIndicator, ProgressTrack};
 pub use radio::{Radio, RadioStyles};
 pub use radio_group::RadioGroup;
 pub use reduce_motion::apply_system_reduce_motion;
+#[doc(hidden)]
+pub use resizable::PANEL_MIN_SIZE;
 pub use resizable::{
     HandleEdge, ResizablePanel, ResizablePanelEvent, ResizablePanelGroup, ResizableState,
-    ResizeHandleContext, ResizeHandleRenderer, ResizeHandleState, h_resizable, resizable_panel,
-    v_resizable,
+    ResizeHandle, ResizeHandleContext, ResizeHandleRenderer, ResizeHandleState, h_resizable,
+    resizable_panel, resize_handle, v_resizable,
 };
-#[doc(hidden)]
-pub use resizable::{PANEL_MIN_SIZE, resize_handle};
 pub use root::{Root, RootPlugin};
 pub use scroll_bounce::{ScrollBounce, ScrollBounceMotion};
 pub use scrollable_mask::{RoundedFrameCover, ScrollableMask};
