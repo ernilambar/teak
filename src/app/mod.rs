@@ -39,7 +39,9 @@ use crate::settings::{
     defaults_document, font_family_issue, load_settings, save_editor_flag, save_font_size,
     save_show_whitespace, save_soft_wrap, save_theme, settings_path, ui_font_family_issue,
 };
-use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
+use crate::update::{
+    INSTALL_COMMAND, RELEASES_URL, UPDATE_ACTION_LABEL, UPDATE_HINT, is_newer, latest_version,
+};
 use crate::{
     About, CheckForUpdates, ClearRecent, CopyFilePath, CopyRelativePath, InstallCli, JumpToTab,
     NextTab, OpenDefaultSettings, OpenSettings, OpenThemesFolder, PreviousTab, Quit, Refresh,
@@ -758,37 +760,43 @@ impl TeakApp {
                 match result {
                     Ok(latest) if is_newer(&latest, current) => {
                         window.open_alert_dialog(cx, move |alert, _, _| {
+                            let description = div()
+                                .v_flex()
+                                .gap_1()
+                                .child(format!(
+                                    "{WINDOW_TITLE} {latest} is available. You have {current}."
+                                ))
+                                .child(UPDATE_HINT);
+                            let description = match INSTALL_COMMAND {
+                                Some(command) => description.child(command),
+                                None => description,
+                            };
+
                             alert
                                 .title("Update Available")
-                                .description(
-                                    div()
-                                        .v_flex()
-                                        .gap_1()
-                                        .child(format!(
-                                            "{WINDOW_TITLE} {latest} is available. You have {current}."
-                                        ))
-                                        .child("Save your work, then run this in Terminal:")
-                                        .child(INSTALL_COMMAND),
-                                )
-                                .ok_text("Copy Command")
+                                .description(description)
+                                .ok_text(UPDATE_ACTION_LABEL)
                                 .show_cancel(true)
                                 .cancel_text("Later")
                                 .on_ok(|_, window, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        INSTALL_COMMAND.to_string(),
-                                    ));
-                                    window.push_notification(
-                                        Notification::success("Copied install command"),
-                                        cx,
-                                    );
+                                    match INSTALL_COMMAND {
+                                        Some(command) => {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                command.to_string(),
+                                            ));
+                                            window.push_notification(
+                                                Notification::success("Copied install command"),
+                                                cx,
+                                            );
+                                        }
+                                        None => cx.open_url(RELEASES_URL),
+                                    }
                                     true
                                 })
                         });
                     }
                     Ok(_) => window.push_notification(
-                        Notification::success(format!(
-                            "{WINDOW_TITLE} {current} is up to date"
-                        )),
+                        Notification::success(format!("{WINDOW_TITLE} {current} is up to date")),
                         cx,
                     ),
                     Err(message) => window.push_notification(

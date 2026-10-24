@@ -1,28 +1,60 @@
+use std::time::Duration;
+
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/ernilambar/teak/releases/latest";
 
-pub(crate) const INSTALL_COMMAND: &str =
-    "curl -fsSL https://raw.githubusercontent.com/ernilambar/teak/main/scripts/install.sh | sh";
+/// The command the update dialog copies, where the platform has an installer.
+/// Only macOS has one; Linux and Windows ship bare archives.
+#[cfg(target_os = "macos")]
+pub(crate) const INSTALL_COMMAND: Option<&str> = Some(
+    "curl -fsSL https://raw.githubusercontent.com/ernilambar/teak/main/scripts/install.sh | sh",
+);
+#[cfg(not(target_os = "macos"))]
+pub(crate) const INSTALL_COMMAND: Option<&str> = None;
+
+pub(crate) const RELEASES_URL: &str = "https://github.com/ernilambar/teak/releases/latest";
+
+/// The line above the install hint in the update dialog.
+#[cfg(target_os = "macos")]
+pub(crate) const UPDATE_HINT: &str = "Save your work, then run this in Terminal:";
+#[cfg(not(target_os = "macos"))]
+pub(crate) const UPDATE_HINT: &str =
+    "Download the latest release, then replace your Teak executable.";
+
+/// The update dialog's confirm button.
+#[cfg(target_os = "macos")]
+pub(crate) const UPDATE_ACTION_LABEL: &str = "Copy Command";
+#[cfg(not(target_os = "macos"))]
+pub(crate) const UPDATE_ACTION_LABEL: &str = "Open Download Page";
+
+const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Returns the version of the latest GitHub release, without the leading `v`.
+///
+/// The request is made in-process so the check works on systems without a
+/// `curl` binary, and bundles its own root certificates.
 pub(crate) fn latest_version() -> Result<String, String> {
-    let output = std::process::Command::new("curl")
-        .args([
-            "-fsSL",
-            "--max-time",
-            "10",
-            "-H",
-            "Accept: application/vnd.github+json",
-            LATEST_RELEASE_URL,
-        ])
-        .output()
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(TIMEOUT))
+        .user_agent(concat!(
+            env!("CARGO_PKG_NAME"),
+            "/",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .build()
+        .into();
+
+    let mut response = agent
+        .get(LATEST_RELEASE_URL)
+        .header("Accept", "application/vnd.github+json")
+        .call()
         .map_err(|error| error.to_string())?;
 
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr);
-        return Err(message.trim().trim_start_matches("curl: ").to_string());
-    }
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| error.to_string())?;
 
-    parse_tag(&output.stdout)
+    parse_tag(body.as_bytes())
 }
 
 fn parse_tag(body: &[u8]) -> Result<String, String> {
