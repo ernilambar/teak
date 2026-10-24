@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,9 +12,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release:
-    name: Build and publish
-    runs-on: macos-15
+  verify:
+    name: Check tag matches Cargo.toml version
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
@@ -25,21 +26,96 @@ jobs:
             exit 1
           fi
 
+  build:
+    name: Build (${{ matrix.name }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-15
+            asset: Teak-macos-arm64.zip
+          - name: Linux x86_64
+            os: ubuntu-latest
+            asset: Teak-linux-x86_64.tar.gz
+          - name: Windows x86_64
+            os: windows-latest
+            asset: Teak-windows-x86_64.zip
+    steps:
+      - uses: actions/checkout@v5
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxcb-composite0-dev \
+            libxcb-damage0-dev \
+            libxcb-present-dev \
+            libxcb-render0-dev \
+            libxcb-res0-dev \
+            libxcb-shape0-dev \
+            libxcb-shm0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev
+
       - uses: taiki-e/install-action@v2
+        if: runner.os == 'macOS'
         with:
           tool: cargo-bundle
 
-      - name: Bundle
+      - name: Build macOS bundle
+        if: runner.os == 'macOS'
         run: |
           cargo build --release --locked
           cargo bundle --release
           codesign --force --deep --sign - target/release/bundle/osx/Teak.app
-          ditto -c -k --keepParent target/release/bundle/osx/Teak.app Teak-macos-arm64.zip
+          ditto -c -k --keepParent target/release/bundle/osx/Teak.app "${{ matrix.asset }}"
+
+      - name: Build Linux archive
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release --locked
+          strip target/release/teak
+          tar -czf "${{ matrix.asset }}" -C target/release teak
+
+      - name: Build Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release --locked
+          Compress-Archive -Path target/release/teak.exe -DestinationPath "${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" Teak-macos-arm64.zip --title "$GITHUB_REF_NAME" --generate-notes
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
