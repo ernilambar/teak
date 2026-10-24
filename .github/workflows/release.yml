@@ -41,25 +41,9 @@ jobs:
           fi
 
   build:
-    name: Build (${{ matrix.name }})
+    name: Build (macOS arm64)
     needs: verify
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS arm64
-            os: macos-15
-            asset: Teak-macos-arm64.zip
-          - name: Linux x86_64
-            os: ubuntu-latest
-            asset: Teak-linux-x86_64.tar.gz
-          - name: Linux arm64
-            os: ubuntu-24.04-arm
-            asset: Teak-linux-aarch64.tar.gz
-          - name: Windows x86_64
-            os: windows-latest
-            asset: Teak-windows-x86_64.zip
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
         with:
@@ -68,87 +52,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libfontconfig1-dev \
-            libfreetype6-dev \
-            libwayland-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcb1-dev \
-            libxcb-composite0-dev \
-            libxcb-damage0-dev \
-            libxcb-present-dev \
-            libxcb-render0-dev \
-            libxcb-res0-dev \
-            libxcb-shape0-dev \
-            libxcb-shm0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev
-
       - uses: taiki-e/install-action@v2
-        if: runner.os == 'macOS'
         with:
           tool: cargo-bundle
 
       - name: Build macOS bundle
-        if: runner.os == 'macOS'
         run: |
           cargo build --release --locked
           cargo bundle --release
           codesign --force --deep --sign - target/release/bundle/osx/Teak.app
-          ditto -c -k --keepParent target/release/bundle/osx/Teak.app "${{ matrix.asset }}"
-
-      - name: Build Linux archive
-        if: runner.os == 'Linux'
-        run: |
-          cargo build --release --locked
-          strip target/release/teak
-          tar -czf "${{ matrix.asset }}" -C target/release teak
-
-      - name: Build Windows binary
-        if: runner.os == 'Windows'
-        run: cargo build --release --locked
-
-      - name: Verify Windows static C runtime
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vswhere)) {
-            throw "vswhere.exe not found; cannot locate dumpbin."
-          }
-
-          $dumpbin = & $vswhere -latest -products * -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" |
-            Select-Object -First 1
-          if (-not $dumpbin) {
-            throw "dumpbin.exe not found; cannot verify the C runtime linkage."
-          }
-
-          $dependents = & $dumpbin /nologo /dependents target/release/teak.exe
-          if ($LASTEXITCODE -ne 0) {
-            throw "dumpbin failed with exit code $LASTEXITCODE."
-          }
-          $dependents
-
-          $dynamicCrt = $dependents | Select-String -Pattern 'vcruntime140|msvcp140'
-          if ($dynamicCrt) {
-            throw "teak.exe still imports the dynamic C runtime: $dynamicCrt"
-          }
-
-      - name: Package Windows archive
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Compress-Archive -Path target/release/teak.exe -DestinationPath "${{ matrix.asset }}"
+          ditto -c -k --keepParent target/release/bundle/osx/Teak.app "Teak-macos-arm64.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          name: Teak-macos-arm64.zip
+          path: Teak-macos-arm64.zip
           if-no-files-found: error
 
   publish:

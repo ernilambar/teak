@@ -88,7 +88,10 @@ in headless environments.
   `./scripts/vendor-gpui-base.sh <version>` with the gpui-base version from `Cargo.lock`;
   a version mismatch makes Cargo ignore the patch. If the patch no longer applies, re-add the
   change by hand in the fresh copy and run `--diff`.
-- This project targets macOS only. Do not add cross-platform code paths.
+- The app ships macOS releases only for now; Windows and Linux releases are paused
+  while their glitches are unresolved. Keep the code cross-platform where practical
+  (per-OS branches, no new macOS-only assumptions) so Windows and Linux variants
+  can be supported again in the future.
 
 ## Releasing
 
