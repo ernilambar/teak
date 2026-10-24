@@ -1018,6 +1018,18 @@ pub(crate) fn menus(theme: &str, recent: &[PathBuf]) -> Vec<Menu> {
         .collect()
 }
 
+/// Publishes the menu bar. Platforms with a native app menu use that; the
+/// others read the owned menus from the shared state their in-window bar
+/// renders from.
+pub(crate) fn apply_menus(cx: &mut App, menus: Vec<Menu>) {
+    cx.set_menus(menus);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let menus = cx.get_menus().unwrap_or_default();
+        gpui_kit::component::global_state::GlobalState::global_mut(cx).set_app_menus(menus);
+    }
+}
+
 fn menu_item(command: &Command) -> MenuItem {
     MenuItem::Action {
         name: command.label.into(),

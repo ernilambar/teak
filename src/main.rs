@@ -195,7 +195,7 @@ fn main() {
             cx.on_action(|_: &ShowAll, _: &mut App| {});
         }
         // The app replaces these once it has loaded the recent list.
-        cx.set_menus(commands::menus(&theme_choice, &[]));
+        commands::apply_menus(cx, commands::menus(&theme_choice, &[]));
 
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions {

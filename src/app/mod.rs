@@ -29,6 +29,9 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
+#[cfg(not(target_os = "macos"))]
+use gpui_kit::component::menu::AppMenuBar;
+
 use crate::cli::{install_cli, launcher_target};
 use crate::session::{SessionState, load_session, session_path};
 use crate::settings::{
@@ -75,6 +78,9 @@ pub(crate) struct TeakApp {
     chrome: Chrome,
     /// The user's preferences and the Settings overlay's own state.
     settings: SettingsState,
+    /// The in-window menu bar, for platforms without a native app menu.
+    #[cfg(not(target_os = "macos"))]
+    menu_bar: Entity<AppMenuBar>,
 }
 
 impl TeakApp {
@@ -92,6 +98,8 @@ impl TeakApp {
             overlays: Overlays::new(),
             chrome: Chrome::new(),
             settings: SettingsState::new(settings),
+            #[cfg(not(target_os = "macos"))]
+            menu_bar: AppMenuBar::new(cx),
         };
         app.workspace.reload();
         // Read on its own because the session is skipped when the app is
@@ -112,7 +120,9 @@ impl TeakApp {
     /// app state.
     fn refresh_menus(&self, cx: &mut App) {
         let theme = self.settings.values.ui.theme().to_string();
-        cx.set_menus(crate::commands::menus(&theme, self.workspace.recent()));
+        crate::commands::apply_menus(cx, crate::commands::menus(&theme, self.workspace.recent()));
+        #[cfg(not(target_os = "macos"))]
+        self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
     }
 
     /// Records a file or folder the user opened, for File > Open Recent.
@@ -550,7 +560,9 @@ impl TeakApp {
         cx: &mut Context<Self>,
     ) {
         crate::theme::apply(&self.settings.values, window, cx);
-        cx.set_menus(crate::commands::menus(choice, self.workspace.recent()));
+        crate::commands::apply_menus(cx, crate::commands::menus(choice, self.workspace.recent()));
+        #[cfg(not(target_os = "macos"))]
+        self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
     }
 
     /// Re-applies the current appearance and color scheme without a window, used
@@ -1087,7 +1099,25 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_open_result))
             .on_action(cx.listener(Self::on_next_result))
             .on_action(cx.listener(Self::on_previous_result))
-            .on_action(cx.listener(Self::on_open_path))
+            .on_action(cx.listener(Self::on_open_path));
+
+        // A native app menu sits outside the window; elsewhere the bar is the
+        // first row of the client area.
+        #[cfg(not(target_os = "macos"))]
+        let root = root.child(
+            div()
+                .w_full()
+                .h(gpui_kit::component::TITLE_BAR_HEIGHT)
+                .flex()
+                .items_center()
+                .px_2()
+                .bg(cx.theme().title_bar)
+                .border_b_1()
+                .border_color(cx.theme().title_bar_border)
+                .child(self.menu_bar.clone()),
+        );
+
+        let root = root
             .child(self.render_workspace(window, cx))
             .children(find_panel)
             .child(self.render_status_bar(alt_held, cx));
