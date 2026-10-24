@@ -97,6 +97,25 @@ pub(crate) struct Command {
 /// A command with no chord.
 const NO_KEYS: &[(&str, Scope)] = &[];
 
+/// Chords for the app-menu commands, which have no meaning without a native
+/// app menu. Off macOS they are bound to nothing.
+#[cfg(target_os = "macos")]
+const HIDE_KEYS: &[(&str, Scope)] = &[("cmd-h", Scope::Global)];
+#[cfg(not(target_os = "macos"))]
+const HIDE_KEYS: &[(&str, Scope)] = NO_KEYS;
+
+#[cfg(target_os = "macos")]
+const HIDE_OTHERS_KEYS: &[(&str, Scope)] = &[("alt-cmd-h", Scope::Global)];
+#[cfg(not(target_os = "macos"))]
+const HIDE_OTHERS_KEYS: &[(&str, Scope)] = NO_KEYS;
+
+/// Menu placement for the app-menu commands. They only appear with the native
+/// app menu, so off macOS they are on neither the menu bar nor the keymap.
+#[cfg(target_os = "macos")]
+const MACOS_MENU_SLOT: Option<(MenuKind, u8)> = Some((MenuKind::Teak, 3));
+#[cfg(not(target_os = "macos"))]
+const MACOS_MENU_SLOT: Option<(MenuKind, u8)> = None;
+
 /// Every user-invokable command.
 ///
 /// `OpenPath` and `SetTheme` are absent on purpose: the first is dispatched by
@@ -599,16 +618,16 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Hide Teak",
         make: || Box::new(Hide),
-        bindings: &[("cmd-h", Scope::Global)],
-        menu: Some((MenuKind::Teak, 3)),
+        bindings: HIDE_KEYS,
+        menu: MACOS_MENU_SLOT,
         palette: None,
         keywords: &[],
     },
     Command {
         label: "Hide Others",
         make: || Box::new(HideOthers),
-        bindings: &[("alt-cmd-h", Scope::Global)],
-        menu: Some((MenuKind::Teak, 3)),
+        bindings: HIDE_OTHERS_KEYS,
+        menu: MACOS_MENU_SLOT,
         palette: None,
         keywords: &[],
     },
@@ -616,7 +635,7 @@ static COMMANDS: &[Command] = &[
         label: "Show All",
         make: || Box::new(ShowAll),
         bindings: NO_KEYS,
-        menu: Some((MenuKind::Teak, 3)),
+        menu: MACOS_MENU_SLOT,
         palette: None,
         keywords: &[],
     },
@@ -751,6 +770,7 @@ enum Entry {
     OpenRecent,
 }
 
+#[cfg(target_os = "macos")]
 const TEAK_MENU: &[Entry] = &[
     Entry::Cluster(0),
     Entry::Item(MenuItem::separator),
@@ -761,6 +781,20 @@ const TEAK_MENU: &[Entry] = &[
     Entry::Item(services_menu),
     Entry::Item(MenuItem::separator),
     Entry::Cluster(3),
+    Entry::Item(MenuItem::separator),
+    Entry::Cluster(4),
+];
+
+/// Without the native app menu the hide/show commands and the Services menu
+/// have no platform equivalent, so the menu goes straight from the app
+/// commands to Quit.
+#[cfg(not(target_os = "macos"))]
+const TEAK_MENU: &[Entry] = &[
+    Entry::Cluster(0),
+    Entry::Item(MenuItem::separator),
+    Entry::Cluster(1),
+    Entry::Item(MenuItem::separator),
+    Entry::Cluster(2),
     Entry::Item(MenuItem::separator),
     Entry::Cluster(4),
 ];
@@ -833,6 +867,7 @@ const PALETTE: &[PaletteSlot] = &[
     PaletteSlot::Group(PaletteGroup::Teak),
 ];
 
+#[cfg(target_os = "macos")]
 fn services_menu() -> MenuItem {
     MenuItem::os_submenu("Services", SystemMenuType::Services)
 }
@@ -1193,21 +1228,30 @@ mod tests {
     /// bar the app had before the table existed.
     #[test]
     fn menu_command_order_is_unchanged() {
+        #[cfg(target_os = "macos")]
+        let teak_commands: &[&str] = &[
+            "About Teak",
+            "Check for Updates…",
+            "Settings…",
+            "Open Themes Folder",
+            "Install Command Line Tool…",
+            "Hide Teak",
+            "Hide Others",
+            "Show All",
+            "Quit Teak",
+        ];
+        #[cfg(not(target_os = "macos"))]
+        let teak_commands: &[&str] = &[
+            "About Teak",
+            "Check for Updates…",
+            "Settings…",
+            "Open Themes Folder",
+            "Install Command Line Tool…",
+            "Quit Teak",
+        ];
+
         let expected: &[(MenuKind, &[&str])] = &[
-            (
-                MenuKind::Teak,
-                &[
-                    "About Teak",
-                    "Check for Updates…",
-                    "Settings…",
-                    "Open Themes Folder",
-                    "Install Command Line Tool…",
-                    "Hide Teak",
-                    "Hide Others",
-                    "Show All",
-                    "Quit Teak",
-                ],
-            ),
+            (MenuKind::Teak, teak_commands),
             (
                 MenuKind::File,
                 &[
@@ -1386,7 +1430,15 @@ mod tests {
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 52);
+        #[cfg(target_os = "macos")]
+        const MENU_COMMANDS: usize = 52;
+        #[cfg(not(target_os = "macos"))]
+        const MENU_COMMANDS: usize = 49;
+
+        assert_eq!(
+            COMMANDS.iter().filter(|c| c.menu.is_some()).count(),
+            MENU_COMMANDS
+        );
         assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 50);
     }
 }
