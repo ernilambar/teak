@@ -1152,11 +1152,15 @@ mod tests {
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
         #[cfg(target_os = "macos")]
+        const APP_BINDINGS: usize = 40;
+        #[cfg(not(target_os = "macos"))]
+        const APP_BINDINGS: usize = 38;
+        #[cfg(target_os = "macos")]
         const EDITOR_BINDINGS: usize = 18;
         #[cfg(not(target_os = "macos"))]
         const EDITOR_BINDINGS: usize = 16;
 
-        assert_eq!(app_bindings().len(), 40);
+        assert_eq!(app_bindings().len(), APP_BINDINGS);
         assert_eq!(editor_bindings().len(), EDITOR_BINDINGS);
         assert_eq!(find_bindings().len(), 6);
     }

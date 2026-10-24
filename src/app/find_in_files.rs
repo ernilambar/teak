@@ -1170,7 +1170,7 @@ mod tests {
                 this.activate_tab(ix, window, cx);
             });
             window.render_frame(cx);
-            window.press("cmd-z", cx);
+            window.press("secondary-z", cx);
             assert_eq!(
                 editor.read(cx).text().to_string(),
                 "foo in buffer\n",
