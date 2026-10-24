@@ -478,7 +478,8 @@ impl TeakApp {
     }
 
     /// Swaps the active Markdown or SVG tab between its editor and a rendered
-    /// preview. Other languages and raster images are left alone.
+    /// preview. Other languages and raster images are left alone, with a
+    /// notification so the chord does not appear to do nothing.
     fn on_toggle_markdown_preview(
         &mut self,
         _: &ToggleMarkdownPreview,
@@ -492,6 +493,10 @@ impl TeakApp {
             return;
         };
         if tab.raster {
+            window.push_notification(
+                Notification::info("This image is always shown as a preview"),
+                cx,
+            );
             return;
         }
         let next = if tab.previewing().is_some() {
@@ -500,7 +505,13 @@ impl TeakApp {
             let text = tab.editor.read(cx).value();
             match Preview::for_text(&tab.language, &text, cx) {
                 Some(preview) => Some(preview),
-                None => return,
+                None => {
+                    window.push_notification(
+                        Notification::info("Preview is only available for Markdown and SVG files"),
+                        cx,
+                    );
+                    return;
+                }
             }
         };
         if let Some(old) = std::mem::replace(&mut tab.preview, next) {
