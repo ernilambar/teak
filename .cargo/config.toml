@@ -1,0 +1,6 @@
+# The Windows release is a bare .exe with no installer, so the C runtime is
+# linked statically. Without this, the app fails to start with
+# "vcruntime140.dll was not found" on machines that lack the Visual C++
+# Redistributable. release.yml verifies the result with dumpbin.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
