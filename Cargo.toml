@@ -2,6 +2,7 @@
 name = "teak"
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.99"
 authors = ["Nilambar Sharma <nilambar@outlook.com>"]
 license = "MIT"
 homepage = "https://nilambar.net/"

@@ -16,7 +16,7 @@ can agree on the direction before you write code.
 
 ### Requirements
 
-- Rust 1.92 or later — install with [rustup](https://rustup.rs)
+- Rust 1.99 or later — install with [rustup](https://rustup.rs)
 - macOS 15 or later
 - Xcode Command Line Tools — `xcode-select --install`
 - `rustfmt` and `clippy` components — `rustup component add rustfmt clippy`
