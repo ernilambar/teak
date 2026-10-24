@@ -126,15 +126,22 @@ pub(crate) fn install_cli(executable: &Path) -> Result<PathBuf, String> {
         .join("bin")
         .join("teak");
 
-    let temp = std::env::temp_dir().join(format!("cli-launcher-{}", std::process::id()));
+    let directory = target
+        .parent()
+        .ok_or("Could not find the install directory")?;
+    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+
+    // Stage beside the target so the rename never crosses filesystems, which
+    // fails with `EXDEV` when `/tmp` is a separate mount.
+    let temp = directory.join(format!(".teak-{}", std::process::id()));
     std::fs::write(&temp, linux_launcher_script(executable)).map_err(|error| error.to_string())?;
     std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
         .map_err(|error| error.to_string())?;
 
-    if let Some(directory) = target.parent() {
-        std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    if let Err(error) = std::fs::rename(&temp, &target) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error.to_string());
     }
-    std::fs::rename(&temp, &target).map_err(|error| error.to_string())?;
 
     Ok(target)
 }
