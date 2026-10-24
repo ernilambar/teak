@@ -10,7 +10,7 @@ Component, and uses `ropey` plus `tree-sitter` for text buffering and syntax par
 
 ## Setup
 
-Requirements: Rust 1.92 or later, macOS 15 or later, and Xcode Command Line Tools.
+Requirements: Rust 1.99 or later, macOS 15 or later, and Xcode Command Line Tools.
 
 ```sh
 git clone git@github.com:ernilambar/teak.git

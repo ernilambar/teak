@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 
+/// Used by the platforms that name the support directory after the app.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const BUNDLE_ID: &str = "net.nilambar.teak";
 
 /// The user's home directory, read from the variable the platform sets: `HOME`

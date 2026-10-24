@@ -925,8 +925,9 @@ mod tests {
     use crate::search::SearchOptions;
     use crate::search::{build_matcher, search_files};
 
-    /// Cmd+Shift+F shows the panel with the query field focused, Tab moves to
-    /// Where, and Escape hides the panel, returning focus to where it was.
+    /// The find-in-files chord shows the panel with the query field focused,
+    /// Tab moves to Where, and Escape hides the panel, returning focus to where
+    /// it was.
     #[gpui_kit::test]
     async fn shortcut_opens_tab_cycles_and_escape_closes(cx: &mut TestAppContext) {
         let (handle, app) = open_app(cx);
@@ -935,7 +936,7 @@ mod tests {
             let focus_handle = app.read(cx).focus_handle.clone();
             window.focus(&focus_handle, cx);
             window.render_frame(cx);
-            window.press("cmd-shift-f", cx);
+            window.press("secondary-shift-f", cx);
             window.render_frame(cx);
         })
         .unwrap();
@@ -986,7 +987,7 @@ mod tests {
             let focus_handle = app.read(cx).focus_handle.clone();
             window.focus(&focus_handle, cx);
             window.render_frame(cx);
-            window.press("cmd-shift-f", cx);
+            window.press("secondary-shift-f", cx);
             window.render_frame(cx);
         })
         .unwrap();
@@ -1169,7 +1170,7 @@ mod tests {
                 this.activate_tab(ix, window, cx);
             });
             window.render_frame(cx);
-            window.press("cmd-z", cx);
+            window.press("secondary-z", cx);
             assert_eq!(
                 editor.read(cx).text().to_string(),
                 "foo in buffer\n",

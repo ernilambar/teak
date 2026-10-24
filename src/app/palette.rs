@@ -154,7 +154,7 @@ mod tests {
             window.focus(&focus_handle, cx);
             window.render_frame(cx);
 
-            window.press("cmd-shift-p", cx);
+            window.press("secondary-shift-p", cx);
             window.render_frame(cx);
             assert!(
                 app.read(cx).overlays.is_palette_open(),
