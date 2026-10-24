@@ -100,14 +100,33 @@ const NO_KEYS: &[(&str, Scope)] = &[];
 /// Chords for the app-menu commands, which have no meaning without a native
 /// app menu. Off macOS they are bound to nothing.
 #[cfg(target_os = "macos")]
-const HIDE_KEYS: &[(&str, Scope)] = &[("cmd-h", Scope::Global)];
+const HIDE_KEYS: &[(&str, Scope)] = &[("secondary-h", Scope::Global)];
 #[cfg(not(target_os = "macos"))]
 const HIDE_KEYS: &[(&str, Scope)] = NO_KEYS;
 
 #[cfg(target_os = "macos")]
-const HIDE_OTHERS_KEYS: &[(&str, Scope)] = &[("alt-cmd-h", Scope::Global)];
+const HIDE_OTHERS_KEYS: &[(&str, Scope)] = &[("alt-secondary-h", Scope::Global)];
 #[cfg(not(target_os = "macos"))]
 const HIDE_OTHERS_KEYS: &[(&str, Scope)] = NO_KEYS;
+
+/// Add-cursor chords. macOS also accepts the engine's Ctrl+Alt alternate;
+/// elsewhere the secondary modifier already means Ctrl, so the duplicate chord
+/// is left out.
+#[cfg(target_os = "macos")]
+const ADD_CURSOR_ABOVE_KEYS: &[(&str, Scope)] = &[
+    ("secondary-alt-up", Scope::Editor),
+    ("ctrl-alt-up", Scope::Editor),
+];
+#[cfg(not(target_os = "macos"))]
+const ADD_CURSOR_ABOVE_KEYS: &[(&str, Scope)] = &[("secondary-alt-up", Scope::Editor)];
+
+#[cfg(target_os = "macos")]
+const ADD_CURSOR_BELOW_KEYS: &[(&str, Scope)] = &[
+    ("secondary-alt-down", Scope::Editor),
+    ("ctrl-alt-down", Scope::Editor),
+];
+#[cfg(not(target_os = "macos"))]
+const ADD_CURSOR_BELOW_KEYS: &[(&str, Scope)] = &[("secondary-alt-down", Scope::Editor)];
 
 /// Menu placement for the app-menu commands. They only appear with the native
 /// app menu, so off macOS they are on neither the menu bar nor the keymap.
@@ -127,7 +146,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "New File",
         make: || Box::new(NewFile),
-        bindings: &[("cmd-n", Scope::Global)],
+        bindings: &[("secondary-n", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 0)),
         keywords: &[],
@@ -135,7 +154,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Open…",
         make: || Box::new(OpenFile),
-        bindings: &[("cmd-o", Scope::Global)],
+        bindings: &[("secondary-o", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 1)),
         keywords: &[],
@@ -143,7 +162,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Quick Open…",
         make: || Box::new(QuickOpen),
-        bindings: &[("cmd-p", Scope::Global)],
+        bindings: &[("secondary-p", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 2)),
         keywords: &[],
@@ -151,7 +170,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Add Folder…",
         make: || Box::new(AddFolder),
-        bindings: &[("cmd-shift-o", Scope::Global)],
+        bindings: &[("secondary-shift-o", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 3)),
         keywords: &[],
@@ -159,7 +178,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Close All Folders",
         make: || Box::new(CloseAllFolders),
-        bindings: &[("alt-cmd-w", Scope::Global)],
+        bindings: &[("alt-secondary-w", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 4)),
         keywords: &[],
@@ -167,7 +186,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Save",
         make: || Box::new(SaveFile),
-        bindings: &[("cmd-s", Scope::Global)],
+        bindings: &[("secondary-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
         palette: Some((PaletteGroup::File, 5)),
         keywords: &[],
@@ -175,7 +194,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Save As…",
         make: || Box::new(SaveFileAs),
-        bindings: &[("cmd-shift-s", Scope::Global)],
+        bindings: &[("secondary-shift-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
         palette: Some((PaletteGroup::File, 6)),
         keywords: &[],
@@ -183,7 +202,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Save All",
         make: || Box::new(SaveAll),
-        bindings: &[("alt-cmd-s", Scope::Global)],
+        bindings: &[("alt-secondary-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
         palette: Some((PaletteGroup::File, 7)),
         keywords: &[],
@@ -191,7 +210,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Close Tab",
         make: || Box::new(CloseTab),
-        bindings: &[("cmd-w", Scope::Global)],
+        bindings: &[("secondary-w", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
         palette: Some((PaletteGroup::File, 8)),
         keywords: &[],
@@ -201,7 +220,7 @@ static COMMANDS: &[Command] = &[
         // "Reopen Closed Tab"; one label now serves both.
         label: "Reopen Closed Tab",
         make: || Box::new(ReopenClosedTab),
-        bindings: &[("cmd-shift-t", Scope::Global)],
+        bindings: &[("secondary-shift-t", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
         palette: Some((PaletteGroup::File, 9)),
         keywords: &[],
@@ -209,7 +228,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: reveal_label(),
         make: || Box::new(RevealInFinder),
-        bindings: &[("alt-cmd-r", Scope::Global)],
+        bindings: &[("alt-secondary-r", Scope::Global)],
         menu: None,
         palette: Some((PaletteGroup::File, 10)),
         keywords: &[],
@@ -230,8 +249,8 @@ static COMMANDS: &[Command] = &[
         // The editor binds this chord to Replace, so the editor scope is needed
         // for Find in Files to win while an editor has focus.
         bindings: &[
-            ("cmd-shift-f", Scope::Global),
-            ("cmd-shift-f", Scope::Editor),
+            ("secondary-shift-f", Scope::Global),
+            ("secondary-shift-f", Scope::Editor),
         ],
         menu: Some((MenuKind::Edit, 6)),
         palette: Some((PaletteGroup::Edit, 16)),
@@ -306,7 +325,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Copy Path",
         make: || Box::new(CopyFilePath),
-        bindings: &[("alt-cmd-c", Scope::Global)],
+        bindings: &[("alt-secondary-c", Scope::Global)],
         menu: Some((MenuKind::Edit, 0)),
         palette: Some((PaletteGroup::Edit, 14)),
         keywords: &[],
@@ -314,7 +333,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Copy Relative Path",
         make: || Box::new(CopyRelativePath),
-        bindings: &[("alt-cmd-shift-c", Scope::Global)],
+        bindings: &[("alt-secondary-shift-c", Scope::Global)],
         menu: Some((MenuKind::Edit, 0)),
         palette: Some((PaletteGroup::Edit, 15)),
         keywords: &[],
@@ -322,7 +341,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Toggle Line Comment",
         make: || Box::new(ToggleLineComment),
-        bindings: &[("cmd-/", Scope::Editor)],
+        bindings: &[("secondary-/", Scope::Editor)],
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 0)),
         keywords: &[],
@@ -330,7 +349,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Delete Line",
         make: || Box::new(DeleteLine),
-        bindings: &[("cmd-shift-k", Scope::Editor)],
+        bindings: &[("secondary-shift-k", Scope::Editor)],
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 1)),
         keywords: &[],
@@ -338,7 +357,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Select Line",
         make: || Box::new(SelectLine),
-        bindings: &[("cmd-l", Scope::Editor)],
+        bindings: &[("secondary-l", Scope::Editor)],
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 2)),
         keywords: &[],
@@ -378,7 +397,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Insert Line Above",
         make: || Box::new(InsertLineAbove),
-        bindings: &[("cmd-shift-enter", Scope::Editor)],
+        bindings: &[("secondary-shift-enter", Scope::Editor)],
         menu: Some((MenuKind::Edit, 4)),
         palette: Some((PaletteGroup::Edit, 7)),
         keywords: &[],
@@ -386,7 +405,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Insert Line Below",
         make: || Box::new(InsertLineBelow),
-        bindings: &[("cmd-enter", Scope::Editor)],
+        bindings: &[("secondary-enter", Scope::Editor)],
         menu: Some((MenuKind::Edit, 4)),
         palette: Some((PaletteGroup::Edit, 8)),
         keywords: &[],
@@ -394,7 +413,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Go to Line…",
         make: || Box::new(GoToLine),
-        bindings: &[("cmd-g", Scope::Editor)],
+        bindings: &[("secondary-g", Scope::Editor)],
         menu: Some((MenuKind::Edit, 5)),
         palette: Some((PaletteGroup::Edit, 9)),
         keywords: &["goto"],
@@ -402,10 +421,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Add Cursor Above",
         make: || Box::new(AddCursorAbove),
-        bindings: &[
-            ("cmd-alt-up", Scope::Editor),
-            ("ctrl-alt-up", Scope::Editor),
-        ],
+        bindings: ADD_CURSOR_ABOVE_KEYS,
         menu: Some((MenuKind::Edit, 1)),
         palette: Some((PaletteGroup::Edit, 10)),
         keywords: &[],
@@ -413,10 +429,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Add Cursor Below",
         make: || Box::new(AddCursorBelow),
-        bindings: &[
-            ("cmd-alt-down", Scope::Editor),
-            ("ctrl-alt-down", Scope::Editor),
-        ],
+        bindings: ADD_CURSOR_BELOW_KEYS,
         menu: Some((MenuKind::Edit, 1)),
         palette: Some((PaletteGroup::Edit, 11)),
         keywords: &[],
@@ -424,7 +437,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Split into Lines",
         make: || Box::new(SplitSelectionIntoLines),
-        bindings: &[("cmd-shift-l", Scope::Editor)],
+        bindings: &[("secondary-shift-l", Scope::Editor)],
         menu: Some((MenuKind::Edit, 1)),
         palette: Some((PaletteGroup::Edit, 12)),
         keywords: &[],
@@ -432,7 +445,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Add Next Occurrence",
         make: || Box::new(AddNextOccurrence),
-        bindings: &[("cmd-d", Scope::Editor)],
+        bindings: &[("secondary-d", Scope::Editor)],
         menu: Some((MenuKind::Edit, 1)),
         palette: Some((PaletteGroup::Edit, 13)),
         keywords: &[],
@@ -441,7 +454,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Command Palette…",
         make: || Box::new(CommandPalette),
-        bindings: &[("cmd-shift-p", Scope::Global)],
+        bindings: &[("secondary-shift-p", Scope::Global)],
         menu: Some((MenuKind::View, 0)),
         palette: None,
         keywords: &[],
@@ -449,7 +462,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Toggle Sidebar",
         make: || Box::new(ToggleSidebar),
-        bindings: &[("cmd-b", Scope::Global)],
+        bindings: &[("secondary-b", Scope::Global)],
         menu: Some((MenuKind::View, 1)),
         palette: Some((PaletteGroup::View, 0)),
         keywords: &[],
@@ -457,7 +470,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Refresh",
         make: || Box::new(Refresh),
-        bindings: &[("cmd-r", Scope::Global)],
+        bindings: &[("secondary-r", Scope::Global)],
         menu: Some((MenuKind::View, 1)),
         palette: Some((PaletteGroup::View, 1)),
         keywords: &[],
@@ -465,7 +478,10 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Zoom In",
         make: || Box::new(ZoomIn),
-        bindings: &[("cmd-=", Scope::Global), ("cmd-shift-=", Scope::Global)],
+        bindings: &[
+            ("secondary-=", Scope::Global),
+            ("secondary-shift-=", Scope::Global),
+        ],
         menu: Some((MenuKind::View, 2)),
         palette: Some((PaletteGroup::View, 2)),
         keywords: &[],
@@ -473,7 +489,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Zoom Out",
         make: || Box::new(ZoomOut),
-        bindings: &[("cmd--", Scope::Global)],
+        bindings: &[("secondary--", Scope::Global)],
         menu: Some((MenuKind::View, 2)),
         palette: Some((PaletteGroup::View, 3)),
         keywords: &[],
@@ -481,7 +497,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Actual Size",
         make: || Box::new(ZoomReset),
-        bindings: &[("cmd-0", Scope::Global)],
+        bindings: &[("secondary-0", Scope::Global)],
         menu: Some((MenuKind::View, 2)),
         palette: Some((PaletteGroup::View, 4)),
         keywords: &[],
@@ -497,7 +513,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Toggle Invisible Characters",
         make: || Box::new(ToggleWhitespace),
-        bindings: &[("alt-cmd-i", Scope::Global)],
+        bindings: &[("alt-secondary-i", Scope::Global)],
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 6)),
         keywords: &[],
@@ -529,7 +545,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Toggle Preview",
         make: || Box::new(ToggleMarkdownPreview),
-        bindings: &[("cmd-shift-v", Scope::Global)],
+        bindings: &[("secondary-shift-v", Scope::Global)],
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 10)),
         keywords: &[],
@@ -553,7 +569,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Next Tab",
         make: || Box::new(NextTab),
-        bindings: &[("cmd-shift-]", Scope::Global)],
+        bindings: &[("secondary-shift-]", Scope::Global)],
         menu: Some((MenuKind::View, 4)),
         palette: Some((PaletteGroup::View, 13)),
         keywords: &[],
@@ -561,7 +577,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Previous Tab",
         make: || Box::new(PreviousTab),
-        bindings: &[("cmd-shift-[", Scope::Global)],
+        bindings: &[("secondary-shift-[", Scope::Global)],
         menu: Some((MenuKind::View, 4)),
         palette: Some((PaletteGroup::View, 14)),
         keywords: &[],
@@ -570,7 +586,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Settings…",
         make: || Box::new(OpenSettings),
-        bindings: &[("cmd-,", Scope::Global)],
+        bindings: &[("secondary-,", Scope::Global)],
         menu: Some((MenuKind::Teak, 1)),
         palette: Some((PaletteGroup::Teak, 0)),
         keywords: &["preferences", "config"],
@@ -642,7 +658,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Quit Teak",
         make: || Box::new(Quit),
-        bindings: &[("cmd-q", Scope::Global)],
+        bindings: &[("secondary-q", Scope::Global)],
         menu: Some((MenuKind::Teak, 4)),
         palette: None,
         keywords: &[],
@@ -651,7 +667,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 1",
         make: || Box::new(JumpToTab(1)),
-        bindings: &[("cmd-1", Scope::Global)],
+        bindings: &[("secondary-1", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -659,7 +675,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 2",
         make: || Box::new(JumpToTab(2)),
-        bindings: &[("cmd-2", Scope::Global)],
+        bindings: &[("secondary-2", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -667,7 +683,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 3",
         make: || Box::new(JumpToTab(3)),
-        bindings: &[("cmd-3", Scope::Global)],
+        bindings: &[("secondary-3", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -675,7 +691,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 4",
         make: || Box::new(JumpToTab(4)),
-        bindings: &[("cmd-4", Scope::Global)],
+        bindings: &[("secondary-4", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -683,7 +699,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 5",
         make: || Box::new(JumpToTab(5)),
-        bindings: &[("cmd-5", Scope::Global)],
+        bindings: &[("secondary-5", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -691,7 +707,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 6",
         make: || Box::new(JumpToTab(6)),
-        bindings: &[("cmd-6", Scope::Global)],
+        bindings: &[("secondary-6", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -699,7 +715,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 7",
         make: || Box::new(JumpToTab(7)),
-        bindings: &[("cmd-7", Scope::Global)],
+        bindings: &[("secondary-7", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -707,7 +723,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 8",
         make: || Box::new(JumpToTab(8)),
-        bindings: &[("cmd-8", Scope::Global)],
+        bindings: &[("secondary-8", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -715,7 +731,7 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Jump to Tab 9",
         make: || Box::new(JumpToTab(9)),
-        bindings: &[("cmd-9", Scope::Global)],
+        bindings: &[("secondary-9", Scope::Global)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -917,18 +933,19 @@ pub(crate) fn app_bindings() -> Vec<KeyBinding> {
     bindings(Scope::Global)
 }
 
-/// VS Code's macOS editing chords, scoped to the focused editor.
+/// The editing chords adopted from VS Code, scoped to the focused editor.
 ///
 /// These are registered after the engine's own `"Input"` bindings; at equal
 /// context depth the later registration wins, so these take precedence where
 /// they overlap:
 /// - `shift-alt-up` / `shift-alt-down` — VS Code copies the line, replacing the
 ///   engine's alternate add-cursor chord.
-/// - `cmd-alt-up` / `cmd-alt-down` (and the `ctrl-alt-*` alternate) — the engine
-///   binds these to its own add-cursor actions; the app binds the same chords to
-///   its `AddCursorAbove` / `AddCursorBelow` so the menu and palette share one
-///   path (the handler re-dispatches the engine action at the editor).
-/// - `cmd-enter` — VS Code inserts a line below; the engine maps
+/// - `secondary-alt-up` / `secondary-alt-down` (and, on macOS, the
+///   `ctrl-alt-*` alternate) — the engine binds these to its own add-cursor
+///   actions; the app binds the same chords to its `AddCursorAbove` /
+///   `AddCursorBelow` so the menu and palette share one path (the handler
+///   re-dispatches the engine action at the editor).
+/// - `secondary-enter` — VS Code inserts a line below; the engine maps
 ///   `secondary-enter` to a plain newline on macOS, so this is the useful one.
 pub(crate) fn editor_bindings() -> Vec<KeyBinding> {
     bindings(Scope::Editor)
@@ -1122,8 +1139,13 @@ mod tests {
     fn every_binding_parses() {
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
+        #[cfg(target_os = "macos")]
+        const EDITOR_BINDINGS: usize = 18;
+        #[cfg(not(target_os = "macos"))]
+        const EDITOR_BINDINGS: usize = 16;
+
         assert_eq!(app_bindings().len(), 40);
-        assert_eq!(editor_bindings().len(), 18);
+        assert_eq!(editor_bindings().len(), EDITOR_BINDINGS);
         assert_eq!(find_bindings().len(), 6);
     }
 
@@ -1133,27 +1155,27 @@ mod tests {
         keymap.add_bindings(app_bindings());
         keymap.add_bindings(editor_bindings());
 
-        assert!(resolve(&keymap, "cmd-n", &[])[0].ends_with("NewFile"));
-        assert!(resolve(&keymap, "cmd-r", &[])[0].ends_with("Refresh"));
+        assert!(resolve(&keymap, "secondary-n", &[])[0].ends_with("NewFile"));
+        assert!(resolve(&keymap, "secondary-r", &[])[0].ends_with("Refresh"));
         // The finder opens from anywhere, including while an editor has focus.
-        assert!(resolve(&keymap, "cmd-p", &[])[0].ends_with("QuickOpen"));
-        assert!(resolve(&keymap, "cmd-p", &["Input"])[0].ends_with("QuickOpen"));
+        assert!(resolve(&keymap, "secondary-p", &[])[0].ends_with("QuickOpen"));
+        assert!(resolve(&keymap, "secondary-p", &["Input"])[0].ends_with("QuickOpen"));
         // The palette opens from anywhere, including while an editor has focus.
-        assert!(resolve(&keymap, "cmd-shift-p", &[])[0].ends_with("CommandPalette"));
-        assert!(resolve(&keymap, "cmd-shift-p", &["Input"])[0].ends_with("CommandPalette"));
-        assert!(resolve(&keymap, "cmd-/", &[]).is_empty());
-        assert!(resolve(&keymap, "cmd-/", &["Input"])[0].ends_with("ToggleLineComment"));
+        assert!(resolve(&keymap, "secondary-shift-p", &[])[0].ends_with("CommandPalette"));
+        assert!(resolve(&keymap, "secondary-shift-p", &["Input"])[0].ends_with("CommandPalette"));
+        assert!(resolve(&keymap, "secondary-/", &[]).is_empty());
+        assert!(resolve(&keymap, "secondary-/", &["Input"])[0].ends_with("ToggleLineComment"));
 
-        // The Option+Cmd family added for view/file toggles must stay global so
-        // it also fires while an editor has focus.
+        // The Option+secondary family added for view/file toggles must stay
+        // global so it also fires while an editor has focus.
         for (keys, action) in [
-            ("alt-cmd-i", "ToggleWhitespace"),
-            ("cmd-shift-v", "ToggleMarkdownPreview"),
-            ("alt-cmd-w", "CloseAllFolders"),
-            ("alt-cmd-r", "RevealInFinder"),
-            ("alt-cmd-c", "CopyFilePath"),
-            ("alt-cmd-shift-c", "CopyRelativePath"),
-            ("cmd-shift-f", "FindInFiles"),
+            ("alt-secondary-i", "ToggleWhitespace"),
+            ("secondary-shift-v", "ToggleMarkdownPreview"),
+            ("alt-secondary-w", "CloseAllFolders"),
+            ("alt-secondary-r", "RevealInFinder"),
+            ("alt-secondary-c", "CopyFilePath"),
+            ("alt-secondary-shift-c", "CopyRelativePath"),
+            ("secondary-shift-f", "FindInFiles"),
         ] {
             assert!(resolve(&keymap, keys, &[])[0].ends_with(action));
             assert!(resolve(&keymap, keys, &["Input"])[0].ends_with(action));
@@ -1173,12 +1195,12 @@ mod tests {
             // The engine's own add-cursor chords. The app now binds the same
             // chords to its actions, so the later registration must still win.
             KeyBinding::new(
-                "cmd-alt-up",
+                "secondary-alt-up",
                 gpui_kit::base::input::AddCursorAbove,
                 Some("Input"),
             ),
             KeyBinding::new(
-                "cmd-alt-down",
+                "secondary-alt-down",
                 gpui_kit::base::input::AddCursorBelow,
                 Some("Input"),
             ),
@@ -1187,17 +1209,18 @@ mod tests {
 
         assert!(resolve(&keymap, "shift-alt-up", &["Input"])[0].ends_with("CopyLineUp"));
         assert!(resolve(&keymap, "shift-alt-down", &["Input"])[0].ends_with("CopyLineDown"));
-        assert!(resolve(&keymap, "cmd-enter", &["Input"])[0].ends_with("InsertLineBelow"));
+        assert!(resolve(&keymap, "secondary-enter", &["Input"])[0].ends_with("InsertLineBelow"));
         // The app's action wins over the engine's identically-named one.
         assert_eq!(
-            resolve(&keymap, "cmd-alt-up", &["Input"])[0],
+            resolve(&keymap, "secondary-alt-up", &["Input"])[0],
             crate::AddCursorAbove.name()
         );
         assert_eq!(
-            resolve(&keymap, "cmd-alt-down", &["Input"])[0],
+            resolve(&keymap, "secondary-alt-down", &["Input"])[0],
             crate::AddCursorBelow.name()
         );
-        // The alternate chord is app-only; nothing shadows it.
+        // On macOS the Ctrl+Alt chord is a second app binding; elsewhere
+        // `secondary-alt-up` already means Ctrl+Alt.
         assert_eq!(
             resolve(&keymap, "ctrl-alt-up", &["Input"])[0],
             crate::AddCursorAbove.name()

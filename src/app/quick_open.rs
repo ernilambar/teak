@@ -1,4 +1,5 @@
-//! Quick Open: a fuzzy search over the workspace files, opening on Cmd+P.
+//! Quick Open: a fuzzy search over the workspace files, opening on the
+//! quick-open chord.
 //!
 //! Like the command palette (see `palette.rs`), this is an in-app overlay so
 //! the chosen file's action reaches the root's `on_action` handlers. The list
@@ -321,7 +322,7 @@ mod tests {
             window.focus(&focus_handle, cx);
             window.render_frame(cx);
 
-            window.press("cmd-p", cx);
+            window.press("secondary-p", cx);
             window.render_frame(cx);
             assert!(
                 app.read(cx).overlays.is_quick_open_open(),
@@ -376,7 +377,7 @@ mod tests {
             let focus_handle = app.read(cx).focus_handle.clone();
             window.focus(&focus_handle, cx);
             window.render_frame(cx);
-            window.press("cmd-p", cx);
+            window.press("secondary-p", cx);
         })
         .unwrap();
         // Let the index walk land before replacing its result.
@@ -416,7 +417,7 @@ mod tests {
             window.focus(&focus_handle, cx);
             window.render_frame(cx);
 
-            window.press("cmd-shift-p", cx);
+            window.press("secondary-shift-p", cx);
             window.render_frame(cx);
             assert!(
                 app.read(cx).overlays.is_palette_open(),

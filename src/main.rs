@@ -93,14 +93,15 @@ gpui_kit::actions!(
     ]
 );
 
-/// Jump to tab `N` (1-based) from `cmd-1`..`cmd-9`. The `actions!` macro only
-/// builds unit actions, so the index is carried here instead.
+/// Jump to tab `N` (1-based) from `secondary-1`..`secondary-9`. The `actions!`
+/// macro only builds unit actions, so the index is carried here instead.
 #[derive(Clone, PartialEq, gpui_kit::Action)]
 #[action(namespace = teak, no_json)]
 pub struct JumpToTab(usize);
 
-/// Opens the file the quick-open finder confirmed, from `Cmd+P`. The `actions!`
-/// macro only builds unit actions, so the path is carried here instead.
+/// Opens the file the quick-open finder confirmed, from the quick-open chord.
+/// The `actions!` macro only builds unit actions, so the path is carried here
+/// instead.
 #[derive(Clone, PartialEq, gpui_kit::Action)]
 #[action(namespace = teak, no_json)]
 pub struct OpenPath(pub(crate) PathBuf);
