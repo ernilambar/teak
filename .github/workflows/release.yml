@@ -115,14 +115,21 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
-            Sort-Object FullName -Descending |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe not found; cannot locate dumpbin."
+          }
+
+          $dumpbin = & $vswhere -latest -products * -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" |
             Select-Object -First 1
           if (-not $dumpbin) {
             throw "dumpbin.exe not found; cannot verify the C runtime linkage."
           }
 
-          $dependents = & $dumpbin.FullName /nologo /dependents target/release/teak.exe
+          $dependents = & $dumpbin /nologo /dependents target/release/teak.exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "dumpbin failed with exit code $LASTEXITCODE."
+          }
           $dependents
 
           $dynamicCrt = $dependents | Select-String -Pattern 'vcruntime140|msvcp140'
