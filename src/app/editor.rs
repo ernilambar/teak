@@ -19,8 +19,8 @@ use gpui_kit::*;
 
 use crate::{
     AddCursorAbove, AddCursorBelow, AddNextOccurrence, CopyLineDown, CopyLineUp, DeleteLine,
-    GoToLine, InsertLineAbove, InsertLineBelow, MoveLineDown, MoveLineUp, SelectLine,
-    SplitSelectionIntoLines, ToggleLineComment,
+    GoToLine, InsertLineAbove, InsertLineBelow, JoinLines, MoveLineDown, MoveLineUp, SelectLine,
+    SplitSelectionIntoLines, ToggleLineComment, TrimTrailingWhitespace,
 };
 
 use super::TeakApp;
@@ -164,6 +164,50 @@ fn delete_lines(buf: &LineBuffer, selection: &Range<usize>) -> Commit {
         range,
         replacement: String::new(),
     }
+}
+
+/// Joins the lines touched by the selection into one, or the caret's line with
+/// the next when the selection covers a single line. Each break and the
+/// whitespace around it become one space, or nothing next to an empty line.
+/// The caret lands at the last join, before its space. Returns `None` on the last line.
+fn join_lines(buf: &LineBuffer, selection: &Range<usize>) -> Option<Commit> {
+    let (first, mut last) = buf.touched(selection);
+    if first == last {
+        if buf.is_last(first) {
+            return None;
+        }
+        last += 1;
+    }
+
+    let mut joined = buf.lines[first]
+        .trim_end_matches('\r')
+        .trim_end_matches([' ', '\t'])
+        .to_string();
+    let mut cursor = joined.len();
+    for (i, line) in buf.lines[first + 1..=last].iter().enumerate() {
+        let line = line.trim_end_matches('\r');
+        let line = line.trim_start_matches([' ', '\t']);
+        // The last line keeps its trailing whitespace; it is not a join point.
+        let line = if first + 1 + i == last {
+            line
+        } else {
+            line.trim_end_matches([' ', '\t'])
+        };
+        cursor = joined.len();
+        if !joined.is_empty() && !line.is_empty() {
+            joined.push(' ');
+        }
+        joined.push_str(line);
+    }
+
+    // Stop before the last line's `\r` so a CRLF break stays intact.
+    let start = buf.start(first);
+    let end = buf.start(last) + buf.lines[last].trim_end_matches('\r').len();
+    Some(Commit {
+        range: start..end,
+        replacement: joined,
+        cursor: start + cursor,
+    })
 }
 
 /// Moves the selected lines one line up or down. Returns `None` at the edge.
@@ -456,6 +500,29 @@ fn toggle_comment(buf: &LineBuffer, selection: &Range<usize>, style: CommentStyl
     }
 }
 
+/// Applies [`tidy_edit`] to `editor` as one undoable edit, keeping the caret.
+fn tidy(
+    editor: &Entity<EditorState>,
+    trim: bool,
+    final_newline: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    editor.update(cx, |state, cx| {
+        let text = state.text().to_string();
+        let Some((range, replacement)) = tidy_edit(&text, trim, final_newline) else {
+            return;
+        };
+        let caret = state.cursor_position();
+        state.set_selected_range(range, cx);
+        state.replace(replacement, window, cx);
+        // Back to the caret's line; trimming may have shortened it. Setting
+        // the range directly avoids focusing a background tab's editor.
+        let offset = state.text().position_to_offset(&caret);
+        state.set_selected_range(offset..offset, cx);
+    });
+}
+
 /// The single edit that strips trailing spaces and tabs from every line
 /// and/or ends the text with a newline, or `None` when nothing changes. The
 /// range covers only the span between the first and last change, so undo and
@@ -561,19 +628,18 @@ impl TeakApp {
         if !trim && !final_newline {
             return;
         }
-        editor.update(cx, |state, cx| {
-            let text = state.text().to_string();
-            let Some((range, replacement)) = tidy_edit(&text, trim, final_newline) else {
-                return;
-            };
-            let caret = state.cursor_position();
-            state.set_selected_range(range, cx);
-            state.replace(replacement, window, cx);
-            // Back to the caret's line; trimming may have shortened it. Setting
-            // the range directly avoids focusing a background tab's editor.
-            let offset = state.text().position_to_offset(&caret);
-            state.set_selected_range(offset..offset, cx);
-        });
+        tidy(editor, trim, final_newline, window, cx);
+    }
+
+    pub(super) fn on_trim_trailing_whitespace(
+        &mut self,
+        _: &TrimTrailingWhitespace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tab) = self.active() {
+            tidy(&tab.editor.clone(), true, false, window, cx);
+        }
     }
 
     pub(super) fn on_toggle_line_comment(
@@ -601,6 +667,17 @@ impl TeakApp {
         self.apply_to_editor(window, cx, |text, selection| {
             let buf = LineBuffer::new(text);
             Some(delete_lines(&buf, selection))
+        });
+    }
+
+    pub(super) fn on_join_lines(
+        &mut self,
+        _: &JoinLines,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_to_editor(window, cx, |text, selection| {
+            join_lines(&LineBuffer::new(text), selection)
         });
     }
 
@@ -832,8 +909,8 @@ mod tests {
     // macro and shadow the built-in one, making `#[test]` recurse.
     use super::{
         CommentStyle, Commit, LineBuffer, add_next_occurrence, comment_style, delete_lines,
-        duplicate_lines, insert_line, move_lines, select_line_range, split_into_lines, tidy_edit,
-        toggle_comment,
+        duplicate_lines, insert_line, join_lines, move_lines, select_line_range, split_into_lines,
+        tidy_edit, toggle_comment,
     };
 
     /// Applies a commit to `text` the way the handler does.
@@ -920,6 +997,43 @@ mod tests {
         let text = "a\r\nb";
         let commit = delete_lines(&LineBuffer::new(text), &at(3));
         assert_eq!(apply(text, &commit), "a");
+    }
+
+    #[test]
+    fn join_caret_line_with_next() {
+        let text = "a  \n    b\nc";
+        let commit = join_lines(&LineBuffer::new(text), &at(0)).unwrap();
+        assert_eq!(apply(text, &commit), "a b\nc");
+        assert_eq!(commit.cursor, 1);
+    }
+
+    #[test]
+    fn join_selected_lines() {
+        let text = "a\nb\nc\nd";
+        let commit = join_lines(&LineBuffer::new(text), &(0..5)).unwrap();
+        assert_eq!(apply(text, &commit), "a b c\nd");
+        assert_eq!(commit.cursor, 3);
+    }
+
+    #[test]
+    fn join_skips_space_next_to_empty_line() {
+        let text = "a\n\nb";
+        let commit = join_lines(&LineBuffer::new(text), &at(0)).unwrap();
+        assert_eq!(apply(text, &commit), "a\nb");
+        let commit = join_lines(&LineBuffer::new(text), &(0..4)).unwrap();
+        assert_eq!(apply(text, &commit), "a b");
+    }
+
+    #[test]
+    fn join_keeps_crlf_break_of_last_line() {
+        let text = "a\r\nb\r\nc";
+        let commit = join_lines(&LineBuffer::new(text), &at(0)).unwrap();
+        assert_eq!(apply(text, &commit), "a b\r\nc");
+    }
+
+    #[test]
+    fn join_on_last_line_does_nothing() {
+        assert!(join_lines(&LineBuffer::new("a\nb"), &at(2)).is_none());
     }
 
     #[test]

@@ -373,9 +373,7 @@ impl TeakApp {
         self.reveal_active_tab();
 
         editor.update(cx, |state, cx| state.focus(window, cx));
-        let position = editor.read(cx).cursor_position();
-        self.chrome
-            .set_cursor(position.line as usize + 1, position.character as usize + 1);
+        self.chrome.sync_cursor(editor.read(cx));
         self.save_session();
         cx.notify();
     }
@@ -473,9 +471,7 @@ impl TeakApp {
         if let Some(tab) = self.tabs.get(ix) {
             let editor = tab.editor.clone();
             self.focus_tab(ix, window, cx);
-            let position = editor.read(cx).cursor_position();
-            self.chrome
-                .set_cursor(position.line as usize + 1, position.character as usize + 1);
+            self.chrome.sync_cursor(editor.read(cx));
         }
         // Switching tabs is a natural cue to pick up external filesystem
         // changes, since the tree cache is otherwise only refreshed on
@@ -780,18 +776,14 @@ impl TeakApp {
         let Some(ix) = self.tabs.active_index() else {
             return;
         };
-        let position = {
-            let Some(tab) = self.tabs.get(ix) else {
-                return;
-            };
-            if tab.editor.entity_id() != id {
-                return;
-            }
-            tab.editor.read(cx).cursor_position()
+        let Some(tab) = self.tabs.get(ix) else {
+            return;
         };
+        if tab.editor.entity_id() != id {
+            return;
+        }
 
-        self.chrome
-            .set_cursor(position.line as usize + 1, position.character as usize + 1);
+        self.chrome.sync_cursor(tab.editor.read(cx));
         cx.notify();
     }
 }
