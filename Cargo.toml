@@ -39,7 +39,7 @@ ignore = "0.4.33"
 regex = "1.13"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-# Cross-platform Trash / Recycle Bin / freedesktop.org Trash.
+# Moves deleted files to the Trash.
 trash = "5.2"
 ureq = "3.5.0"
 

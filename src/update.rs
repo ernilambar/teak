@@ -2,29 +2,9 @@ use std::time::Duration;
 
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/ernilambar/teak/releases/latest";
 
-/// The command the update dialog copies, where the platform has an installer.
-/// Only macOS has one; Linux and Windows ship bare archives.
-#[cfg(target_os = "macos")]
-pub(crate) const INSTALL_COMMAND: Option<&str> = Some(
-    "curl -fsSL https://raw.githubusercontent.com/ernilambar/teak/main/scripts/install.sh | sh",
-);
-#[cfg(not(target_os = "macos"))]
-pub(crate) const INSTALL_COMMAND: Option<&str> = None;
-
-pub(crate) const RELEASES_URL: &str = "https://github.com/ernilambar/teak/releases/latest";
-
-/// The line above the install hint in the update dialog.
-#[cfg(target_os = "macos")]
-pub(crate) const UPDATE_HINT: &str = "Save your work, then run this in Terminal:";
-#[cfg(not(target_os = "macos"))]
-pub(crate) const UPDATE_HINT: &str =
-    "Download the latest release, then replace your Teak executable.";
-
-/// The update dialog's confirm button.
-#[cfg(target_os = "macos")]
-pub(crate) const UPDATE_ACTION_LABEL: &str = "Copy Command";
-#[cfg(not(target_os = "macos"))]
-pub(crate) const UPDATE_ACTION_LABEL: &str = "Open Download Page";
+/// The command the update dialog copies.
+pub(crate) const INSTALL_COMMAND: &str =
+    "curl -fsSL https://raw.githubusercontent.com/ernilambar/teak/main/scripts/install.sh | sh";
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 

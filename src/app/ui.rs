@@ -26,7 +26,7 @@ use gpui_kit::*;
 
 use crate::file_icons::{file_icon, folder_icon};
 use crate::language::{LANGUAGES, editor_language_id};
-use crate::paths::{display_path, file_name, format_size, reveal_label};
+use crate::paths::{display_path, file_name, format_size};
 use crate::settings::IconStyle;
 use crate::{
     AddCursorAbove, AddCursorBelow, AddFolder, CopyFilePath, CopyRelativePath, NewFile, OpenFile,
@@ -725,7 +725,7 @@ impl TeakApp {
 
                 let menu = menu
                     .item(
-                        PopupMenuItem::new(reveal_label()).on_click(move |_, _window, cx| {
+                        PopupMenuItem::new("Reveal in Finder").on_click(move |_, _window, cx| {
                             reveal_entity
                                 .update(cx, |this, cx| this.reveal_in_finder(&reveal_path, cx));
                         }),
@@ -926,7 +926,7 @@ impl TeakApp {
                                     .menu("Add Cursor Below", Box::new(AddCursorBelow))
                                     .separator()
                                     .menu_with_disabled(
-                                        reveal_label(),
+                                        "Reveal in Finder",
                                         !has_path,
                                         Box::new(RevealInFinder),
                                     )

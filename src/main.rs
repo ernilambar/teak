@@ -179,23 +179,11 @@ fn main() {
         };
 
         keymap::bind_keys(cx);
-        #[cfg(target_os = "macos")]
-        {
-            cx.on_action(|_: &Hide, cx| cx.hide());
-            cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
-            cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            // The hide/show commands have no app-menu surface off macOS. The
-            // no-op handlers keep a stray dispatch from reaching a platform
-            // call that is unimplemented there.
-            cx.on_action(|_: &Hide, _: &mut App| {});
-            cx.on_action(|_: &HideOthers, _: &mut App| {});
-            cx.on_action(|_: &ShowAll, _: &mut App| {});
-        }
+        cx.on_action(|_: &Hide, cx| cx.hide());
+        cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+        cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
         // The app replaces these once it has loaded the recent list.
-        commands::apply_menus(cx, commands::menus(&theme_choice, &[]));
+        cx.set_menus(commands::menus(&theme_choice, &[]));
 
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions {

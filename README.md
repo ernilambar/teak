@@ -8,35 +8,19 @@ A fast, lightweight text editor.
 
 ## Features
 
-- Tabs, each with its own file
-- Syntax highlighting
-- File explorer sidebar for browsing a project folder
-- Command palette (`Cmd+Shift+P`) to search and run any command
-- Quick Open (`Cmd+P`) to fuzzy-find a file across the workspace folders
-- Find in Files (`Cmd+Shift+F`): results grouped by file in a Find Results tab,
-  `F4` / `Shift+F4` to step through matches, match case / whole word / regex, a
-  Where field for include and exclude globs, and Replace All across files
-- Quick Open and Find in Files skip what `.gitignore` lists, plus any globs in the
-  `search.exclude` setting
+- Tabs and syntax highlighting
+- File explorer sidebar
+- Command palette (`Cmd+Shift+P`)
+- Quick Open (`Cmd+P`) to fuzzy-find files
+- Find and Replace in Files (`Cmd+Shift+F`), with regex and globs
 - Markdown preview (`Cmd+Shift+V`)
-- Reopens your tabs and folder where you left off
-- File → Open Recent for recently opened files and folders
-- Drag files and folders from Finder onto the window to open them
-- Warns before closing a file with unsaved changes
-- Reloads files changed by other apps, and asks first if you have unsaved edits
-- Deleting from the sidebar moves files to the Trash
-- Keeps each file's line endings (LF or CRLF) and byte order mark
-- Optional trim trailing whitespace and final newline on save
-- Cursor position, encoding, line endings, and language in the status bar
+- Restores your tabs and folders on relaunch
 - `teak` command to open files from the terminal
-- Light, dark, and system-following themes
+- Light, dark, and system themes
 
 ## Requirements
 
-- macOS 15 or later on Apple Silicon (M1 or newer) — fully supported.
-- Linux (x86_64, aarch64) and Windows (x86_64) builds are available but
-  **experimental**: they build and run, but expect rough edges. Please
-  [report issues](https://github.com/ernilambar/teak/issues).
+macOS 15 or later on Apple Silicon (M1 or newer).
 
 ## Install
 
@@ -54,7 +38,6 @@ This installs the app into `/Applications`.
 
 - [Keyboard shortcuts](docs/keymaps.md)
 - [Install options](docs/install.md)
-- [Building from source](docs/build.md)
 - [Color schemes](docs/themes.md)
 
 ## Contributing

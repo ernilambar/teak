@@ -13,7 +13,6 @@ use gpui_kit::*;
 use crate::language::{editor_language_id, language_for};
 use crate::paths::{
     copy_entry, duplicate_name, file_name, is_valid_entry_name, move_to_trash, remap_prefix,
-    trash_name,
 };
 use crate::{AddFolder, CloseAllFolders, NewFile, OpenFile, SaveAll, SaveFile, SaveFileAs};
 
@@ -1108,8 +1107,8 @@ impl TeakApp {
             alert
                 .confirm()
                 .title("Delete")
-                .description(format!("Move \"{name}\" to the {}?", trash_name()))
-                .ok_text(format!("Move to {}", trash_name()))
+                .description(format!("Move \"{name}\" to the Trash?"))
+                .ok_text("Move to Trash")
                 .ok_variant(ButtonVariant::Danger)
                 .cancel_text("Cancel")
                 .on_ok(move |_, window, cx| {
@@ -1141,10 +1140,8 @@ impl TeakApp {
                 self.reload_tree();
                 self.save_session();
                 cx.notify();
-                window.push_notification(
-                    Notification::success(format!("Moved {name} to {}", trash_name())),
-                    cx,
-                );
+                window
+                    .push_notification(Notification::success(format!("Moved {name} to Trash")), cx);
             }
             Err(error) => window.push_notification(
                 Notification::error(format!("Could not delete {}: {error}", file_name(path))),
