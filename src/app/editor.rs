@@ -18,8 +18,10 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::{
-    AddCursorAbove, AddCursorBelow, AddNextOccurrence, CopyLineDown, CopyLineUp, DeleteLine,
-    GoToLine, InsertLineAbove, InsertLineBelow, JoinLines, MoveLineDown, MoveLineUp, SelectLine,
+    AddCursorAbove, AddCursorBelow, AddNextOccurrence, ConvertToCamelCase, ConvertToConstantCase,
+    ConvertToKebabCase, ConvertToLowercase, ConvertToPascalCase, ConvertToSnakeCase,
+    ConvertToTitleCase, ConvertToUppercase, CopyLineDown, CopyLineUp, DeleteLine, GoToLine,
+    InsertLineAbove, InsertLineBelow, JoinLines, MoveLineDown, MoveLineUp, SelectLine,
     SplitSelectionIntoLines, ToggleLineComment, TrimTrailingWhitespace,
 };
 
@@ -500,6 +502,155 @@ fn toggle_comment(buf: &LineBuffer, selection: &Range<usize>, style: CommentStyl
     }
 }
 
+/// How a convert-case command rewrites its text.
+#[derive(Clone, Copy)]
+enum CaseKind {
+    Upper,
+    Lower,
+    Title,
+    Camel,
+    Pascal,
+    Snake,
+    Kebab,
+    Constant,
+}
+
+/// Whether `c` belongs to a word for case conversion. Non-ASCII characters
+/// count unless they are whitespace, so scripts with combining marks (Devanagari
+/// matras and virama) stay whole. Unlike [`is_word_char`], `_` separates words
+/// here: it is the input and output of the snake and constant styles.
+fn is_case_word_char(c: char) -> bool {
+    c.is_alphanumeric() || (!c.is_ascii() && !c.is_whitespace())
+}
+
+/// Splits `text` into words for the identifier styles. Any other character
+/// separates words, and so does a case change, except where it ends an acronym
+/// (`HTTPServer` is `HTTP` + `Server`).
+fn words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut previous: Option<char> = None;
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if !is_case_word_char(c) {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            previous = None;
+            continue;
+        }
+        let boundary = previous.is_some_and(|previous| {
+            (previous.is_lowercase() && c.is_uppercase())
+                || (previous.is_numeric() && c.is_uppercase())
+                || (previous.is_uppercase()
+                    && c.is_uppercase()
+                    && chars.peek().is_some_and(|next| next.is_lowercase()))
+        });
+        if boundary {
+            words.push(std::mem::take(&mut current));
+        }
+        current.push(c);
+        previous = Some(c);
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+/// `word` with its first character uppercased and the rest lowercased.
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    first
+        .to_uppercase()
+        .chain(chars.as_str().to_lowercase().chars())
+        .collect()
+}
+
+/// Rewrites `text` in `kind`. Uppercase and lowercase keep the separators the
+/// user typed; every other style rebuilds the words the tokenizer finds.
+fn convert(text: &str, kind: CaseKind) -> String {
+    if matches!(kind, CaseKind::Upper) {
+        return text.to_uppercase();
+    }
+    if matches!(kind, CaseKind::Lower) {
+        return text.to_lowercase();
+    }
+
+    let words = words(text);
+    let cased = |upper: bool| -> Vec<String> {
+        words
+            .iter()
+            .map(|word| {
+                if upper {
+                    word.to_uppercase()
+                } else {
+                    word.to_lowercase()
+                }
+            })
+            .collect()
+    };
+
+    match kind {
+        CaseKind::Title => words
+            .iter()
+            .map(|word| capitalize(word))
+            .collect::<Vec<_>>()
+            .join(" "),
+        CaseKind::Camel => words
+            .iter()
+            .enumerate()
+            .map(|(ix, word)| {
+                if ix == 0 {
+                    word.to_lowercase()
+                } else {
+                    capitalize(word)
+                }
+            })
+            .collect(),
+        CaseKind::Pascal => words.iter().map(|word| capitalize(word)).collect(),
+        CaseKind::Snake => cased(false).join("_"),
+        CaseKind::Kebab => cased(false).join("-"),
+        CaseKind::Constant => cased(true).join("_"),
+        CaseKind::Upper | CaseKind::Lower => unreachable!("handled above"),
+    }
+}
+
+/// Converts every target range as one edit: the span from the first range to
+/// the last, its new text, and where each converted range lands afterwards.
+/// Returns `None` when the text does not change.
+fn convert_selections(
+    text: &str,
+    targets: &[Range<usize>],
+    kind: CaseKind,
+) -> Option<(Range<usize>, String, Vec<Range<usize>>)> {
+    let mut targets = targets.to_vec();
+    targets.sort_by_key(|range| range.start);
+    // Converting overlapping ranges twice would count the same bytes twice.
+    targets.dedup_by(|next, kept| next.start < kept.end);
+    let first = targets.first()?;
+    let last = targets.last()?;
+    let span = first.start..last.end;
+
+    let mut replacement = String::with_capacity(span.len());
+    let mut restored = Vec::with_capacity(targets.len());
+    let mut cursor = span.start;
+    for target in &targets {
+        replacement.push_str(&text[cursor..target.start]);
+        let start = span.start + replacement.len();
+        replacement.push_str(&convert(&text[target.clone()], kind));
+        restored.push(start..span.start + replacement.len());
+        cursor = target.end;
+    }
+    replacement.push_str(&text[cursor..span.end]);
+
+    (replacement != text[span.clone()]).then_some((span, replacement, restored))
+}
+
 /// Applies [`tidy_edit`] to `editor` as one undoable edit, keeping the caret.
 fn tidy(
     editor: &Entity<EditorState>,
@@ -640,6 +791,116 @@ impl TeakApp {
         if let Some(tab) = self.active() {
             tidy(&tab.editor.clone(), true, false, window, cx);
         }
+    }
+
+    /// Converts each selection, or the word under each caret when nothing is
+    /// selected, to `kind` as one undoable edit.
+    fn convert_case(&mut self, kind: CaseKind, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.active() else {
+            return;
+        };
+        let editor = tab.editor.clone();
+        editor.update(cx, |state, cx| {
+            let text = state.text().to_string();
+            let targets: Vec<Range<usize>> = state
+                .selected_ranges()
+                .into_iter()
+                .map(|selection| {
+                    if selection.is_empty() {
+                        word_at(&text, selection.start).unwrap_or(selection)
+                    } else {
+                        selection
+                    }
+                })
+                .collect();
+            let Some((span, replacement, restored)) = convert_selections(&text, &targets, kind)
+            else {
+                return;
+            };
+            state.set_selected_range(span, cx);
+            state.replace(replacement, window, cx);
+            // Leave what was converted selected, so converting again from the
+            // palette applies to the same text.
+            let mut restored = restored.into_iter();
+            if let Some(first) = restored.next() {
+                state.set_selected_range(first, cx);
+            }
+            for range in restored {
+                state.add_selection(range, cx);
+            }
+        });
+    }
+
+    pub(super) fn on_convert_uppercase(
+        &mut self,
+        _: &ConvertToUppercase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_case(CaseKind::Upper, window, cx);
+    }
+
+    pub(super) fn on_convert_lowercase(
+        &mut self,
+        _: &ConvertToLowercase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_case(CaseKind::Lower, window, cx);
+    }
+
+    pub(super) fn on_convert_title_case(
+        &mut self,
+        _: &ConvertToTitleCase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_case(CaseKind::Title, window, cx);
+    }
+
+    pub(super) fn on_convert_camel_case(
+        &mut self,
+        _: &ConvertToCamelCase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_case(CaseKind::Camel, window, cx);
+    }
+
+    pub(super) fn on_convert_pascal_case(
+        &mut self,
+        _: &ConvertToPascalCase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_case(CaseKind::Pascal, window, cx);
+    }
+
+    pub(super) fn on_convert_snake_case(
+        &mut self,
+        _: &ConvertToSnakeCase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_case(CaseKind::Snake, window, cx);
+    }
+
+    pub(super) fn on_convert_kebab_case(
+        &mut self,
+        _: &ConvertToKebabCase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_case(CaseKind::Kebab, window, cx);
+    }
+
+    pub(super) fn on_convert_constant_case(
+        &mut self,
+        _: &ConvertToConstantCase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_case(CaseKind::Constant, window, cx);
     }
 
     pub(super) fn on_toggle_line_comment(
@@ -908,9 +1169,9 @@ mod tests {
     // Explicit imports: `use super::*` would pull in gpui-kit's `test` attribute
     // macro and shadow the built-in one, making `#[test]` recurse.
     use super::{
-        CommentStyle, Commit, LineBuffer, add_next_occurrence, comment_style, delete_lines,
-        duplicate_lines, insert_line, join_lines, move_lines, select_line_range, split_into_lines,
-        tidy_edit, toggle_comment,
+        CaseKind, CommentStyle, Commit, LineBuffer, add_next_occurrence, comment_style, convert,
+        convert_selections, delete_lines, duplicate_lines, insert_line, join_lines, move_lines,
+        select_line_range, split_into_lines, tidy_edit, toggle_comment, words,
     };
 
     /// Applies a commit to `text` the way the handler does.
@@ -1358,5 +1619,75 @@ mod tests {
         let (range, replacement) = tidy_edit("keep\nx  \nkeep\n", true, false).unwrap();
         assert_eq!(range, 6..8);
         assert_eq!(replacement, "");
+    }
+
+    #[test]
+    fn words_split_on_separators_and_case_changes() {
+        assert_eq!(words("helloWorld"), ["hello", "World"]);
+        assert_eq!(
+            words("hello_world-two three"),
+            ["hello", "world", "two", "three"]
+        );
+        assert_eq!(words("HTTPServer"), ["HTTP", "Server"]);
+        assert_eq!(words("XMLHttpRequest"), ["XML", "Http", "Request"]);
+        assert_eq!(words("version2Beta"), ["version2", "Beta"]);
+        assert_eq!(words(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn words_keep_non_cased_scripts_whole() {
+        assert_eq!(words("नमस्ते संसार"), ["नमस्ते", "संसार"]);
+    }
+
+    #[test]
+    fn convert_case_styles() {
+        assert_eq!(convert("helloWorld", CaseKind::Upper), "HELLOWORLD");
+        assert_eq!(convert("helloWorld", CaseKind::Lower), "helloworld");
+        assert_eq!(convert("helloWorld", CaseKind::Title), "Hello World");
+        assert_eq!(convert("helloWorld", CaseKind::Camel), "helloWorld");
+        assert_eq!(convert("helloWorld", CaseKind::Pascal), "HelloWorld");
+        assert_eq!(convert("helloWorld", CaseKind::Snake), "hello_world");
+        assert_eq!(convert("helloWorld", CaseKind::Kebab), "hello-world");
+        assert_eq!(convert("helloWorld", CaseKind::Constant), "HELLO_WORLD");
+    }
+
+    #[test]
+    fn convert_case_round_trips_an_acronym() {
+        let text = "XMLHttpRequest";
+        assert_eq!(convert(text, CaseKind::Camel), "xmlHttpRequest");
+        assert_eq!(convert(text, CaseKind::Pascal), "XmlHttpRequest");
+        assert_eq!(convert(text, CaseKind::Snake), "xml_http_request");
+        assert_eq!(convert(text, CaseKind::Kebab), "xml-http-request");
+        assert_eq!(convert(text, CaseKind::Constant), "XML_HTTP_REQUEST");
+    }
+
+    #[test]
+    fn upper_and_lower_keep_the_separators() {
+        assert_eq!(
+            convert("hello_world-two", CaseKind::Upper),
+            "HELLO_WORLD-TWO"
+        );
+        assert_eq!(convert("Hello World", CaseKind::Lower), "hello world");
+    }
+
+    #[test]
+    fn convert_selections_edits_one_span() {
+        let text = "one two three";
+        let (span, replacement, restored) =
+            convert_selections(text, &[0..3, 8..13], CaseKind::Upper).unwrap();
+        assert_eq!(span, 0..13);
+        assert_eq!(replacement, "ONE two THREE");
+        assert_eq!(restored, [0..3, 8..13]);
+    }
+
+    #[test]
+    fn convert_selections_skips_overlaps_and_no_ops() {
+        let text = "one two";
+        let (span, replacement, restored) =
+            convert_selections(text, &[0..3, 2..5], CaseKind::Upper).unwrap();
+        assert_eq!(span, 0..3);
+        assert_eq!(replacement, "ONE");
+        assert_eq!(restored, [0..3]);
+        assert!(convert_selections("ABC", &[0..3], CaseKind::Upper).is_none());
     }
 }

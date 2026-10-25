@@ -30,10 +30,12 @@ use gpui_kit::*;
 use crate::paths::display_path;
 use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
-    ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CommandPalette, CopyFileName,
-    CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, FindInFiles,
-    FindNextField, FindPreviousField, GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow,
-    InstallCli, JoinLines, JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextResult, NextTab,
+    ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CommandPalette, ConvertToCamelCase,
+    ConvertToConstantCase, ConvertToKebabCase, ConvertToLowercase, ConvertToPascalCase,
+    ConvertToSnakeCase, ConvertToTitleCase, ConvertToUppercase, CopyFileName, CopyFilePath,
+    CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, FindInFiles, FindNextField,
+    FindPreviousField, GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow, InstallCli,
+    JoinLines, JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextResult, NextTab,
     OpenDefaultSettings, OpenFile, OpenPath, OpenResult, OpenSettings, OpenThemesFolder,
     PreviousResult, PreviousTab, QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll,
     RevealInFinder, RunFind, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll,
@@ -348,6 +350,71 @@ static COMMANDS: &[Command] = &[
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 21)),
         keywords: &[],
+    },
+    // Convert Case: the submenu's rows come from cluster 3 of the Edit menu.
+    Command {
+        label: "Convert to Uppercase",
+        make: || Box::new(ConvertToUppercase),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Edit, 3)),
+        palette: Some((PaletteGroup::Edit, 22)),
+        keywords: &["case", "upper", "uppercase"],
+    },
+    Command {
+        label: "Convert to Lowercase",
+        make: || Box::new(ConvertToLowercase),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Edit, 3)),
+        palette: Some((PaletteGroup::Edit, 23)),
+        keywords: &["case", "lower", "lowercase"],
+    },
+    Command {
+        label: "Convert to Title Case",
+        make: || Box::new(ConvertToTitleCase),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Edit, 3)),
+        palette: Some((PaletteGroup::Edit, 24)),
+        keywords: &["case", "title"],
+    },
+    Command {
+        label: "Convert to Camel Case",
+        make: || Box::new(ConvertToCamelCase),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Edit, 3)),
+        palette: Some((PaletteGroup::Edit, 25)),
+        keywords: &["case", "camel", "camelcase"],
+    },
+    Command {
+        label: "Convert to Pascal Case",
+        make: || Box::new(ConvertToPascalCase),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Edit, 3)),
+        palette: Some((PaletteGroup::Edit, 26)),
+        keywords: &["case", "pascal", "pascalcase"],
+    },
+    Command {
+        label: "Convert to Snake Case",
+        make: || Box::new(ConvertToSnakeCase),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Edit, 3)),
+        palette: Some((PaletteGroup::Edit, 27)),
+        keywords: &["case", "snake", "snake_case"],
+    },
+    Command {
+        label: "Convert to Kebab Case",
+        make: || Box::new(ConvertToKebabCase),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Edit, 3)),
+        palette: Some((PaletteGroup::Edit, 28)),
+        keywords: &["case", "kebab", "kebab-case", "slug", "dash"],
+    },
+    Command {
+        label: "Convert to Constant Case",
+        make: || Box::new(ConvertToConstantCase),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Edit, 3)),
+        palette: Some((PaletteGroup::Edit, 29)),
+        keywords: &["case", "constant", "screaming", "upper snake"],
     },
     Command {
         label: "Move Line Up",
@@ -786,6 +853,8 @@ enum Entry {
     Appearance,
     /// The Open Recent submenu, which needs the recent list.
     OpenRecent,
+    /// A submenu whose rows are placed by its own entries in this same menu.
+    Submenu(&'static str, &'static [Entry]),
 }
 
 const TEAK_MENU: &[Entry] = &[
@@ -826,6 +895,9 @@ const EDIT_MENU: &[Entry] = &[
     Entry::Cluster(6),
     Entry::Item(MenuItem::separator),
     Entry::Cluster(2),
+    Entry::Item(MenuItem::separator),
+    Entry::Submenu("Convert Case", CONVERT_CASE),
+    Entry::Item(MenuItem::separator),
     Entry::Cluster(4),
     Entry::Item(MenuItem::separator),
     Entry::Item(indent),
@@ -833,6 +905,9 @@ const EDIT_MENU: &[Entry] = &[
     Entry::Item(MenuItem::separator),
     Entry::Cluster(5),
 ];
+
+/// The Convert Case submenu's rows.
+const CONVERT_CASE: &[Entry] = &[Entry::Cluster(3)];
 
 const SELECTION_MENU: &[Entry] = &[
     Entry::Item(select_all),
@@ -988,22 +1063,38 @@ pub(crate) fn menus(theme: &str, recent: &[PathBuf]) -> Vec<Menu> {
         .iter()
         .map(|&kind| {
             let mut items = Vec::new();
-            for entry in kind.skeleton() {
-                match entry {
-                    Entry::Cluster(cluster) => items.extend(
-                        COMMANDS
-                            .iter()
-                            .filter(|command| command.menu == Some((kind, *cluster)))
-                            .map(menu_item),
-                    ),
-                    Entry::Item(build) => items.push(build()),
-                    Entry::Appearance => items.push(MenuItem::submenu(theme_menu(theme))),
-                    Entry::OpenRecent => items.push(MenuItem::submenu(recent_menu(recent))),
-                }
-            }
+            fill_menu(kind, kind.skeleton(), theme, recent, &mut items);
             Menu::new(kind.label()).items(items)
         })
         .collect()
+}
+
+/// Appends the rows `entries` describes to `items`, recursing into submenus.
+fn fill_menu(
+    kind: MenuKind,
+    entries: &[Entry],
+    theme: &str,
+    recent: &[PathBuf],
+    items: &mut Vec<MenuItem>,
+) {
+    for entry in entries {
+        match entry {
+            Entry::Cluster(cluster) => items.extend(
+                COMMANDS
+                    .iter()
+                    .filter(|command| command.menu == Some((kind, *cluster)))
+                    .map(menu_item),
+            ),
+            Entry::Item(build) => items.push(build()),
+            Entry::Appearance => items.push(MenuItem::submenu(theme_menu(theme))),
+            Entry::OpenRecent => items.push(MenuItem::submenu(recent_menu(recent))),
+            Entry::Submenu(label, entries) => {
+                let mut submenu = Vec::new();
+                fill_menu(kind, entries, theme, recent, &mut submenu);
+                items.push(MenuItem::submenu(Menu::new(*label).items(submenu)));
+            }
+        }
+    }
 }
 
 fn menu_item(command: &Command) -> MenuItem {
@@ -1209,6 +1300,31 @@ mod tests {
         );
     }
 
+    /// Whether `entries`, or a submenu inside them, shows `cluster`.
+    fn shows_cluster(entries: &[Entry], cluster: u8) -> bool {
+        entries.iter().any(|entry| match entry {
+            Entry::Cluster(found) => *found == cluster,
+            Entry::Submenu(_, entries) => shows_cluster(entries, cluster),
+            _ => false,
+        })
+    }
+
+    /// The labels a skeleton shows, in order, including submenu rows.
+    fn skeleton_labels(kind: MenuKind, entries: &[Entry]) -> Vec<&'static str> {
+        entries
+            .iter()
+            .flat_map(|entry| match entry {
+                Entry::Cluster(cluster) => COMMANDS
+                    .iter()
+                    .filter(|command| command.menu == Some((kind, *cluster)))
+                    .map(|command| command.label)
+                    .collect::<Vec<_>>(),
+                Entry::Submenu(_, entries) => skeleton_labels(kind, entries),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
     /// A command placed at a cluster no skeleton entry shows would silently miss
     /// the menu bar, so every placement has to resolve.
     #[test]
@@ -1218,9 +1334,7 @@ mod tests {
                 continue;
             };
             assert!(
-                kind.skeleton()
-                    .iter()
-                    .any(|entry| matches!(entry, Entry::Cluster(cluster) if *cluster == rank)),
+                shows_cluster(kind.skeleton(), rank),
                 "`{}` sits in {} cluster {rank}, which no skeleton entry shows",
                 command.label,
                 kind.label()
@@ -1276,6 +1390,14 @@ mod tests {
                     "Delete Line",
                     "Join Lines",
                     "Trim Trailing Whitespace",
+                    "Convert to Uppercase",
+                    "Convert to Lowercase",
+                    "Convert to Title Case",
+                    "Convert to Camel Case",
+                    "Convert to Pascal Case",
+                    "Convert to Snake Case",
+                    "Convert to Kebab Case",
+                    "Convert to Constant Case",
                     "Insert Line Above",
                     "Insert Line Below",
                     "Go to Line…",
@@ -1317,19 +1439,12 @@ mod tests {
         ];
 
         for (kind, labels) in expected {
-            let actual: Vec<&str> = kind
-                .skeleton()
-                .iter()
-                .flat_map(|entry| match entry {
-                    Entry::Cluster(cluster) => COMMANDS
-                        .iter()
-                        .filter(|command| command.menu == Some((*kind, *cluster)))
-                        .map(|command| command.label)
-                        .collect(),
-                    _ => Vec::new(),
-                })
-                .collect();
-            assert_eq!(actual, *labels, "the {} menu changed", kind.label());
+            assert_eq!(
+                skeleton_labels(*kind, kind.skeleton()),
+                *labels,
+                "the {} menu changed",
+                kind.label()
+            );
         }
     }
 
@@ -1434,7 +1549,7 @@ mod tests {
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 56);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 53);
+        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 64);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 61);
     }
 }
