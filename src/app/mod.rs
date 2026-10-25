@@ -29,9 +29,6 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-#[cfg(not(target_os = "macos"))]
-use gpui_kit::component::menu::AppMenuBar;
-
 use crate::cli::{install_cli, launcher_target};
 use crate::session::{SessionState, load_session, session_path};
 use crate::settings::{
@@ -39,9 +36,7 @@ use crate::settings::{
     defaults_document, font_family_issue, load_settings, save_editor_flag, save_font_size,
     save_show_whitespace, save_soft_wrap, save_theme, settings_path, ui_font_family_issue,
 };
-use crate::update::{
-    INSTALL_COMMAND, RELEASES_URL, UPDATE_ACTION_LABEL, UPDATE_HINT, is_newer, latest_version,
-};
+use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
 use crate::{
     About, CheckForUpdates, ClearRecent, CopyFilePath, CopyRelativePath, InstallCli, JumpToTab,
     NextTab, OpenDefaultSettings, OpenSettings, OpenThemesFolder, PreviousTab, Quit, Refresh,
@@ -80,9 +75,6 @@ pub(crate) struct TeakApp {
     chrome: Chrome,
     /// The user's preferences and the Settings overlay's own state.
     settings: SettingsState,
-    /// The in-window menu bar, for platforms without a native app menu.
-    #[cfg(not(target_os = "macos"))]
-    menu_bar: Entity<AppMenuBar>,
 }
 
 impl TeakApp {
@@ -100,8 +92,6 @@ impl TeakApp {
             overlays: Overlays::new(),
             chrome: Chrome::new(),
             settings: SettingsState::new(settings),
-            #[cfg(not(target_os = "macos"))]
-            menu_bar: AppMenuBar::new(cx),
         };
         app.workspace.reload();
         // Read on its own because the session is skipped when the app is
@@ -122,9 +112,7 @@ impl TeakApp {
     /// app state.
     fn refresh_menus(&self, cx: &mut App) {
         let theme = self.settings.values.ui.theme().to_string();
-        crate::commands::apply_menus(cx, crate::commands::menus(&theme, self.workspace.recent()));
-        #[cfg(not(target_os = "macos"))]
-        self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
+        cx.set_menus(crate::commands::menus(&theme, self.workspace.recent()));
     }
 
     /// Records a file or folder the user opened, for File > Open Recent.
@@ -573,9 +561,7 @@ impl TeakApp {
         cx: &mut Context<Self>,
     ) {
         crate::theme::apply(&self.settings.values, window, cx);
-        crate::commands::apply_menus(cx, crate::commands::menus(choice, self.workspace.recent()));
-        #[cfg(not(target_os = "macos"))]
-        self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
+        cx.set_menus(crate::commands::menus(choice, self.workspace.recent()));
     }
 
     /// Re-applies the current appearance and color scheme without a window, used
@@ -766,31 +752,23 @@ impl TeakApp {
                                 .child(format!(
                                     "{WINDOW_TITLE} {latest} is available. You have {current}."
                                 ))
-                                .child(UPDATE_HINT);
-                            let description = match INSTALL_COMMAND {
-                                Some(command) => description.child(command),
-                                None => description,
-                            };
+                                .child("Save your work, then run this in Terminal:")
+                                .child(INSTALL_COMMAND);
 
                             alert
                                 .title("Update Available")
                                 .description(description)
-                                .ok_text(UPDATE_ACTION_LABEL)
+                                .ok_text("Copy Command")
                                 .show_cancel(true)
                                 .cancel_text("Later")
                                 .on_ok(|_, window, cx| {
-                                    match INSTALL_COMMAND {
-                                        Some(command) => {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                command.to_string(),
-                                            ));
-                                            window.push_notification(
-                                                Notification::success("Copied install command"),
-                                                cx,
-                                            );
-                                        }
-                                        None => cx.open_url(RELEASES_URL),
-                                    }
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        INSTALL_COMMAND.to_string(),
+                                    ));
+                                    window.push_notification(
+                                        Notification::success("Copied install command"),
+                                        cx,
+                                    );
                                     true
                                 })
                         });
@@ -1119,22 +1097,6 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_next_result))
             .on_action(cx.listener(Self::on_previous_result))
             .on_action(cx.listener(Self::on_open_path));
-
-        // A native app menu sits outside the window; elsewhere the bar is the
-        // first row of the client area.
-        #[cfg(not(target_os = "macos"))]
-        let root = root.child(
-            div()
-                .w_full()
-                .h(gpui_kit::component::TITLE_BAR_HEIGHT)
-                .flex()
-                .items_center()
-                .px_2()
-                .bg(cx.theme().title_bar)
-                .border_b_1()
-                .border_color(cx.theme().title_bar_border)
-                .child(self.menu_bar.clone()),
-        );
 
         let root = root
             .child(self.render_workspace(window, cx))

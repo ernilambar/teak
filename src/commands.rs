@@ -27,7 +27,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-use crate::paths::{display_path, reveal_label};
+use crate::paths::display_path;
 use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
     ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CommandPalette, CopyFilePath,
@@ -96,44 +96,6 @@ pub(crate) struct Command {
 
 /// A command with no chord.
 const NO_KEYS: &[(&str, Scope)] = &[];
-
-/// Chords for the app-menu commands, which have no meaning without a native
-/// app menu. Off macOS they are bound to nothing.
-#[cfg(target_os = "macos")]
-const HIDE_KEYS: &[(&str, Scope)] = &[("secondary-h", Scope::Global)];
-#[cfg(not(target_os = "macos"))]
-const HIDE_KEYS: &[(&str, Scope)] = NO_KEYS;
-
-#[cfg(target_os = "macos")]
-const HIDE_OTHERS_KEYS: &[(&str, Scope)] = &[("alt-secondary-h", Scope::Global)];
-#[cfg(not(target_os = "macos"))]
-const HIDE_OTHERS_KEYS: &[(&str, Scope)] = NO_KEYS;
-
-/// Add-cursor chords. macOS also accepts the engine's Ctrl+Alt alternate;
-/// elsewhere the secondary modifier already means Ctrl, so the duplicate chord
-/// is left out.
-#[cfg(target_os = "macos")]
-const ADD_CURSOR_ABOVE_KEYS: &[(&str, Scope)] = &[
-    ("secondary-alt-up", Scope::Editor),
-    ("ctrl-alt-up", Scope::Editor),
-];
-#[cfg(not(target_os = "macos"))]
-const ADD_CURSOR_ABOVE_KEYS: &[(&str, Scope)] = &[("secondary-alt-up", Scope::Editor)];
-
-#[cfg(target_os = "macos")]
-const ADD_CURSOR_BELOW_KEYS: &[(&str, Scope)] = &[
-    ("secondary-alt-down", Scope::Editor),
-    ("ctrl-alt-down", Scope::Editor),
-];
-#[cfg(not(target_os = "macos"))]
-const ADD_CURSOR_BELOW_KEYS: &[(&str, Scope)] = &[("secondary-alt-down", Scope::Editor)];
-
-/// Menu placement for the app-menu commands. They only appear with the native
-/// app menu, so off macOS they are on neither the menu bar nor the keymap.
-#[cfg(target_os = "macos")]
-const MACOS_MENU_SLOT: Option<(MenuKind, u8)> = Some((MenuKind::Teak, 3));
-#[cfg(not(target_os = "macos"))]
-const MACOS_MENU_SLOT: Option<(MenuKind, u8)> = None;
 
 /// Every user-invokable command.
 ///
@@ -226,7 +188,7 @@ static COMMANDS: &[Command] = &[
         keywords: &[],
     },
     Command {
-        label: reveal_label(),
+        label: "Reveal in Finder",
         make: || Box::new(RevealInFinder),
         bindings: &[("alt-secondary-r", Scope::Global)],
         menu: None,
@@ -421,7 +383,11 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Add Cursor Above",
         make: || Box::new(AddCursorAbove),
-        bindings: ADD_CURSOR_ABOVE_KEYS,
+        // Also the engine's Ctrl+Alt alternate.
+        bindings: &[
+            ("secondary-alt-up", Scope::Editor),
+            ("ctrl-alt-up", Scope::Editor),
+        ],
         menu: Some((MenuKind::Edit, 1)),
         palette: Some((PaletteGroup::Edit, 10)),
         keywords: &[],
@@ -429,7 +395,10 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Add Cursor Below",
         make: || Box::new(AddCursorBelow),
-        bindings: ADD_CURSOR_BELOW_KEYS,
+        bindings: &[
+            ("secondary-alt-down", Scope::Editor),
+            ("ctrl-alt-down", Scope::Editor),
+        ],
         menu: Some((MenuKind::Edit, 1)),
         palette: Some((PaletteGroup::Edit, 11)),
         keywords: &[],
@@ -634,16 +603,16 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Hide Teak",
         make: || Box::new(Hide),
-        bindings: HIDE_KEYS,
-        menu: MACOS_MENU_SLOT,
+        bindings: &[("secondary-h", Scope::Global)],
+        menu: Some((MenuKind::Teak, 3)),
         palette: None,
         keywords: &[],
     },
     Command {
         label: "Hide Others",
         make: || Box::new(HideOthers),
-        bindings: HIDE_OTHERS_KEYS,
-        menu: MACOS_MENU_SLOT,
+        bindings: &[("alt-secondary-h", Scope::Global)],
+        menu: Some((MenuKind::Teak, 3)),
         palette: None,
         keywords: &[],
     },
@@ -651,7 +620,7 @@ static COMMANDS: &[Command] = &[
         label: "Show All",
         make: || Box::new(ShowAll),
         bindings: NO_KEYS,
-        menu: MACOS_MENU_SLOT,
+        menu: Some((MenuKind::Teak, 3)),
         palette: None,
         keywords: &[],
     },
@@ -786,7 +755,6 @@ enum Entry {
     OpenRecent,
 }
 
-#[cfg(target_os = "macos")]
 const TEAK_MENU: &[Entry] = &[
     Entry::Cluster(0),
     Entry::Item(MenuItem::separator),
@@ -797,20 +765,6 @@ const TEAK_MENU: &[Entry] = &[
     Entry::Item(services_menu),
     Entry::Item(MenuItem::separator),
     Entry::Cluster(3),
-    Entry::Item(MenuItem::separator),
-    Entry::Cluster(4),
-];
-
-/// Without the native app menu the hide/show commands and the Services menu
-/// have no platform equivalent, so the menu goes straight from the app
-/// commands to Quit.
-#[cfg(not(target_os = "macos"))]
-const TEAK_MENU: &[Entry] = &[
-    Entry::Cluster(0),
-    Entry::Item(MenuItem::separator),
-    Entry::Cluster(1),
-    Entry::Item(MenuItem::separator),
-    Entry::Cluster(2),
     Entry::Item(MenuItem::separator),
     Entry::Cluster(4),
 ];
@@ -883,7 +837,6 @@ const PALETTE: &[PaletteSlot] = &[
     PaletteSlot::Group(PaletteGroup::Teak),
 ];
 
-#[cfg(target_os = "macos")]
 fn services_menu() -> MenuItem {
     MenuItem::os_submenu("Services", SystemMenuType::Services)
 }
@@ -940,8 +893,8 @@ pub(crate) fn app_bindings() -> Vec<KeyBinding> {
 /// they overlap:
 /// - `shift-alt-up` / `shift-alt-down` — VS Code copies the line, replacing the
 ///   engine's alternate add-cursor chord.
-/// - `secondary-alt-up` / `secondary-alt-down` (and, on macOS, the
-///   `ctrl-alt-*` alternate) — the engine binds these to its own add-cursor
+/// - `secondary-alt-up` / `secondary-alt-down` (and the `ctrl-alt-*`
+///   alternate) — the engine binds these to its own add-cursor
 ///   actions; the app binds the same chords to its `AddCursorAbove` /
 ///   `AddCursorBelow` so the menu and palette share one path (the handler
 ///   re-dispatches the engine action at the editor).
@@ -1016,18 +969,6 @@ pub(crate) fn menus(theme: &str, recent: &[PathBuf]) -> Vec<Menu> {
             Menu::new(kind.label()).items(items)
         })
         .collect()
-}
-
-/// Publishes the menu bar. Platforms with a native app menu use that; the
-/// others read the owned menus from the shared state their in-window bar
-/// renders from.
-pub(crate) fn apply_menus(cx: &mut App, menus: Vec<Menu>) {
-    cx.set_menus(menus);
-    #[cfg(not(target_os = "macos"))]
-    {
-        let menus = cx.get_menus().unwrap_or_default();
-        gpui_kit::component::global_state::GlobalState::global_mut(cx).set_app_menus(menus);
-    }
 }
 
 fn menu_item(command: &Command) -> MenuItem {
@@ -1151,17 +1092,8 @@ mod tests {
     fn every_binding_parses() {
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
-        #[cfg(target_os = "macos")]
-        const APP_BINDINGS: usize = 40;
-        #[cfg(not(target_os = "macos"))]
-        const APP_BINDINGS: usize = 38;
-        #[cfg(target_os = "macos")]
-        const EDITOR_BINDINGS: usize = 18;
-        #[cfg(not(target_os = "macos"))]
-        const EDITOR_BINDINGS: usize = 16;
-
-        assert_eq!(app_bindings().len(), APP_BINDINGS);
-        assert_eq!(editor_bindings().len(), EDITOR_BINDINGS);
+        assert_eq!(app_bindings().len(), 40);
+        assert_eq!(editor_bindings().len(), 18);
         assert_eq!(find_bindings().len(), 6);
     }
 
@@ -1235,8 +1167,7 @@ mod tests {
             resolve(&keymap, "secondary-alt-down", &["Input"])[0],
             crate::AddCursorBelow.name()
         );
-        // On macOS the Ctrl+Alt chord is a second app binding; elsewhere
-        // `secondary-alt-up` already means Ctrl+Alt.
+        // The Ctrl+Alt chord is a second app binding.
         assert_eq!(
             resolve(&keymap, "ctrl-alt-up", &["Input"])[0],
             crate::AddCursorAbove.name()
@@ -1267,7 +1198,6 @@ mod tests {
     /// bar the app had before the table existed.
     #[test]
     fn menu_command_order_is_unchanged() {
-        #[cfg(target_os = "macos")]
         let teak_commands: &[&str] = &[
             "About Teak",
             "Check for Updates…",
@@ -1277,15 +1207,6 @@ mod tests {
             "Hide Teak",
             "Hide Others",
             "Show All",
-            "Quit Teak",
-        ];
-        #[cfg(not(target_os = "macos"))]
-        let teak_commands: &[&str] = &[
-            "About Teak",
-            "Check for Updates…",
-            "Settings…",
-            "Open Themes Folder",
-            "Install Command Line Tool…",
             "Quit Teak",
         ];
 
@@ -1469,15 +1390,7 @@ mod tests {
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        #[cfg(target_os = "macos")]
-        const MENU_COMMANDS: usize = 52;
-        #[cfg(not(target_os = "macos"))]
-        const MENU_COMMANDS: usize = 49;
-
-        assert_eq!(
-            COMMANDS.iter().filter(|c| c.menu.is_some()).count(),
-            MENU_COMMANDS
-        );
+        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 52);
         assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 50);
     }
 }

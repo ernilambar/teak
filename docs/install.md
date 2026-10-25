@@ -30,6 +30,7 @@ Choose **Teak → Check for Updates…** to see if a new version is out. To upda
 your work and run:
 
 ```sh
+brew update
 brew upgrade --cask teak
 ```
 

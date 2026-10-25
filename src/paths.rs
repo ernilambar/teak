@@ -3,30 +3,18 @@ use std::path::{Path, PathBuf};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 
-/// Used by the platforms that name the support directory after the app.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+/// Names the support directory.
 const BUNDLE_ID: &str = "net.nilambar.teak";
 
-/// The user's home directory, read from the variable the platform sets: `HOME`
-/// on Unix, `USERPROFILE` on Windows.
+/// The user's home directory, read from `HOME`.
 pub(crate) fn home_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
+    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 /// Home of session and settings files:
-/// `~/Library/Application Support/<bundle id>` on macOS,
-/// `%APPDATA%\<bundle id>` on Windows,
-/// `$XDG_CONFIG_HOME/teak` (or `~/.config/teak`) elsewhere.
+/// `~/Library/Application Support/<bundle id>`.
 /// Test builds use a per-run temp directory instead, so no test can overwrite
 /// the user's session, settings or themes.
-#[cfg(target_os = "macos")]
 pub(crate) fn support_dir() -> Option<PathBuf> {
     if cfg!(test) {
         return Some(std::env::temp_dir().join(format!("app-test-{}", std::process::id())));
@@ -37,59 +25,6 @@ pub(crate) fn support_dir() -> Option<PathBuf> {
             .join("Application Support")
             .join(BUNDLE_ID),
     )
-}
-
-/// Home of session and settings files:
-/// `~/Library/Application Support/<bundle id>` on macOS,
-/// `%APPDATA%\<bundle id>` on Windows,
-/// `$XDG_CONFIG_HOME/teak` (or `~/.config/teak`) elsewhere.
-/// Test builds use a per-run temp directory instead, so no test can overwrite
-/// the user's session, settings or themes.
-#[cfg(target_os = "windows")]
-pub(crate) fn support_dir() -> Option<PathBuf> {
-    if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("app-test-{}", std::process::id())));
-    }
-    let roaming = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(roaming).join(BUNDLE_ID))
-}
-
-/// Home of session and settings files:
-/// `~/Library/Application Support/<bundle id>` on macOS,
-/// `%APPDATA%\<bundle id>` on Windows,
-/// `$XDG_CONFIG_HOME/teak` (or `~/.config/teak`) elsewhere.
-/// Test builds use a per-run temp directory instead, so no test can overwrite
-/// the user's session, settings or themes.
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub(crate) fn support_dir() -> Option<PathBuf> {
-    if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("app-test-{}", std::process::id())));
-    }
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home_dir().map(|home| home.join(".config")))?;
-    Some(base.join("teak"))
-}
-
-/// The file-manager label for revealing a path: Finder on macOS, Explorer on
-/// Windows, File Manager elsewhere.
-#[cfg(target_os = "macos")]
-pub(crate) const fn reveal_label() -> &'static str {
-    "Reveal in Finder"
-}
-
-/// The file-manager label for revealing a path: Finder on macOS, Explorer on
-/// Windows, File Manager elsewhere.
-#[cfg(target_os = "windows")]
-pub(crate) const fn reveal_label() -> &'static str {
-    "Reveal in Explorer"
-}
-
-/// The file-manager label for revealing a path: Finder on macOS, Explorer on
-/// Windows, File Manager elsewhere.
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub(crate) const fn reveal_label() -> &'static str {
-    "Reveal in File Manager"
 }
 
 pub(crate) fn file_name(path: &Path) -> String {
@@ -237,38 +172,10 @@ fn is_ignored_dir(path: &Path) -> bool {
 
 pub(crate) fn path_from_file_url(url: &str) -> Option<PathBuf> {
     let rest = url.strip_prefix("file://")?;
-    if let Some(local) = rest.strip_prefix("localhost") {
-        return local_path_from_url(local);
-    }
-    // A host other than `localhost`. A Unix path has no equivalent for a remote
-    // host, while Windows resolves the share as a UNC path, so
-    // `file://server/share/x` becomes `\\server\share\x`.
-    #[cfg(target_os = "windows")]
-    if !rest.starts_with('/') {
-        let share = percent_decode(rest).replace('/', "\\");
-        return Some(PathBuf::from(format!(r"\\{share}")));
-    }
-    local_path_from_url(rest)
-}
-
-/// The local path a `file://` URL's path part names: a drive-letter path on
-/// Windows (`/C:/…`, or the legacy `/C|/…`), an absolute path elsewhere.
-fn local_path_from_url(path: &str) -> Option<PathBuf> {
-    let decoded = percent_decode(path);
-    // Windows drive-letter URLs.
-    if let Some(after_slash) = decoded.strip_prefix('/')
-        && after_slash.len() >= 3
-        && after_slash.as_bytes()[0].is_ascii_alphabetic()
-        && (after_slash.as_bytes()[1] == b':' || after_slash.as_bytes()[1] == b'|')
-        && after_slash.as_bytes()[2] == b'/'
-    {
-        return Some(PathBuf::from(format!(
-            "{}:/{}",
-            after_slash.as_bytes()[0] as char,
-            &after_slash[3..]
-        )));
-    }
-    path.starts_with('/').then(|| PathBuf::from(decoded))
+    // A host other than `localhost` has no local path.
+    let path = rest.strip_prefix("localhost").unwrap_or(rest);
+    path.starts_with('/')
+        .then(|| PathBuf::from(percent_decode(path)))
 }
 
 pub(crate) fn percent_decode(input: &str) -> String {
@@ -304,22 +211,9 @@ pub(crate) fn hex_digit(byte: u8) -> Option<u8> {
 
 /// A single path component usable as a new file or folder name. Rejects the
 /// empty string, the dot entries, and anything containing a separator so the
-/// name cannot escape the directory it is created in. On Windows it also
-/// rejects the characters the platform forbids in file names.
+/// name cannot escape the directory it is created in.
 pub(crate) fn is_valid_entry_name(name: &str) -> bool {
-    let windows_reserved = cfg!(target_os = "windows") && has_windows_reserved_char(name);
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.contains('/')
-        && !name.contains('\0')
-        && !windows_reserved
-}
-
-/// Whether `name` contains a character Windows forbids in file names.
-fn has_windows_reserved_char(name: &str) -> bool {
-    name.chars()
-        .any(|c| matches!(c, '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\0')
 }
 
 /// Rewrites `path` when it is `from` or lives under it, mapping the prefix to
@@ -375,22 +269,8 @@ pub(crate) fn nearest_root<'a>(roots: &'a [PathBuf], path: &Path) -> Option<&'a 
         .map(PathBuf::as_path)
 }
 
-/// The user-facing name of the OS trash: Recycle Bin on Windows, Trash
-/// elsewhere.
-#[cfg(target_os = "windows")]
-pub(crate) const fn trash_name() -> &'static str {
-    "Recycle Bin"
-}
-
-/// The user-facing name of the OS trash: Recycle Bin on Windows, Trash
-/// elsewhere.
-#[cfg(not(target_os = "windows"))]
-pub(crate) const fn trash_name() -> &'static str {
-    "Trash"
-}
-
-/// Moves a file or directory to the user's Trash (Recycle Bin on Windows), so
-/// a delete can be undone from the file manager.
+/// Moves a file or directory to the user's Trash, so a delete can be undone
+/// from Finder.
 pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
     trash::delete(path).map_err(|error| error.to_string())
 }
@@ -411,7 +291,7 @@ pub(crate) fn copy_entry(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// A sibling name for a duplicate of `path`, following the Finder/Explorer
+/// A sibling name for a duplicate of `path`, following the Finder
 /// convention: `"main.rs"` becomes `"main copy.rs"`, then `"main copy 2.rs"`,
 /// and so on. Directories keep their whole name (`"docs"` becomes
 /// `"docs copy"`).
@@ -648,35 +528,12 @@ mod tests {
             path_from_file_url("file:///Users/me/My%20Notes.txt"),
             Some(PathBuf::from("/Users/me/My Notes.txt"))
         );
-        assert_eq!(
-            path_from_file_url("file:///C:/Users/me/notes.txt"),
-            Some(PathBuf::from("C:/Users/me/notes.txt"))
-        );
-        assert_eq!(
-            path_from_file_url("file:///C|/Users/me/notes.txt"),
-            Some(PathBuf::from("C:/Users/me/notes.txt"))
-        );
-        assert_eq!(
-            path_from_file_url("file:///C:/My%20Notes.txt"),
-            Some(PathBuf::from("C:/My Notes.txt"))
-        );
     }
 
     #[test]
     fn path_from_file_url_rejects_non_file_urls() {
         assert_eq!(path_from_file_url("https://example.com/a.txt"), None);
-        // A remote host has no local path on Unix; Windows maps it to UNC.
-        #[cfg(not(target_os = "windows"))]
         assert_eq!(path_from_file_url("file://remote-host/a.txt"), None);
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn path_from_file_url_maps_a_host_to_a_unc_share() {
-        assert_eq!(
-            path_from_file_url("file://server/share/notes.txt"),
-            Some(PathBuf::from(r"\\server\share\notes.txt"))
-        );
     }
 
     #[test]
@@ -698,16 +555,6 @@ mod tests {
         assert!(!is_valid_entry_name(".."));
         assert!(!is_valid_entry_name("a/b"));
         assert!(!is_valid_entry_name("a\0b"));
-    }
-
-    #[test]
-    fn windows_reserved_characters_are_detected() {
-        assert!(has_windows_reserved_char("a:b"));
-        assert!(has_windows_reserved_char("a*b"));
-        assert!(has_windows_reserved_char("a?b"));
-        assert!(has_windows_reserved_char("a|b"));
-        assert!(!has_windows_reserved_char("main.rs"));
-        assert!(!has_windows_reserved_char("My Notes"));
     }
 
     #[test]

@@ -1,13 +1,6 @@
 use std::path::{Path, PathBuf};
 
-// Only the Linux and Windows installers write into the user's home directory;
-// the macOS one installs into `/usr/local/bin`.
-#[cfg(not(target_os = "macos"))]
-use crate::paths::home_dir;
-
-/// What the installed command-line tool launches: the `.app` bundle on macOS,
-/// the executable itself elsewhere.
-#[cfg(target_os = "macos")]
+/// What the installed command-line tool launches: the `.app` bundle.
 pub(crate) fn launcher_target() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()?
@@ -16,16 +9,8 @@ pub(crate) fn launcher_target() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// What the installed command-line tool launches: the `.app` bundle on macOS,
-/// the executable itself elsewhere.
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn launcher_target() -> Option<PathBuf> {
-    std::env::current_exe().ok()
-}
-
 /// The launcher script for a macOS `.app` bundle: options go to the binary
 /// inside the bundle, and everything else opens the app.
-#[cfg(any(target_os = "macos", test))]
 fn mac_launcher_script(bundle: &Path) -> String {
     let template = r#"#!/usr/bin/env bash
 # Command-line launcher installed by the app.
@@ -54,30 +39,8 @@ exec open -a "$APP" -- "$@"
     template.replace("__BUNDLE__", &bundle.display().to_string())
 }
 
-/// The launcher script for a Linux executable: the binary already handles
-/// options and paths, so the script only forwards its arguments.
-#[cfg(any(all(unix, not(target_os = "macos")), test))]
-fn linux_launcher_script(executable: &Path) -> String {
-    format!(
-        "#!/bin/sh\n# Command-line launcher installed by the app.\nexec \"{}\" \"$@\"\n",
-        executable.display()
-    )
-}
-
-/// The launcher script for a Windows executable: a `.cmd` shim that forwards
-/// its arguments to the binary.
-#[cfg(any(target_os = "windows", test))]
-fn windows_launcher_script(executable: &Path) -> String {
-    format!(
-        "@echo off\r\nrem Command-line launcher installed by the app.\r\n\"{}\" %*\r\n",
-        executable.display()
-    )
-}
-
-/// Installs the command-line tool. On macOS this needs an administrator
-/// prompt to write into `/usr/local/bin`; on Linux and Windows the command goes
-/// into a directory the user owns.
-#[cfg(target_os = "macos")]
+/// Installs the command-line tool. This needs an administrator prompt to write
+/// into `/usr/local/bin`.
 pub(crate) fn install_cli(bundle: &Path) -> Result<PathBuf, String> {
     const TARGET: &str = "/usr/local/bin/teak";
 
@@ -112,60 +75,6 @@ pub(crate) fn install_cli(bundle: &Path) -> Result<PathBuf, String> {
     }
 
     Ok(PathBuf::from(TARGET))
-}
-
-/// Installs the command-line tool into `~/.local/bin`, which needs no
-/// administrator rights. The directory is created when missing.
-#[cfg(all(unix, not(target_os = "macos")))]
-pub(crate) fn install_cli(executable: &Path) -> Result<PathBuf, String> {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let target = home_dir()
-        .ok_or("Could not find the home directory")?
-        .join(".local")
-        .join("bin")
-        .join("teak");
-
-    let directory = target
-        .parent()
-        .ok_or("Could not find the install directory")?;
-    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
-
-    // Stage beside the target so the rename never crosses filesystems, which
-    // fails with `EXDEV` when `/tmp` is a separate mount.
-    let temp = directory.join(format!(".teak-{}", std::process::id()));
-    std::fs::write(&temp, linux_launcher_script(executable)).map_err(|error| error.to_string())?;
-    std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
-        .map_err(|error| error.to_string())?;
-
-    if let Err(error) = std::fs::rename(&temp, &target) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(error.to_string());
-    }
-
-    Ok(target)
-}
-
-/// Installs the command-line tool as a `.cmd` shim in
-/// `%LOCALAPPDATA%\Microsoft\WindowsApps`, a directory on `PATH` that the user
-/// owns, so no administrator rights are needed.
-#[cfg(target_os = "windows")]
-pub(crate) fn install_cli(executable: &Path) -> Result<PathBuf, String> {
-    let target = home_dir()
-        .ok_or("Could not find the home directory")?
-        .join("AppData")
-        .join("Local")
-        .join("Microsoft")
-        .join("WindowsApps")
-        .join("teak.cmd");
-
-    if let Some(directory) = target.parent() {
-        std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
-    }
-    std::fs::write(&target, windows_launcher_script(executable))
-        .map_err(|error| error.to_string())?;
-
-    Ok(target)
 }
 
 #[derive(Debug, PartialEq)]
@@ -223,20 +132,6 @@ mod tests {
         assert!(script.starts_with("#!/usr/bin/env bash\n"));
         assert!(script.contains(r#"APP="${TEAK_APP:-/Applications/Example.app}""#));
         assert!(!script.contains("__BUNDLE__"));
-    }
-
-    #[test]
-    fn linux_launcher_script_forwards_to_the_executable() {
-        let script = linux_launcher_script(Path::new("/opt/example/example"));
-        assert!(script.starts_with("#!/bin/sh\n"));
-        assert!(script.contains(r#"exec "/opt/example/example" "$@""#));
-    }
-
-    #[test]
-    fn windows_launcher_script_shims_to_the_executable() {
-        let script = windows_launcher_script(Path::new(r"C:\Program Files\Example\example.exe"));
-        assert!(script.contains(r#""C:\Program Files\Example\example.exe" %*"#));
-        assert!(script.contains("\r\n"), "the shim keeps CRLF line endings");
     }
 
     fn parse(args: &[&str]) -> CliCommand {

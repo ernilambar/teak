@@ -70,7 +70,6 @@ const MONOSPACE_FONTS: &[&str] = &[
     "JetBrains Mono",
     "Fira Code",
     "Source Code Pro",
-    "Cascadia Code",
     "IBM Plex Mono",
     "Hack",
     "Courier New",
@@ -85,8 +84,6 @@ const UI_FONTS: &[&str] = &[
     "Avenir Next",
     "Inter",
     "Roboto",
-    "Segoe UI",
-    "Ubuntu",
 ];
 const MAX_SUGGESTIONS: usize = 3;
 

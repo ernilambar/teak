@@ -58,7 +58,8 @@ This replaces `/Applications/Teak.app` and kills the running copy, so save your 
 in it first.
 
 `./scripts/bundle.sh` builds a release bundle into `target/release/bundle/osx/` without
-installing it. Regenerate the app icon with `python3 scripts/make-icon.py`.
+installing it. Local bundles are only ad-hoc signed, which is enough for the machine
+that built them. Regenerate the app icon with `python3 scripts/make-icon.py`.
 
 ### Code layout
 
