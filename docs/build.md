@@ -3,6 +3,10 @@
 This page covers building and running Teak from source on any supported OS.
 For installing a released build, see [Install options](install.md).
 
+> **Note:** macOS is the fully supported platform. Linux and Windows builds
+> are **experimental** — they build and run, but expect rough edges. Please
+> [report issues](https://github.com/ernilambar/teak/issues).
+
 ## Requirements
 
 | OS      | Requirements                                                                                                      |

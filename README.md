@@ -33,8 +33,10 @@ A fast, lightweight text editor.
 
 ## Requirements
 
-- macOS 15 or later
-- Apple Silicon Mac (M1 or newer)
+- macOS 15 or later on Apple Silicon (M1 or newer) — fully supported.
+- Linux (x86_64, aarch64) and Windows (x86_64) builds are available but
+  **experimental**: they build and run, but expect rough edges. Please
+  [report issues](https://github.com/ernilambar/teak/issues).
 
 ## Install
 
