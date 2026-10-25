@@ -52,6 +52,7 @@ This installs the app into `/Applications`.
 
 - [Keyboard shortcuts](docs/keymaps.md)
 - [Install options](docs/install.md)
+- [Building from source](docs/build.md)
 - [Color schemes](docs/themes.md)
 
 ## Contributing
