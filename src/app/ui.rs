@@ -1074,10 +1074,14 @@ impl TeakApp {
         }
 
         let (cursor_line, cursor_col) = self.chrome.cursor();
+        let caret = match self.chrome.selected() {
+            0 => format!("Ln {cursor_line}, Col {cursor_col}"),
+            selected => format!("Ln {cursor_line}, Col {cursor_col} ({selected} selected)"),
+        };
         let format = self.active().map(|tab| tab.format).unwrap_or_default();
 
         status
-            .left(div().child(format!("Ln {cursor_line}, Col {cursor_col}")))
+            .left(div().child(caret))
             .left(divider())
             .left(div().child(format.encoding_label()))
             .left(divider())

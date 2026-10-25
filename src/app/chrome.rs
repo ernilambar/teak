@@ -1,6 +1,7 @@
 //! The window's non-content state: the native title, the close guard, and the
 //! status-bar readouts.
 
+use gpui_kit::component::input::EditorState;
 use gpui_kit::*;
 
 use crate::app::WINDOW_TITLE;
@@ -19,6 +20,8 @@ pub(super) struct Chrome {
     busy: Option<SharedString>,
     cursor_line: usize,
     cursor_col: usize,
+    /// Characters selected across every cursor, 0 when nothing is selected.
+    selected: usize,
 }
 
 impl Chrome {
@@ -29,6 +32,7 @@ impl Chrome {
             busy: None,
             cursor_line: 1,
             cursor_col: 1,
+            selected: 0,
         }
     }
 
@@ -63,8 +67,21 @@ impl Chrome {
         (self.cursor_line, self.cursor_col)
     }
 
-    pub(super) fn set_cursor(&mut self, line: usize, col: usize) {
-        self.cursor_line = line;
-        self.cursor_col = col;
+    /// Characters selected, shown next to the caret position.
+    pub(super) fn selected(&self) -> usize {
+        self.selected
+    }
+
+    /// Reads the caret position and selection size from `state`.
+    pub(super) fn sync_cursor(&mut self, state: &EditorState) {
+        let position = state.cursor_position();
+        self.cursor_line = position.line as usize + 1;
+        self.cursor_col = position.character as usize + 1;
+        let text = state.text();
+        self.selected = state
+            .selected_ranges()
+            .iter()
+            .map(|range| text.byte_to_char_idx(range.end) - text.byte_to_char_idx(range.start))
+            .sum();
     }
 }

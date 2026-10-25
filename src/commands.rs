@@ -30,16 +30,16 @@ use gpui_kit::*;
 use crate::paths::display_path;
 use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
-    ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CommandPalette, CopyFilePath,
-    CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, FindInFiles, FindNextField,
-    FindPreviousField, GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow, InstallCli,
-    JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextResult, NextTab, OpenDefaultSettings,
-    OpenFile, OpenPath, OpenResult, OpenSettings, OpenThemesFolder, PreviousResult, PreviousTab,
-    QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll, RevealInFinder, RunFind, SaveAll,
-    SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll, SplitSelectionIntoLines, THEME_CHOICES,
-    ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers,
-    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
-    ZoomIn, ZoomOut, ZoomReset,
+    ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CommandPalette, CopyFileName,
+    CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, FindInFiles,
+    FindNextField, FindPreviousField, GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow,
+    InstallCli, JoinLines, JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextResult, NextTab,
+    OpenDefaultSettings, OpenFile, OpenPath, OpenResult, OpenSettings, OpenThemesFolder,
+    PreviousResult, PreviousTab, QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll,
+    RevealInFinder, RunFind, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll,
+    SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
+    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
+    ToggleWhitespace, ToggleWordWrap, TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -52,6 +52,7 @@ pub(crate) enum MenuKind {
     Teak,
     File,
     Edit,
+    Selection,
     View,
 }
 
@@ -191,7 +192,7 @@ static COMMANDS: &[Command] = &[
         label: "Reveal in Finder",
         make: || Box::new(RevealInFinder),
         bindings: &[("alt-secondary-r", Scope::Global)],
-        menu: None,
+        menu: Some((MenuKind::File, 3)),
         palette: Some((PaletteGroup::File, 10)),
         keywords: &[],
     },
@@ -288,7 +289,7 @@ static COMMANDS: &[Command] = &[
         label: "Copy Path",
         make: || Box::new(CopyFilePath),
         bindings: &[("alt-secondary-c", Scope::Global)],
-        menu: Some((MenuKind::Edit, 0)),
+        menu: Some((MenuKind::File, 3)),
         palette: Some((PaletteGroup::Edit, 14)),
         keywords: &[],
     },
@@ -296,8 +297,16 @@ static COMMANDS: &[Command] = &[
         label: "Copy Relative Path",
         make: || Box::new(CopyRelativePath),
         bindings: &[("alt-secondary-shift-c", Scope::Global)],
-        menu: Some((MenuKind::Edit, 0)),
+        menu: Some((MenuKind::File, 3)),
         palette: Some((PaletteGroup::Edit, 15)),
+        keywords: &[],
+    },
+    Command {
+        label: "Copy File Name",
+        make: || Box::new(CopyFileName),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::File, 3)),
+        palette: Some((PaletteGroup::Edit, 19)),
         keywords: &[],
     },
     Command {
@@ -320,15 +329,31 @@ static COMMANDS: &[Command] = &[
         label: "Select Line",
         make: || Box::new(SelectLine),
         bindings: &[("secondary-l", Scope::Editor)],
-        menu: Some((MenuKind::Edit, 2)),
+        menu: Some((MenuKind::Selection, 0)),
         palette: Some((PaletteGroup::Edit, 2)),
+        keywords: &[],
+    },
+    Command {
+        label: "Join Lines",
+        make: || Box::new(JoinLines),
+        bindings: &[("secondary-j", Scope::Editor)],
+        menu: Some((MenuKind::Edit, 2)),
+        palette: Some((PaletteGroup::Edit, 20)),
+        keywords: &[],
+    },
+    Command {
+        label: "Trim Trailing Whitespace",
+        make: || Box::new(TrimTrailingWhitespace),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Edit, 2)),
+        palette: Some((PaletteGroup::Edit, 21)),
         keywords: &[],
     },
     Command {
         label: "Move Line Up",
         make: || Box::new(MoveLineUp),
         bindings: &[("alt-up", Scope::Editor)],
-        menu: Some((MenuKind::Edit, 3)),
+        menu: Some((MenuKind::Selection, 2)),
         palette: Some((PaletteGroup::Edit, 3)),
         keywords: &[],
     },
@@ -336,7 +361,7 @@ static COMMANDS: &[Command] = &[
         label: "Move Line Down",
         make: || Box::new(MoveLineDown),
         bindings: &[("alt-down", Scope::Editor)],
-        menu: Some((MenuKind::Edit, 3)),
+        menu: Some((MenuKind::Selection, 2)),
         palette: Some((PaletteGroup::Edit, 4)),
         keywords: &[],
     },
@@ -344,7 +369,7 @@ static COMMANDS: &[Command] = &[
         label: "Copy Line Up",
         make: || Box::new(CopyLineUp),
         bindings: &[("shift-alt-up", Scope::Editor)],
-        menu: Some((MenuKind::Edit, 3)),
+        menu: Some((MenuKind::Selection, 2)),
         palette: Some((PaletteGroup::Edit, 5)),
         keywords: &[],
     },
@@ -352,7 +377,7 @@ static COMMANDS: &[Command] = &[
         label: "Copy Line Down",
         make: || Box::new(CopyLineDown),
         bindings: &[("shift-alt-down", Scope::Editor)],
-        menu: Some((MenuKind::Edit, 3)),
+        menu: Some((MenuKind::Selection, 2)),
         palette: Some((PaletteGroup::Edit, 6)),
         keywords: &[],
     },
@@ -388,7 +413,7 @@ static COMMANDS: &[Command] = &[
             ("secondary-alt-up", Scope::Editor),
             ("ctrl-alt-up", Scope::Editor),
         ],
-        menu: Some((MenuKind::Edit, 1)),
+        menu: Some((MenuKind::Selection, 1)),
         palette: Some((PaletteGroup::Edit, 10)),
         keywords: &[],
     },
@@ -399,7 +424,7 @@ static COMMANDS: &[Command] = &[
             ("secondary-alt-down", Scope::Editor),
             ("ctrl-alt-down", Scope::Editor),
         ],
-        menu: Some((MenuKind::Edit, 1)),
+        menu: Some((MenuKind::Selection, 1)),
         palette: Some((PaletteGroup::Edit, 11)),
         keywords: &[],
     },
@@ -407,7 +432,7 @@ static COMMANDS: &[Command] = &[
         label: "Split into Lines",
         make: || Box::new(SplitSelectionIntoLines),
         bindings: &[("secondary-shift-l", Scope::Editor)],
-        menu: Some((MenuKind::Edit, 1)),
+        menu: Some((MenuKind::Selection, 0)),
         palette: Some((PaletteGroup::Edit, 12)),
         keywords: &[],
     },
@@ -415,7 +440,7 @@ static COMMANDS: &[Command] = &[
         label: "Add Next Occurrence",
         make: || Box::new(AddNextOccurrence),
         bindings: &[("secondary-d", Scope::Editor)],
-        menu: Some((MenuKind::Edit, 1)),
+        menu: Some((MenuKind::Selection, 1)),
         palette: Some((PaletteGroup::Edit, 13)),
         keywords: &[],
     },
@@ -709,13 +734,20 @@ static COMMANDS: &[Command] = &[
 
 impl MenuKind {
     /// Menus in bar order.
-    const ALL: [Self; 4] = [Self::Teak, Self::File, Self::Edit, Self::View];
+    const ALL: [Self; 5] = [
+        Self::Teak,
+        Self::File,
+        Self::Edit,
+        Self::Selection,
+        Self::View,
+    ];
 
     fn label(self) -> &'static str {
         match self {
             Self::Teak => crate::app::WINDOW_TITLE,
             Self::File => "File",
             Self::Edit => "Edit",
+            Self::Selection => "Selection",
             Self::View => "View",
         }
     }
@@ -725,6 +757,7 @@ impl MenuKind {
             Self::Teak => TEAK_MENU,
             Self::File => FILE_MENU,
             Self::Edit => EDIT_MENU,
+            Self::Selection => SELECTION_MENU,
             Self::View => VIEW_MENU,
         }
     }
@@ -775,6 +808,8 @@ const FILE_MENU: &[Entry] = &[
     Entry::Item(MenuItem::separator),
     Entry::Cluster(1),
     Entry::Item(MenuItem::separator),
+    Entry::Cluster(3),
+    Entry::Item(MenuItem::separator),
     Entry::Cluster(2),
 ];
 
@@ -786,26 +821,26 @@ const EDIT_MENU: &[Entry] = &[
     Entry::Item(copy),
     Entry::Item(paste),
     Entry::Item(MenuItem::separator),
-    Entry::Cluster(0),
-    Entry::Item(MenuItem::separator),
     Entry::Item(find),
     Entry::Item(find_and_replace),
     Entry::Cluster(6),
     Entry::Item(MenuItem::separator),
-    Entry::Item(select_all),
+    Entry::Cluster(2),
+    Entry::Cluster(4),
     Entry::Item(MenuItem::separator),
     Entry::Item(indent),
     Entry::Item(outdent),
     Entry::Item(MenuItem::separator),
+    Entry::Cluster(5),
+];
+
+const SELECTION_MENU: &[Entry] = &[
+    Entry::Item(select_all),
+    Entry::Cluster(0),
+    Entry::Item(MenuItem::separator),
     Entry::Cluster(1),
     Entry::Item(MenuItem::separator),
     Entry::Cluster(2),
-    Entry::Item(MenuItem::separator),
-    Entry::Cluster(3),
-    Entry::Item(MenuItem::separator),
-    Entry::Cluster(4),
-    Entry::Item(MenuItem::separator),
-    Entry::Cluster(5),
 ];
 
 const VIEW_MENU: &[Entry] = &[
@@ -1093,7 +1128,7 @@ mod tests {
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
         assert_eq!(app_bindings().len(), 40);
-        assert_eq!(editor_bindings().len(), 18);
+        assert_eq!(editor_bindings().len(), 19);
         assert_eq!(find_bindings().len(), 6);
     }
 
@@ -1223,6 +1258,10 @@ mod tests {
                     "Save",
                     "Save As…",
                     "Save All",
+                    "Reveal in Finder",
+                    "Copy Path",
+                    "Copy Relative Path",
+                    "Copy File Name",
                     "Close Tab",
                     "Reopen Closed Tab",
                 ],
@@ -1230,25 +1269,30 @@ mod tests {
             (
                 MenuKind::Edit,
                 &[
-                    "Copy Path",
-                    "Copy Relative Path",
                     "Find in Files…",
                     "Next Result",
                     "Previous Result",
-                    "Add Cursor Above",
-                    "Add Cursor Below",
-                    "Split into Lines",
-                    "Add Next Occurrence",
                     "Toggle Line Comment",
                     "Delete Line",
+                    "Join Lines",
+                    "Trim Trailing Whitespace",
+                    "Insert Line Above",
+                    "Insert Line Below",
+                    "Go to Line…",
+                ],
+            ),
+            (
+                MenuKind::Selection,
+                &[
                     "Select Line",
+                    "Split into Lines",
+                    "Add Cursor Above",
+                    "Add Cursor Below",
+                    "Add Next Occurrence",
                     "Move Line Up",
                     "Move Line Down",
                     "Copy Line Up",
                     "Copy Line Down",
-                    "Insert Line Above",
-                    "Insert Line Below",
-                    "Go to Line…",
                 ],
             ),
             (
@@ -1390,7 +1434,7 @@ mod tests {
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 52);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 50);
+        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 56);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 53);
     }
 }

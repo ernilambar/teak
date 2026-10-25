@@ -38,11 +38,11 @@ use crate::settings::{
 };
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
 use crate::{
-    About, CheckForUpdates, ClearRecent, CopyFilePath, CopyRelativePath, InstallCli, JumpToTab,
-    NextTab, OpenDefaultSettings, OpenSettings, OpenThemesFolder, PreviousTab, Quit, Refresh,
-    ReopenClosedTab, RevealInFinder, SetTheme, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
-    ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace,
-    ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
+    About, CheckForUpdates, ClearRecent, CopyFileName, CopyFilePath, CopyRelativePath, InstallCli,
+    JumpToTab, NextTab, OpenDefaultSettings, OpenSettings, OpenThemesFolder, PreviousTab, Quit,
+    Refresh, ReopenClosedTab, RevealInFinder, SetTheme, ToggleAutoClose, ToggleFolding,
+    ToggleIndentGuides, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
+    ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// Maps `editor.indent_wrapped_lines` onto the engine's wrapping indent.
@@ -319,6 +319,17 @@ impl TeakApp {
     ) {
         if let Some(path) = self.active().and_then(|tab| tab.path.clone()) {
             self.copy_relative_path(&path, cx);
+        }
+    }
+
+    fn on_copy_file_name(
+        &mut self,
+        _: &CopyFileName,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(path) = self.active().and_then(|tab| tab.path.clone()) {
+            self.copy_name_to_clipboard(&path, cx);
         }
     }
 
@@ -1055,6 +1066,7 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_reveal_in_finder))
             .on_action(cx.listener(Self::on_copy_file_path))
             .on_action(cx.listener(Self::on_copy_relative_path))
+            .on_action(cx.listener(Self::on_copy_file_name))
             .on_action(cx.listener(Self::on_zoom_in))
             .on_action(cx.listener(Self::on_zoom_out))
             .on_action(cx.listener(Self::on_zoom_reset))
@@ -1073,6 +1085,8 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_reopen_closed_tab))
             .on_action(cx.listener(Self::on_toggle_line_comment))
             .on_action(cx.listener(Self::on_delete_line))
+            .on_action(cx.listener(Self::on_join_lines))
+            .on_action(cx.listener(Self::on_trim_trailing_whitespace))
             .on_action(cx.listener(Self::on_move_line_up))
             .on_action(cx.listener(Self::on_move_line_down))
             .on_action(cx.listener(Self::on_copy_line_up))
