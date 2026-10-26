@@ -5,16 +5,19 @@
 | Shortcut | Keys | Action |
 | --- | --- | --- |
 | `⌘N` | `Cmd + N` | New File |
+| `⌘⇧N` | `Cmd + Shift + N` | New Window |
 | `⌘O` | `Cmd + O` | Open… |
 | `⌘P` | `Cmd + P` | Quick Open… |
-| `⌘⇧O` | `Cmd + Shift + O` | Open Folder… |
-| `⌥⌘W` | `Cmd + Option + W` | Close Folder |
+| `⌃⌘O` | `Ctrl + Cmd + O` | Add Folder… |
+| `⌃⌘W` | `Ctrl + Cmd + W` | Close All Folders |
 | `⌘S` | `Cmd + S` | Save |
 | `⌘⇧S` | `Cmd + Shift + S` | Save As… |
 | `⌥⌘S` | `Cmd + Option + S` | Save All |
 | `⌘W` | `Cmd + W` | Close Tab |
+| `⌘⇧W` | `Cmd + Shift + W` | Close Window |
 | `⌘⇧T` | `Cmd + Shift + T` | Reopen Closed Tab |
 | `⌘⇧]` / `⌘⇧[` | `Cmd + Shift + ]` / `Cmd + Shift + [` | Next / Previous Tab |
+| `⌃⇥` / `⌃⇧⇥` | `Ctrl + Tab` / `Ctrl + Shift + Tab` | Next / Previous Tab |
 | `⌘1` … `⌘9` | `Cmd + 1` … `Cmd + 9` | Jump to Tab |
 | `⌥⌘R` | `Cmd + Option + R` | Reveal in Finder |
 | `⌥⌘C` | `Cmd + Option + C` | Copy File Path |
@@ -27,19 +30,22 @@
 | `⌘/` | `Cmd + /` | Toggle Line Comment |
 | `⌘⇧K` | `Cmd + Shift + K` | Delete Line |
 | `⌘L` | `Cmd + L` | Select Line |
+| `⌘J` | `Cmd + J` | Join Lines |
 | `⌥↑` / `⌥↓` | `Option + Up` / `Option + Down` | Move Line Up / Down |
 | `⇧⌥↑` / `⇧⌥↓` | `Shift + Option + Up` / `Shift + Option + Down` | Copy Line Up / Down |
 | `⌘↩` | `Cmd + Enter` | Insert Line Below |
 | `⌘⇧↩` | `Cmd + Shift + Enter` | Insert Line Above |
 | `⌃G` | `Ctrl + G` | Go to Line… |
+| `⌘F` | `Cmd + F` | Find… |
+| `⌥⌘F` | `Cmd + Option + F` | Find and Replace… |
 | `⌘G` / `⌘⇧G` | `Cmd + G` / `Cmd + Shift + G` | Find Next / Previous |
 | `F3` / `⇧F3` | `F3` / `Shift + F3` | Find Next / Previous (alternate) |
 | `⌘⇧F` | `Cmd + Shift + F` | Find in Files… |
 | `F4` / `⇧F4` | `F4` / `Shift + F4` | Next / Previous Result |
 
 The usual macOS editing shortcuts also work: `⌘Z` / `⌘⇧Z` (undo / redo),
-`⌘X` / `⌘C` / `⌘V`, `⌘A`, `⌘F` (find and replace), word and line navigation,
-and indent.
+`⌘X` / `⌘C` / `⌘V`, `⌘A`, `⌘F` (find), `⌥⌘F` (find and replace), word and line
+navigation, and indent.
 
 ## Multi-cursor
 
@@ -69,9 +75,11 @@ of the selected text on each press, wrapping past the end of the file.
 | `⌘R` | `Cmd + R` | Refresh |
 | `⌥Z` | `Option + Z` | Toggle Word Wrap |
 | `⌥⌘I` | `Cmd + Option + I` | Toggle Invisible Characters |
-| `⌘⇧V` | `Cmd + Shift + V` | Toggle Preview (Markdown, SVG) |
+| `⌃⌘V` | `Ctrl + Cmd + V` | Toggle Preview (Markdown, SVG) |
 | `⌘=` / `⌘-` / `⌘0` | `Cmd + =` / `Cmd + -` / `Cmd + 0` | Zoom In / Zoom Out / Actual Size |
 | `⌘,` | `Cmd + ,` | Settings… |
+| `⌘M` | `Cmd + M` | Minimize |
+| `⌃⌘F` | `Ctrl + Cmd + F` | Toggle Full Screen |
 | `⌘H` / `⌥⌘H` | `Cmd + H` / `Cmd + Option + H` | Hide / Hide Others |
 | `⌘Q` | `Cmd + Q` | Quit |
 
@@ -82,6 +90,7 @@ of the selected text on each press, wrapping past the end of the file.
 | `⌘` | Command |
 | `⇧` | Shift |
 | `⌥` | Option |
+| `⌃` | Control |
 | `↩` | Return (Enter) |
 
 ## Find in Files
@@ -100,7 +109,7 @@ that hits the 1,000-match limit is not replaced; narrow it with **Where** first.
 | Key | In | Action |
 | --- | --- | --- |
 | `↩` | Find panel | Search into the Find Results tab |
-| `⌥↩` | Find panel | Replace All… (asks first) |
+| `⌥⌘↩` | Find panel | Replace All… (asks first) |
 | `⇥` / `⇧⇥` | Find panel | Move between Find, Where and Replace |
 | `⎋` | Find panel | Hide the panel |
 | `↩` or double-click | Find Results | Open the match on that line |
