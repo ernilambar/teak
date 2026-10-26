@@ -39,8 +39,8 @@ use crate::settings::{
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
 use crate::{
     About, CheckForUpdates, ClearRecent, CopyFileName, CopyFilePath, CopyRelativePath, InstallCli,
-    JumpToTab, NextTab, OpenDefaultSettings, OpenSettings, OpenThemesFolder, PreviousTab, Quit,
-    Refresh, ReopenClosedTab, RevealInFinder, SetTheme, ToggleAutoClose, ToggleFolding,
+    JumpToTab, NextTab, OpenDefaultSettings, OpenSettings, OpenThemesFolder, PreviousTab, Print,
+    Quit, Refresh, ReopenClosedTab, RevealInFinder, SetTheme, ToggleAutoClose, ToggleFolding,
     ToggleIndentGuides, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
     ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset,
 };
@@ -294,6 +294,21 @@ impl TeakApp {
         if let Some(path) = self.active().and_then(|tab| tab.path.clone()) {
             self.reveal_in_finder(&path, cx);
         }
+    }
+
+    /// Prints the active tab's text through the native macOS print sheet.
+    /// Preview tabs print their source; raster images have nothing to print.
+    fn on_print(&mut self, _: &Print, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.active() else {
+            return;
+        };
+        if tab.raster {
+            window.push_notification(Notification::info("Images cannot be printed"), cx);
+            return;
+        }
+        let title = tab.title.to_string();
+        let text = tab.editor.read(cx).text().to_string();
+        crate::print::print_text(&text, &title);
     }
 
     fn on_copy_file_path(
@@ -623,8 +638,10 @@ impl TeakApp {
             return;
         };
         // `set_value` clears the undo history and emits no change event, so the
-        // refreshed tab is not marked dirty by this reload.
+        // refreshed tab is not marked dirty by this reload. The missing change
+        // event also skips the counts subscription, so refresh them here.
         editor.update(cx, |state, cx| state.set_value(contents, window, cx));
+        self.sync_counts(cx);
     }
 
     fn on_next_tab(&mut self, _: &NextTab, window: &mut Window, cx: &mut Context<Self>) {
@@ -1041,6 +1058,7 @@ impl Render for TeakApp {
             .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
             .on_action(cx.listener(Self::on_new_file))
             .on_action(cx.listener(Self::on_open_file))
+            .on_action(cx.listener(Self::on_print))
             .on_action(cx.listener(Self::on_add_folder))
             .on_action(cx.listener(Self::on_close_all_folders))
             .on_action(cx.listener(Self::on_clear_recent))
@@ -1110,6 +1128,10 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_command_palette))
             .on_action(cx.listener(Self::on_quick_open))
             .on_action(cx.listener(Self::on_find_in_files))
+            .on_action(cx.listener(Self::on_find_in_editor))
+            .on_action(cx.listener(Self::on_find_and_replace_in_editor))
+            .on_action(cx.listener(Self::on_find_next_in_editor))
+            .on_action(cx.listener(Self::on_find_previous_in_editor))
             .on_action(cx.listener(Self::on_run_find))
             .on_action(cx.listener(Self::on_replace_all))
             .on_action(cx.listener(Self::on_close_find_panel))

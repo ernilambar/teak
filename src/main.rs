@@ -7,6 +7,7 @@ mod keymap;
 mod language;
 mod markdown;
 mod paths;
+mod print;
 mod search;
 mod session;
 mod settings;
@@ -30,6 +31,11 @@ gpui_kit::actions!(
         NewFile,
         OpenFile,
         QuickOpen,
+        FindInEditor,
+        FindAndReplaceInEditor,
+        FindNextInEditor,
+        FindPreviousInEditor,
+        Print,
         FindInFiles,
         RunFind,
         ReplaceAll,

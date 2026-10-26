@@ -700,6 +700,7 @@ impl TeakApp {
                 });
                 this.set_dirty(id, false, cx);
                 this.sync_preview(&editor, cx);
+                this.sync_counts(cx);
                 cx.notify();
             })
             .ok();

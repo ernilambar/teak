@@ -16,6 +16,7 @@ use crate::language::{editor_language_id, language_for};
 use crate::paths::file_name;
 
 use super::TeakApp;
+use super::chrome::count_text;
 use super::files::{FileContent, LARGE_FILE_BYTES, TextFormat, modified_time};
 use crate::search::ResultTarget;
 
@@ -326,6 +327,8 @@ impl TeakApp {
             EditorState::new(window, cx)
                 .language(editor_language_id(&language))
                 .default_value(content)
+                // The engine's own search panel backs Edit > Find.
+                .searchable(true)
                 .soft_wrap(self.settings.values.editor.soft_wrap())
                 .show_whitespaces(self.settings.values.editor.show_whitespace())
                 .tab_size(TabSize {
@@ -348,6 +351,7 @@ impl TeakApp {
             if matches!(event, InputEvent::Change) {
                 this.set_dirty(editor.entity_id(), true, cx);
                 this.sync_preview(&editor, cx);
+                this.sync_counts(cx);
             }
         });
         let cursor_subscription = cx.observe(&editor, |this, editor, cx| {
@@ -374,6 +378,7 @@ impl TeakApp {
 
         editor.update(cx, |state, cx| state.focus(window, cx));
         self.chrome.sync_cursor(editor.read(cx));
+        self.sync_counts(cx);
         self.save_session();
         cx.notify();
     }
@@ -472,6 +477,7 @@ impl TeakApp {
             let editor = tab.editor.clone();
             self.focus_tab(ix, window, cx);
             self.chrome.sync_cursor(editor.read(cx));
+            self.sync_counts(cx);
         }
         // Switching tabs is a natural cue to pick up external filesystem
         // changes, since the tree cache is otherwise only refreshed on
@@ -717,6 +723,7 @@ impl TeakApp {
             // Quit, New File…) is reachable from the menu bar.
             self.focus_handle.focus(window, cx);
         }
+        self.sync_counts(cx);
         self.save_session();
         cx.notify();
     }
@@ -785,6 +792,17 @@ impl TeakApp {
 
         self.chrome.sync_cursor(tab.editor.read(cx));
         cx.notify();
+    }
+
+    /// Refreshes the status bar's word and character totals from the active
+    /// buffer. Called when the text or the active tab changes, so the totals
+    /// follow Replace All and external reloads too.
+    pub(super) fn sync_counts(&mut self, cx: &mut Context<Self>) {
+        let counts = match self.tabs.active() {
+            Some(tab) if !tab.raster => Some(count_text(tab.editor.read(cx).text())),
+            _ => None,
+        };
+        self.chrome.set_counts(counts);
     }
 }
 
@@ -938,5 +956,42 @@ mod tests {
 
         assert_eq!(titles(&set), ["tab-1", "tab-2", "tab-0"]);
         assert_eq!(set.active_index(), Some(2), "active follows its tab");
+    }
+
+    /// The status bar's totals come from the active buffer and follow an edit.
+    #[gpui_kit::test]
+    async fn status_counts_follow_the_active_buffer(cx: &mut TestAppContext) {
+        let (handle, app) = open_app(cx);
+
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.add_tab(None, "one two".into(), window, cx);
+            });
+        })
+        .unwrap();
+        cx.update_window(handle, |_, _, cx| {
+            assert_eq!(app.read(cx).chrome.counts(), Some((2, 7)));
+        })
+        .unwrap();
+
+        cx.update_window(handle, |_, window, cx| {
+            let editor = app.read(cx).tabs.active().unwrap().editor.clone();
+            editor.update(cx, |state, cx| {
+                let len = state.text().len();
+                state.set_selected_range(0..len, cx);
+                state.replace("three four", window, cx);
+            });
+        })
+        .unwrap();
+        // The change subscription runs with the edit's effects, not inline.
+        cx.run_until_parked();
+        cx.update_window(handle, |_, _, cx| {
+            assert_eq!(
+                app.read(cx).chrome.counts(),
+                Some((2, 10)),
+                "a new edit refreshes the totals"
+            );
+        })
+        .unwrap();
     }
 }
