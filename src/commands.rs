@@ -33,15 +33,16 @@ use crate::{
     ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CommandPalette, ConvertToCamelCase,
     ConvertToConstantCase, ConvertToKebabCase, ConvertToLowercase, ConvertToPascalCase,
     ConvertToSnakeCase, ConvertToTitleCase, ConvertToUppercase, CopyFileName, CopyFilePath,
-    CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, FindInFiles, FindNextField,
-    FindPreviousField, GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow, InstallCli,
-    JoinLines, JumpToTab, MoveLineDown, MoveLineUp, NewFile, NextResult, NextTab,
-    OpenDefaultSettings, OpenFile, OpenPath, OpenResult, OpenSettings, OpenThemesFolder,
-    PreviousResult, PreviousTab, QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll,
-    RevealInFinder, RunFind, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll,
-    SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleIndentGuides,
-    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
-    ToggleWhitespace, ToggleWordWrap, TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset,
+    CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, FindAndReplaceInEditor, FindInEditor,
+    FindInFiles, FindNextField, FindNextInEditor, FindPreviousField, FindPreviousInEditor,
+    GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow, InstallCli, JoinLines, JumpToTab,
+    MoveLineDown, MoveLineUp, NewFile, NextResult, NextTab, OpenDefaultSettings, OpenFile,
+    OpenPath, OpenResult, OpenSettings, OpenThemesFolder, PreviousResult, PreviousTab, Print,
+    QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll, RevealInFinder, RunFind, SaveAll,
+    SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll, SplitSelectionIntoLines, THEME_CHOICES,
+    ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers,
+    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
+    TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -173,6 +174,15 @@ static COMMANDS: &[Command] = &[
         keywords: &[],
     },
     Command {
+        label: "Print…",
+        make: || Box::new(Print),
+        // `secondary-p` is Quick Open; macOS leaves print without a chord here.
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::File, 1)),
+        palette: Some((PaletteGroup::File, 12)),
+        keywords: &["print", "paper", "pdf"],
+    },
+    Command {
         label: "Close Tab",
         make: || Box::new(CloseTab),
         bindings: &[("secondary-w", Scope::Global)],
@@ -208,6 +218,47 @@ static COMMANDS: &[Command] = &[
         keywords: &["recent", "history"],
     },
     // Edit
+    // In-file find. The engine binds `secondary-f` on the editor, so these
+    // carry an `Editor` scope too: the app-level action then wins and can also
+    // reach a previewing tab.
+    Command {
+        label: "Find…",
+        make: || Box::new(FindInEditor),
+        bindings: &[
+            ("secondary-f", Scope::Global),
+            ("secondary-f", Scope::Editor),
+        ],
+        menu: Some((MenuKind::Edit, 7)),
+        palette: Some((PaletteGroup::Edit, 30)),
+        keywords: &["search", "find", "replace"],
+    },
+    Command {
+        label: "Find and Replace…",
+        make: || Box::new(FindAndReplaceInEditor),
+        bindings: &[
+            ("secondary-alt-f", Scope::Global),
+            ("secondary-alt-f", Scope::Editor),
+        ],
+        menu: Some((MenuKind::Edit, 7)),
+        palette: Some((PaletteGroup::Edit, 31)),
+        keywords: &["search", "find", "replace"],
+    },
+    Command {
+        label: "Find Next",
+        make: || Box::new(FindNextInEditor),
+        bindings: &[("f3", Scope::Global)],
+        menu: Some((MenuKind::Edit, 7)),
+        palette: Some((PaletteGroup::Edit, 32)),
+        keywords: &["search", "find", "match"],
+    },
+    Command {
+        label: "Find Previous",
+        make: || Box::new(FindPreviousInEditor),
+        bindings: &[("shift-f3", Scope::Global)],
+        menu: Some((MenuKind::Edit, 7)),
+        palette: Some((PaletteGroup::Edit, 33)),
+        keywords: &["search", "find", "match"],
+    },
     Command {
         label: "Find in Files…",
         make: || Box::new(FindInFiles),
@@ -890,8 +941,8 @@ const EDIT_MENU: &[Entry] = &[
     Entry::Item(copy),
     Entry::Item(paste),
     Entry::Item(MenuItem::separator),
-    Entry::Item(find),
-    Entry::Item(find_and_replace),
+    Entry::Cluster(7),
+    Entry::Item(MenuItem::separator),
     Entry::Cluster(6),
     Entry::Item(MenuItem::separator),
     Entry::Cluster(2),
@@ -973,14 +1024,6 @@ fn paste() -> MenuItem {
 
 fn select_all() -> MenuItem {
     MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll)
-}
-
-fn find() -> MenuItem {
-    MenuItem::action("Find…", input::Search)
-}
-
-fn find_and_replace() -> MenuItem {
-    MenuItem::action("Find and Replace…", input::Replace)
 }
 
 fn indent() -> MenuItem {
@@ -1218,8 +1261,8 @@ mod tests {
     fn every_binding_parses() {
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
-        assert_eq!(app_bindings().len(), 40);
-        assert_eq!(editor_bindings().len(), 19);
+        assert_eq!(app_bindings().len(), 44);
+        assert_eq!(editor_bindings().len(), 21);
         assert_eq!(find_bindings().len(), 6);
     }
 
@@ -1372,6 +1415,7 @@ mod tests {
                     "Save",
                     "Save As…",
                     "Save All",
+                    "Print…",
                     "Reveal in Finder",
                     "Copy Path",
                     "Copy Relative Path",
@@ -1383,6 +1427,10 @@ mod tests {
             (
                 MenuKind::Edit,
                 &[
+                    "Find…",
+                    "Find and Replace…",
+                    "Find Next",
+                    "Find Previous",
                     "Find in Files…",
                     "Next Result",
                     "Previous Result",
@@ -1549,7 +1597,7 @@ mod tests {
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 64);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 61);
+        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 69);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 66);
     }
 }

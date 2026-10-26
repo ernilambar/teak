@@ -34,7 +34,7 @@ use crate::{
 };
 
 use super::workspace::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
-use super::{Preview, TeakApp};
+use super::{Preview, TeakApp, chrome::MAX_COUNT_CHARS};
 
 /// Floor on a tab's width. Tabs size to their full titles while the strip has
 /// room, shrink with an ellipsis down to this floor as it fills, and past that
@@ -98,6 +98,28 @@ const FILE_ICON_SIZE: f32 = 14.;
 /// Rasterized edge length of a colorful icon. Twice [`FILE_ICON_SIZE`] keeps it
 /// sharp on Retina displays; the image element downsamples it to fit.
 const COLOR_ICON_PIXELS: i32 = 28;
+
+/// The status bar's totals: `1,234 words · 5,678 chars`. Above the word-count
+/// limit only the character count is shown.
+fn count_label(words: usize, chars: usize) -> String {
+    if chars > MAX_COUNT_CHARS {
+        return format!("{} chars", grouped(chars));
+    }
+    format!("{} words · {} chars", grouped(words), grouped(chars))
+}
+
+/// `1234` as `1,234`.
+fn grouped(number: usize) -> String {
+    let digits = number.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (ix, digit) in digits.chars().enumerate() {
+        if ix > 0 && (digits.len() - ix).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
 
 thread_local! {
     /// Full-color rasterizations keyed by the address of their static SVG bytes.
@@ -1080,12 +1102,18 @@ impl TeakApp {
         };
         let format = self.active().map(|tab| tab.format).unwrap_or_default();
 
-        status
+        status = status
             .left(div().child(caret))
             .left(divider())
             .left(div().child(format.encoding_label()))
             .left(divider())
-            .left(div().child(format.line_ending_label()))
+            .left(div().child(format.line_ending_label()));
+        if let Some((words, chars)) = self.chrome.counts() {
+            status = status
+                .left(divider())
+                .left(div().child(count_label(words, chars)));
+        }
+        status
             .right(language_button)
             .right(divider())
             .right(save_status)
@@ -1102,6 +1130,7 @@ mod tests {
     use crate::file_icons::file_icon;
 
     use super::COLOR_ICON_PIXELS;
+    use super::{count_label, grouped};
 
     fn rasterize(bytes: &'static [u8]) -> Arc<RenderImage> {
         let renderer = SvgRenderer::new(Arc::new(()));
@@ -1146,5 +1175,21 @@ mod tests {
                 .iter()
                 .any(|pixel| pixel[3] > 0 && pixel[2] > pixel[0].saturating_add(40)),
         );
+    }
+
+    #[test]
+    fn groups_thousands() {
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1_000), "1,000");
+        assert_eq!(grouped(5_678), "5,678");
+        assert_eq!(grouped(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn labels_words_and_chars() {
+        assert_eq!(count_label(1_234, 5_678), "1,234 words · 5,678 chars");
+        // Past the limit only the character count is kept.
+        assert_eq!(count_label(0, 1_000_001), "1,000,001 chars");
     }
 }

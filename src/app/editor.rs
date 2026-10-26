@@ -14,13 +14,15 @@ use gpui_kit::base::input::{
 use gpui_kit::component::{
     WindowExt as _,
     input::{EditorState, Input, InputState, Position, RopeExt as _},
+    notification::Notification,
 };
 use gpui_kit::*;
 
 use crate::{
     AddCursorAbove, AddCursorBelow, AddNextOccurrence, ConvertToCamelCase, ConvertToConstantCase,
     ConvertToKebabCase, ConvertToLowercase, ConvertToPascalCase, ConvertToSnakeCase,
-    ConvertToTitleCase, ConvertToUppercase, CopyLineDown, CopyLineUp, DeleteLine, GoToLine,
+    ConvertToTitleCase, ConvertToUppercase, CopyLineDown, CopyLineUp, DeleteLine,
+    FindAndReplaceInEditor, FindInEditor, FindNextInEditor, FindPreviousInEditor, GoToLine,
     InsertLineAbove, InsertLineBelow, JoinLines, MoveLineDown, MoveLineUp, SelectLine,
     SplitSelectionIntoLines, ToggleLineComment, TrimTrailingWhitespace,
 };
@@ -1113,6 +1115,99 @@ impl TeakApp {
         self.dispatch_to_editor(window, cx, Box::new(EngineAddCursorBelow));
     }
 
+    /// The editor of the active tab, ready for the in-editor search panel.
+    ///
+    /// A Markdown or SVG preview replaces the editor with a rendered view, so
+    /// searching first returns the tab to its source. Raster tabs hold no text.
+    fn editor_for_search(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<EditorState>> {
+        let ix = self.tabs.active_index()?;
+        let tab = self.tabs.get_mut(ix)?;
+        if tab.raster {
+            window.push_notification(Notification::info("This image has no text to search"), cx);
+            return None;
+        }
+        if tab.previewing().is_some()
+            && let Some(preview) = tab.preview.take()
+        {
+            preview.release(cx);
+        }
+        let editor = tab.editor.clone();
+        self.focus_tab(ix, window, cx);
+        cx.notify();
+        Some(editor)
+    }
+
+    /// Opens the engine's search panel on the active editor, optionally in
+    /// replace mode.
+    fn open_editor_search(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = self.editor_for_search(window, cx) else {
+            return;
+        };
+        editor.update(cx, |state, cx| state.open_search(replace, cx));
+    }
+
+    pub(super) fn on_find_in_editor(
+        &mut self,
+        _: &FindInEditor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_editor_search(false, window, cx);
+    }
+
+    pub(super) fn on_find_and_replace_in_editor(
+        &mut self,
+        _: &FindAndReplaceInEditor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_editor_search(true, window, cx);
+    }
+
+    pub(super) fn on_find_next_in_editor(
+        &mut self,
+        _: &FindNextInEditor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_editor_search(true, window, cx);
+    }
+
+    pub(super) fn on_find_previous_in_editor(
+        &mut self,
+        _: &FindPreviousInEditor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_editor_search(false, window, cx);
+    }
+
+    /// Moves to the next or previous match. With no search running, this opens
+    /// the panel so the user can type a query.
+    fn step_editor_search(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = self.editor_for_search(window, cx) else {
+            return;
+        };
+        editor.update(cx, |state, cx| {
+            if !state.search_session().is_active() {
+                state.open_search(false, cx);
+                return;
+            }
+            let found = if forward {
+                state.next_search_match(cx)
+            } else {
+                state.previous_search_match(cx)
+            };
+            if found.is_none() {
+                state.open_search(false, cx);
+            }
+        });
+    }
+
     pub(super) fn on_go_to_line(
         &mut self,
         _: &GoToLine,
@@ -1689,5 +1784,115 @@ mod tests {
         assert_eq!(replacement, "ONE");
         assert_eq!(restored, [0..3]);
         assert!(convert_selections("ABC", &[0..3], CaseKind::Upper).is_none());
+    }
+
+    /// `secondary-f` opens the engine's search panel on the active editor, and
+    /// `secondary-alt-f` opens it in replace mode.
+    #[gpui_kit::test]
+    async fn find_opens_the_in_editor_search_panel(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+        use gpui_kit::test::TestWindowExt as _;
+
+        use crate::app::test_support::open_app;
+
+        let (handle, app) = open_app(cx);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.add_tab(None, "one two one".into(), window, cx);
+            });
+            window.render_frame(cx);
+            window.press("secondary-f", cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        cx.update_window(handle, |_, window, cx| {
+            let editor = app.read(cx).tabs.active().unwrap().editor.clone();
+            let session = editor.read(cx).search_session().clone();
+            assert!(session.open, "Find opens the panel");
+            assert!(!session.replace_mode, "Find is not replace mode");
+
+            window.press("secondary-alt-f", cx);
+            window.render_frame(cx);
+            assert!(
+                editor.read(cx).search_session().replace_mode,
+                "Find and Replace opens replace mode"
+            );
+        })
+        .unwrap();
+    }
+
+    /// F3 and Shift+F3 step through the current session's matches.
+    #[gpui_kit::test]
+    async fn find_next_and_previous_step_through_matches(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+        use gpui_kit::test::TestWindowExt as _;
+
+        use crate::app::test_support::open_app;
+
+        let (handle, app) = open_app(cx);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.add_tab(None, "one two one".into(), window, cx);
+                let editor = this.tabs.active().unwrap().editor.clone();
+                editor.update(cx, |state, cx| state.set_search_query("one", true, cx));
+            });
+            window.render_frame(cx);
+            window.press("f3", cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        cx.update_window(handle, |_, window, cx| {
+            let editor = app.read(cx).tabs.active().unwrap().editor.clone();
+            assert_eq!(editor.read(cx).search_session().matcher.label(), "2/2");
+
+            window.press("shift-f3", cx);
+            window.render_frame(cx);
+            assert_eq!(editor.read(cx).search_session().matcher.label(), "1/2");
+        })
+        .unwrap();
+    }
+
+    /// Find on a Markdown preview returns the tab to its source before
+    /// searching.
+    #[gpui_kit::test]
+    async fn find_on_a_preview_returns_to_the_source(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+        use gpui_kit::test::TestWindowExt as _;
+
+        use crate::app::test_support::open_app;
+
+        let (handle, app) = open_app(cx);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.add_document_tab("Doc", "Markdown", "# Title".into(), window, cx);
+                let ix = this.tabs.active_index().unwrap();
+                let preview =
+                    crate::app::tabs::Preview::for_text("Markdown", "# Title", cx).unwrap();
+                this.tabs.get_mut(ix).unwrap().preview = Some(preview);
+                assert!(this.tabs.get(ix).unwrap().previewing().is_some());
+            });
+            let focus = app.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
+            window.render_frame(cx);
+            window.press("secondary-f", cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        cx.update_window(handle, |_, _, cx| {
+            let this = app.read(cx);
+            let tab = this.tabs.active().unwrap();
+            assert!(tab.previewing().is_none(), "preview is turned off");
+            assert!(
+                tab.editor.read(cx).search_session().open,
+                "search opens on the source"
+            );
+        })
+        .unwrap();
     }
 }

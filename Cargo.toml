@@ -36,6 +36,24 @@ gpui-kit = { version = "0.8.0", features = [
 # Quick Open / Find in Files walk (`.gitignore` and `search.exclude`).
 globset = "0.4.20"
 ignore = "0.4.33"
+# Printing goes through AppKit's NSTextView + NSPrintOperation; GPUI has no
+# print API. The feature list is the smallest set those two need.
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSFont",
+    "NSPrintInfo",
+    "NSPrintOperation",
+    "NSResponder",
+    "NSText",
+    "NSTextView",
+    "NSView",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSGeometry",
+    "NSString",
+] }
 regex = "1.13"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

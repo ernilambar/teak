@@ -1,10 +1,34 @@
 //! The window's non-content state: the native title, the close guard, and the
 //! status-bar readouts.
 
-use gpui_kit::component::input::EditorState;
+use gpui_kit::component::input::{EditorState, Rope};
 use gpui_kit::*;
 
 use crate::app::WINDOW_TITLE;
+
+/// Above this many characters the status bar shows only the character count.
+/// Scanning a very large document for words on every edit is not worth it.
+pub(super) const MAX_COUNT_CHARS: usize = 1_000_000;
+
+/// The word and character totals of a document. Words are runs of letters,
+/// digits, `_` or `'`, so `snake_case` and `don't` each stay one word.
+pub(super) fn count_text(text: &Rope) -> (usize, usize) {
+    let chars = text.len_chars();
+    if chars > MAX_COUNT_CHARS {
+        return (0, chars);
+    }
+
+    let mut words = 0;
+    let mut in_word = false;
+    for c in text.chars() {
+        let word = c.is_alphanumeric() || c == '_' || c == '\'';
+        if word && !in_word {
+            words += 1;
+        }
+        in_word = word;
+    }
+    (words, chars)
+}
 
 /// Window chrome kept on the app so `render` and the close callbacks can reach
 /// it without threading a `Window`.
@@ -22,6 +46,8 @@ pub(super) struct Chrome {
     cursor_col: usize,
     /// Characters selected across every cursor, 0 when nothing is selected.
     selected: usize,
+    /// `(words, chars)` for the active text tab. `None` for no tab or an image.
+    counts: Option<(usize, usize)>,
 }
 
 impl Chrome {
@@ -33,6 +59,7 @@ impl Chrome {
             cursor_line: 1,
             cursor_col: 1,
             selected: 0,
+            counts: None,
         }
     }
 
@@ -72,6 +99,15 @@ impl Chrome {
         self.selected
     }
 
+    /// The active tab's `(words, chars)`, or `None` when it has no text.
+    pub(super) fn counts(&self) -> Option<(usize, usize)> {
+        self.counts
+    }
+
+    pub(super) fn set_counts(&mut self, counts: Option<(usize, usize)>) {
+        self.counts = counts;
+    }
+
     /// Reads the caret position and selection size from `state`.
     pub(super) fn sync_cursor(&mut self, state: &EditorState) {
         let position = state.cursor_position();
@@ -83,5 +119,22 @@ impl Chrome {
             .iter()
             .map(|range| text.byte_to_char_idx(range.end) - text.byte_to_char_idx(range.start))
             .sum();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::component::input::Rope;
+
+    use super::count_text;
+
+    #[test]
+    fn counts_words_and_characters() {
+        assert_eq!(count_text(&Rope::from("")), (0, 0));
+        assert_eq!(count_text(&Rope::from("hello world")), (2, 11));
+        assert_eq!(count_text(&Rope::from("one, two; three")), (3, 15));
+        // `_` and `'` stay inside a word.
+        assert_eq!(count_text(&Rope::from("snake_case don't")), (2, 16));
+        assert_eq!(count_text(&Rope::from("one\n二\n")), (2, 6));
     }
 }
