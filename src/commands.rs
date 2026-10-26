@@ -29,20 +29,22 @@ use gpui_kit::*;
 
 use crate::paths::display_path;
 use crate::{
-    About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, CheckForUpdates,
-    ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CommandPalette, ConvertToCamelCase,
-    ConvertToConstantCase, ConvertToKebabCase, ConvertToLowercase, ConvertToPascalCase,
-    ConvertToSnakeCase, ConvertToTitleCase, ConvertToUppercase, CopyFileName, CopyFilePath,
-    CopyLineDown, CopyLineUp, CopyRelativePath, DeleteLine, FindAndReplaceInEditor, FindInEditor,
-    FindInFiles, FindNextField, FindNextInEditor, FindPreviousField, FindPreviousInEditor,
-    GoToLine, Hide, HideOthers, InsertLineAbove, InsertLineBelow, InstallCli, JoinLines, JumpToTab,
-    MoveLineDown, MoveLineUp, NewFile, NextResult, NextTab, OpenDefaultSettings, OpenFile,
-    OpenPath, OpenResult, OpenSettings, OpenThemesFolder, PreviousResult, PreviousTab, Print,
-    QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll, RevealInFinder, RunFind, SaveAll,
-    SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll, SplitSelectionIntoLines, THEME_CHOICES,
-    ToggleAutoClose, ToggleFolding, ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers,
-    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
-    TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset,
+    About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, BringAllToFront,
+    CheckForUpdates, ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CloseWindow,
+    CommandPalette, ConvertToCamelCase, ConvertToConstantCase, ConvertToKebabCase,
+    ConvertToLowercase, ConvertToPascalCase, ConvertToSnakeCase, ConvertToTitleCase,
+    ConvertToUppercase, CopyFileName, CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath,
+    DeleteLine, FindAndReplaceInEditor, FindInEditor, FindInFiles, FindNextField, FindNextInEditor,
+    FindPreviousField, FindPreviousInEditor, GoToLine, Hide, HideOthers, InsertLineAbove,
+    InsertLineBelow, InstallCli, JoinLines, JumpToTab, MinimizeWindow, MoveLineDown, MoveLineUp,
+    MoveTabToNewWindow, NewFile, NewWindow, NextResult, NextTab, OpenDefaultSettings, OpenFile,
+    OpenFolderInNewWindow, OpenPath, OpenResult, OpenSettings, OpenThemesFolder, PreviousResult,
+    PreviousTab, Print, QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll, RevealInFinder,
+    RunFind, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll, SplitSelectionIntoLines,
+    THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleFullScreen, ToggleIndentGuides,
+    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
+    ToggleWhitespace, ToggleWordWrap, TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset,
+    ZoomWindow,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -57,6 +59,7 @@ pub(crate) enum MenuKind {
     Edit,
     Selection,
     View,
+    Window,
 }
 
 /// A group in the command palette.
@@ -65,6 +68,7 @@ pub(crate) enum PaletteGroup {
     File,
     Edit,
     View,
+    Window,
     Teak,
 }
 
@@ -118,11 +122,19 @@ static COMMANDS: &[Command] = &[
         keywords: &[],
     },
     Command {
+        label: "New Window",
+        make: || Box::new(NewWindow),
+        bindings: &[("secondary-shift-n", Scope::Global)],
+        menu: Some((MenuKind::File, 0)),
+        palette: Some((PaletteGroup::File, 1)),
+        keywords: &["window"],
+    },
+    Command {
         label: "Open…",
         make: || Box::new(OpenFile),
         bindings: &[("secondary-o", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
-        palette: Some((PaletteGroup::File, 1)),
+        palette: Some((PaletteGroup::File, 2)),
         keywords: &[],
     },
     Command {
@@ -130,7 +142,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(QuickOpen),
         bindings: &[("secondary-p", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
-        palette: Some((PaletteGroup::File, 2)),
+        palette: Some((PaletteGroup::File, 3)),
         keywords: &[],
     },
     Command {
@@ -138,15 +150,23 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(AddFolder),
         bindings: &[("secondary-shift-o", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
-        palette: Some((PaletteGroup::File, 3)),
+        palette: Some((PaletteGroup::File, 4)),
         keywords: &[],
+    },
+    Command {
+        label: "Open Folder in New Window…",
+        make: || Box::new(OpenFolderInNewWindow),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::File, 0)),
+        palette: Some((PaletteGroup::File, 5)),
+        keywords: &["folder", "window"],
     },
     Command {
         label: "Close All Folders",
         make: || Box::new(CloseAllFolders),
         bindings: &[("alt-secondary-w", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
-        palette: Some((PaletteGroup::File, 4)),
+        palette: Some((PaletteGroup::File, 6)),
         keywords: &[],
     },
     Command {
@@ -154,7 +174,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(SaveFile),
         bindings: &[("secondary-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
-        palette: Some((PaletteGroup::File, 5)),
+        palette: Some((PaletteGroup::File, 7)),
         keywords: &[],
     },
     Command {
@@ -162,7 +182,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(SaveFileAs),
         bindings: &[("secondary-shift-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
-        palette: Some((PaletteGroup::File, 6)),
+        palette: Some((PaletteGroup::File, 8)),
         keywords: &[],
     },
     Command {
@@ -170,7 +190,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(SaveAll),
         bindings: &[("alt-secondary-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
-        palette: Some((PaletteGroup::File, 7)),
+        palette: Some((PaletteGroup::File, 9)),
         keywords: &[],
     },
     Command {
@@ -179,7 +199,7 @@ static COMMANDS: &[Command] = &[
         // `secondary-p` is Quick Open; macOS leaves print without a chord here.
         bindings: NO_KEYS,
         menu: Some((MenuKind::File, 1)),
-        palette: Some((PaletteGroup::File, 12)),
+        palette: Some((PaletteGroup::File, 16)),
         keywords: &["print", "paper", "pdf"],
     },
     Command {
@@ -187,8 +207,24 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(CloseTab),
         bindings: &[("secondary-w", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
-        palette: Some((PaletteGroup::File, 8)),
+        palette: Some((PaletteGroup::File, 10)),
         keywords: &[],
+    },
+    Command {
+        label: "Close Window",
+        make: || Box::new(CloseWindow),
+        bindings: &[("secondary-shift-w", Scope::Global)],
+        menu: Some((MenuKind::File, 2)),
+        palette: Some((PaletteGroup::File, 11)),
+        keywords: &["window"],
+    },
+    Command {
+        label: "Move Tab to New Window",
+        make: || Box::new(MoveTabToNewWindow),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::File, 2)),
+        palette: Some((PaletteGroup::File, 12)),
+        keywords: &["window", "tab"],
     },
     Command {
         // The menu used to read "Reopen Last Closed Tab" while the palette read
@@ -197,7 +233,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(ReopenClosedTab),
         bindings: &[("secondary-shift-t", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
-        palette: Some((PaletteGroup::File, 9)),
+        palette: Some((PaletteGroup::File, 13)),
         keywords: &[],
     },
     Command {
@@ -205,7 +241,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(RevealInFinder),
         bindings: &[("alt-secondary-r", Scope::Global)],
         menu: Some((MenuKind::File, 3)),
-        palette: Some((PaletteGroup::File, 10)),
+        palette: Some((PaletteGroup::File, 14)),
         keywords: &[],
     },
     Command {
@@ -214,7 +250,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(ClearRecent),
         bindings: NO_KEYS,
         menu: None,
-        palette: Some((PaletteGroup::File, 11)),
+        palette: Some((PaletteGroup::File, 15)),
         keywords: &["recent", "history"],
     },
     // Edit
@@ -694,6 +730,39 @@ static COMMANDS: &[Command] = &[
         palette: Some((PaletteGroup::View, 14)),
         keywords: &[],
     },
+    // Window
+    Command {
+        label: "Minimize",
+        make: || Box::new(MinimizeWindow),
+        bindings: &[("secondary-m", Scope::Global)],
+        menu: Some((MenuKind::Window, 0)),
+        palette: Some((PaletteGroup::Window, 0)),
+        keywords: &["window"],
+    },
+    Command {
+        label: "Zoom",
+        make: || Box::new(ZoomWindow),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Window, 0)),
+        palette: Some((PaletteGroup::Window, 1)),
+        keywords: &["window"],
+    },
+    Command {
+        label: "Toggle Full Screen",
+        make: || Box::new(ToggleFullScreen),
+        bindings: &[("ctrl-secondary-f", Scope::Global)],
+        menu: Some((MenuKind::Window, 1)),
+        palette: Some((PaletteGroup::Window, 2)),
+        keywords: &["window", "fullscreen"],
+    },
+    Command {
+        label: "Bring All to Front",
+        make: || Box::new(BringAllToFront),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Window, 2)),
+        palette: Some((PaletteGroup::Window, 3)),
+        keywords: &["window"],
+    },
     // App
     Command {
         label: "Settings…",
@@ -852,12 +921,13 @@ static COMMANDS: &[Command] = &[
 
 impl MenuKind {
     /// Menus in bar order.
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Teak,
         Self::File,
         Self::Edit,
         Self::Selection,
         Self::View,
+        Self::Window,
     ];
 
     fn label(self) -> &'static str {
@@ -867,6 +937,7 @@ impl MenuKind {
             Self::Edit => "Edit",
             Self::Selection => "Selection",
             Self::View => "View",
+            Self::Window => "Window",
         }
     }
 
@@ -877,6 +948,7 @@ impl MenuKind {
             Self::Edit => EDIT_MENU,
             Self::Selection => SELECTION_MENU,
             Self::View => VIEW_MENU,
+            Self::Window => WINDOW_MENU,
         }
     }
 }
@@ -887,6 +959,7 @@ impl PaletteGroup {
             Self::File => "File",
             Self::Edit => "Edit",
             Self::View => "View",
+            Self::Window => "Window",
             Self::Teak => crate::app::WINDOW_TITLE,
         }
     }
@@ -983,6 +1056,14 @@ const VIEW_MENU: &[Entry] = &[
     Entry::Appearance,
 ];
 
+const WINDOW_MENU: &[Entry] = &[
+    Entry::Cluster(0),
+    Entry::Item(MenuItem::separator),
+    Entry::Cluster(1),
+    Entry::Item(MenuItem::separator),
+    Entry::Cluster(2),
+];
+
 /// The palette's groups, in display order. The Appearance group sits between
 /// View and the app group, and is built from `THEME_CHOICES` rather than the table.
 enum PaletteSlot {
@@ -994,6 +1075,7 @@ const PALETTE: &[PaletteSlot] = &[
     PaletteSlot::Group(PaletteGroup::File),
     PaletteSlot::Group(PaletteGroup::Edit),
     PaletteSlot::Group(PaletteGroup::View),
+    PaletteSlot::Group(PaletteGroup::Window),
     PaletteSlot::Appearance,
     PaletteSlot::Group(PaletteGroup::Teak),
 ];
@@ -1261,7 +1343,7 @@ mod tests {
     fn every_binding_parses() {
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
-        assert_eq!(app_bindings().len(), 44);
+        assert_eq!(app_bindings().len(), 48);
         assert_eq!(editor_bindings().len(), 21);
         assert_eq!(find_bindings().len(), 6);
     }
@@ -1408,9 +1490,11 @@ mod tests {
                 MenuKind::File,
                 &[
                     "New File",
+                    "New Window",
                     "Open…",
                     "Quick Open…",
                     "Add Folder…",
+                    "Open Folder in New Window…",
                     "Close All Folders",
                     "Save",
                     "Save As…",
@@ -1421,6 +1505,8 @@ mod tests {
                     "Copy Relative Path",
                     "Copy File Name",
                     "Close Tab",
+                    "Close Window",
+                    "Move Tab to New Window",
                     "Reopen Closed Tab",
                 ],
             ),
@@ -1482,6 +1568,15 @@ mod tests {
                     "Toggle Preview",
                     "Next Tab",
                     "Previous Tab",
+                ],
+            ),
+            (
+                MenuKind::Window,
+                &[
+                    "Minimize",
+                    "Zoom",
+                    "Toggle Full Screen",
+                    "Bring All to Front",
                 ],
             ),
         ];
@@ -1597,7 +1692,7 @@ mod tests {
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 69);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 66);
+        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 77);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 74);
     }
 }

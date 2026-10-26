@@ -65,8 +65,10 @@ in headless environments.
   `palette.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
   orchestration blocks; GPUI-free helpers live in `cli.rs`, `language.rs`, `paths.rs`,
   `search.rs`, `session.rs`, `settings.rs`, `update.rs`, and the AppKit printing
-  wrapper in `print.rs`. Add a new module only once a feature is large enough to
-  justify the boundary.
+  wrapper in `print.rs`. `windows.rs` holds app-level window coordination: the live-window
+  registry, the shared recent list, the one `session.json` writer, and the bootstrap every
+  new or restored window goes through. Add a new module only once a feature is large enough
+  to justify the boundary.
 - Every user-invokable command is declared once in `commands.rs`: label, action,
   chords, menu placement, palette placement and search keywords. The menu bar, the
   command palette and the keymap are all derived from that table, so a new command
@@ -80,10 +82,11 @@ in headless environments.
   `KeyBinding::load` and the `MenuItem::Action` variant directly — both public, but
   lower-level than the ergonomic constructors.
 - `session.json` (app-written state) and `settings.json` (user-authored preferences) both
-  live in `paths::support_dir()`. The app writes `settings.json` only to create a starter
-  file or to record a choice made from the Settings overlay or a view toggle. Each write is
-  a surgical `section.key` update that never rewrites unrelated keys. Group new settings
-  keys by area (`editor.*`, `ui.*`).
+  live in `paths::support_dir()`. `session.json` holds one entry per open window plus the
+  shared recent list, and only `windows.rs` writes it. The app writes `settings.json` only
+  to create a starter file or to record a choice made from the Settings overlay or a view
+  toggle. Each write is a surgical `section.key` update that never rewrites unrelated keys.
+  Group new settings keys by area (`editor.*`, `ui.*`).
 - `vendor/gpui-base` is gpui-base with `patches/gpui-base.patch` applied, wired in through
   `[patch.crates-io]`. It adds `selected_ranges()` (read every selection); upstream
   `add_selection` covers adding them.

@@ -424,8 +424,8 @@ mod tests {
                 "the palette should open"
             );
 
-            // The File group's third row is "Quick Open…".
-            window.click(IndexPath::new(2).section(0), cx);
+            // The File group's fourth row is "Quick Open…".
+            window.click(IndexPath::new(3).section(0), cx);
             window.render_frame(cx);
         })
         .unwrap();

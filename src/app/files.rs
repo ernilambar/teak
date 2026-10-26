@@ -14,7 +14,11 @@ use crate::language::{editor_language_id, language_for};
 use crate::paths::{
     copy_entry, duplicate_name, file_name, is_valid_entry_name, move_to_trash, remap_prefix,
 };
-use crate::{AddFolder, CloseAllFolders, NewFile, OpenFile, SaveAll, SaveFile, SaveFileAs};
+use crate::windows::{WindowSeed, cascaded_frame};
+use crate::{
+    AddFolder, CloseAllFolders, NewFile, OpenFile, OpenFolderInNewWindow, SaveAll, SaveFile,
+    SaveFileAs,
+};
 
 use super::TeakApp;
 use super::workspace::{AddRoot, FileClipboard};
@@ -276,6 +280,38 @@ impl TeakApp {
         .detach();
     }
 
+    pub(super) fn on_open_folder_in_new_window(
+        &mut self,
+        _: &OpenFolderInNewWindow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: true,
+            prompt: Some("Open Folder in New Window".into()),
+        });
+        let settings = self.settings.values.clone();
+        let frame = Some(cascaded_frame(window));
+        let services = self.services.clone();
+        cx.spawn_in(window, async move |_this, cx| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                let paths: Vec<PathBuf> = paths.into_iter().filter(|path| path.is_dir()).collect();
+                if paths.is_empty() {
+                    return;
+                }
+                let mut seed = WindowSeed::for_paths(settings, paths);
+                seed.frame = frame;
+                cx.update(|_window, cx| {
+                    services.open_window(cx, seed);
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     /// Adds a folder to the sidebar. Exact duplicates are ignored silently;
     /// folders that overlap an open root are rejected with a message.
     pub(super) fn add_root(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -295,7 +331,7 @@ impl TeakApp {
         }
         self.note_recent(path, cx);
 
-        self.save_session();
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -312,7 +348,7 @@ impl TeakApp {
     /// stay open, and the sidebar stays visible.
     pub(super) fn remove_root(&mut self, path: &Path, cx: &mut Context<Self>) {
         self.workspace.remove_root(path);
-        self.save_session();
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -320,7 +356,7 @@ impl TeakApp {
     /// visible, showing its empty state.
     pub(super) fn close_all_roots(&mut self, cx: &mut Context<Self>) {
         self.workspace.close_all();
-        self.save_session();
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -579,7 +615,7 @@ impl TeakApp {
         }
         self.note_recent(path, cx);
         self.reload_tree();
-        self.save_session();
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -823,7 +859,7 @@ impl TeakApp {
                 }
                 this.workspace.set_selected(Some(path.clone()));
                 this.reload_tree();
-                this.save_session();
+                this.save_session(cx);
                 if is_dir {
                     cx.notify();
                 } else {
@@ -958,7 +994,7 @@ impl TeakApp {
                         let name = file_name(&destination);
                         this.workspace.set_selected(Some(destination));
                         this.reload_tree();
-                        this.save_session();
+                        this.save_session(cx);
                         cx.notify();
                         window.push_notification(
                             Notification::success(format!("Duplicated as {name}")),
@@ -1088,7 +1124,7 @@ impl TeakApp {
         self.workspace.remap(old, new);
 
         self.reload_tree();
-        self.save_session();
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -1139,7 +1175,7 @@ impl TeakApp {
                 let name = file_name(path);
                 self.workspace.forget(path);
                 self.reload_tree();
-                self.save_session();
+                self.save_session(cx);
                 cx.notify();
                 window
                     .push_notification(Notification::success(format!("Moved {name} to Trash")), cx);
@@ -1204,7 +1240,7 @@ impl TeakApp {
                     self.workspace.expand(target_dir);
                     self.workspace.set_selected(Some(destination.clone()));
                     self.reload_tree();
-                    self.save_session();
+                    self.save_session(cx);
                     cx.notify();
                     window.push_notification(Notification::success(format!("Pasted {name}")), cx);
                 }

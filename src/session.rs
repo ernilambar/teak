@@ -5,9 +5,21 @@ use serde::{Deserialize, Serialize};
 use crate::paths::support_dir;
 use crate::search::SearchOptions;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+/// Everything the app persists between launches: one entry per open window,
+/// plus the shared recent list.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct SessionState {
+    pub(crate) windows: Vec<WindowSession>,
+    /// Recently opened files and folders, newest first, for File > Open Recent.
+    /// Shared by every window, so it lives outside [`WindowSession`].
+    pub(crate) recent: Vec<PathBuf>,
+}
+
+/// One window's workspace and open tabs.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct WindowSession {
     pub(crate) roots: Vec<PathBuf>,
     pub(crate) tabs: Vec<PathBuf>,
     pub(crate) active_tab: Option<PathBuf>,
@@ -16,13 +28,88 @@ pub(crate) struct SessionState {
     pub(crate) sidebar_visible: bool,
     /// Sidebar width in pixels, as last dragged by the user.
     pub(crate) sidebar_width: Option<u32>,
-    /// Recently opened files and folders, newest first, for File > Open Recent.
-    pub(crate) recent: Vec<PathBuf>,
     /// The Find panel's last query, Where field and toggles.
     pub(crate) find_query: String,
     pub(crate) find_where: String,
     pub(crate) find_replace: String,
     pub(crate) find_options: SearchOptions,
+    /// The window's frame at the last save, so a relaunch can reopen it where
+    /// the user left it.
+    pub(crate) frame: Option<WindowFrame>,
+}
+
+/// A serializable window frame. GPUI's `WindowBounds` is not serde-friendly, so
+/// the values are stored flat and converted at the window boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct WindowFrame {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+    pub(crate) state: WindowFrameState,
+}
+
+impl Default for WindowFrame {
+    fn default() -> Self {
+        Self {
+            x: 0.,
+            y: 0.,
+            width: 0.,
+            height: 0.,
+            state: WindowFrameState::Windowed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WindowFrameState {
+    #[default]
+    Windowed,
+    Maximized,
+    Fullscreen,
+}
+
+/// The pre-multi-window session shape: one window's fields at the top level.
+/// Only used to migrate an existing `session.json`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacySession {
+    roots: Vec<PathBuf>,
+    tabs: Vec<PathBuf>,
+    active_tab: Option<PathBuf>,
+    expanded: Vec<PathBuf>,
+    selected_path: Option<PathBuf>,
+    sidebar_visible: bool,
+    sidebar_width: Option<u32>,
+    recent: Vec<PathBuf>,
+    find_query: String,
+    find_where: String,
+    find_replace: String,
+    find_options: SearchOptions,
+}
+
+impl LegacySession {
+    fn into_session(self) -> SessionState {
+        SessionState {
+            windows: vec![WindowSession {
+                roots: self.roots,
+                tabs: self.tabs,
+                active_tab: self.active_tab,
+                expanded: self.expanded,
+                selected_path: self.selected_path,
+                sidebar_visible: self.sidebar_visible,
+                sidebar_width: self.sidebar_width,
+                find_query: self.find_query,
+                find_where: self.find_where,
+                find_replace: self.find_replace,
+                find_options: self.find_options,
+                frame: None,
+            }],
+            recent: self.recent,
+        }
+    }
 }
 
 /// How many entries File > Open Recent keeps.
@@ -41,26 +128,36 @@ pub(crate) fn session_path() -> Option<PathBuf> {
 }
 
 pub(crate) fn load_session() -> Option<SessionState> {
-    let path = session_path()?;
-    let data = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&data).ok()
+    parse_session(&std::fs::read_to_string(session_path()?).ok()?)
+}
+
+/// Parses either the current session shape or the older flat one. The check for
+/// a `windows` key keeps the two apart: an old file has no such key, and the
+/// new shape's `#[serde(default)]` would otherwise swallow it as empty.
+pub(crate) fn parse_session(data: &str) -> Option<SessionState> {
+    let value: serde_json::Value = serde_json::from_str(data).ok()?;
+    if value.get("windows").is_some() {
+        serde_json::from_value(value).ok()
+    } else {
+        serde_json::from_value::<LegacySession>(value)
+            .ok()
+            .map(LegacySession::into_session)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn session_round_trips_through_json() {
-        let state = SessionState {
-            roots: vec![PathBuf::from("/tmp/project"), PathBuf::from("/tmp/other")],
-            tabs: vec![PathBuf::from("/tmp/project/a.rs")],
-            active_tab: Some(PathBuf::from("/tmp/project/a.rs")),
-            expanded: vec![PathBuf::from("/tmp/project")],
+    fn window(path: &str) -> WindowSession {
+        WindowSession {
+            roots: vec![PathBuf::from(path)],
+            tabs: vec![PathBuf::from(format!("{path}/a.rs"))],
+            active_tab: Some(PathBuf::from(format!("{path}/a.rs"))),
+            expanded: vec![PathBuf::from(path)],
             selected_path: None,
             sidebar_visible: true,
             sidebar_width: Some(260),
-            recent: vec![PathBuf::from("/tmp/project/a.rs")],
             find_query: "needle".into(),
             find_where: "-vendor/**".into(),
             find_replace: "pin".into(),
@@ -68,22 +165,69 @@ mod tests {
                 regex: true,
                 ..Default::default()
             },
+            frame: Some(WindowFrame {
+                x: 40.,
+                y: 60.,
+                width: 900.,
+                height: 700.,
+                state: WindowFrameState::Windowed,
+            }),
+        }
+    }
+
+    #[test]
+    fn session_round_trips_through_json() {
+        let state = SessionState {
+            windows: vec![window("/tmp/project"), window("/tmp/other")],
+            recent: vec![PathBuf::from("/tmp/project/a.rs")],
         };
         let json = serde_json::to_string(&state).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(restored.roots, state.roots);
-        assert_eq!(restored.tabs, state.tabs);
-        assert_eq!(restored.active_tab, state.active_tab);
-        assert_eq!(restored.expanded, state.expanded);
-        assert_eq!(restored.selected_path, state.selected_path);
-        assert!(restored.sidebar_visible);
-        assert_eq!(restored.sidebar_width, Some(260));
+        assert_eq!(restored.windows.len(), 2);
+        assert_eq!(restored.windows[0].roots, state.windows[0].roots);
+        assert_eq!(restored.windows[0].tabs, state.windows[0].tabs);
+        assert_eq!(restored.windows[0].active_tab, state.windows[0].active_tab);
+        assert_eq!(restored.windows[0].expanded, state.windows[0].expanded);
+        assert_eq!(restored.windows[0].selected_path, None);
+        assert!(restored.windows[0].sidebar_visible);
+        assert_eq!(restored.windows[0].sidebar_width, Some(260));
+        assert_eq!(restored.windows[0].find_query, "needle");
+        assert_eq!(restored.windows[0].find_where, "-vendor/**");
+        assert_eq!(restored.windows[0].find_replace, "pin");
+        assert_eq!(
+            restored.windows[0].find_options,
+            state.windows[0].find_options
+        );
+        assert_eq!(restored.windows[0].frame, state.windows[0].frame);
         assert_eq!(restored.recent, state.recent);
-        assert_eq!(restored.find_query, "needle");
-        assert_eq!(restored.find_where, "-vendor/**");
-        assert_eq!(restored.find_replace, "pin");
-        assert_eq!(restored.find_options, state.find_options);
+    }
+
+    #[test]
+    fn legacy_flat_session_becomes_one_window() {
+        let restored = parse_session(
+            r#"{
+                "roots": ["/tmp/project"],
+                "tabs": ["/tmp/project/a.txt"],
+                "active_tab": "/tmp/project/a.txt",
+                "expanded": ["/tmp/project"],
+                "sidebar_visible": true,
+                "sidebar_width": 210,
+                "recent": ["/tmp/project/a.txt"],
+                "find_query": "needle"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(restored.windows.len(), 1);
+        assert_eq!(restored.windows[0].roots, [PathBuf::from("/tmp/project")]);
+        assert_eq!(
+            restored.windows[0].tabs,
+            [PathBuf::from("/tmp/project/a.txt")]
+        );
+        assert_eq!(restored.windows[0].sidebar_width, Some(210));
+        assert_eq!(restored.windows[0].find_query, "needle");
+        assert_eq!(restored.recent, [PathBuf::from("/tmp/project/a.txt")]);
     }
 
     #[test]
@@ -101,18 +245,27 @@ mod tests {
 
     #[test]
     fn session_defaults_missing_fields() {
-        let restored: SessionState = serde_json::from_str(r#"{"tabs": ["/tmp/a.txt"]}"#).unwrap();
+        let restored = parse_session(r#"{"windows": [{"tabs": ["/tmp/a.txt"]}]}"#).unwrap();
 
-        assert_eq!(restored.tabs, [PathBuf::from("/tmp/a.txt")]);
-        assert!(restored.roots.is_empty());
-        assert!(!restored.sidebar_visible);
+        assert_eq!(restored.windows.len(), 1);
+        assert_eq!(restored.windows[0].tabs, [PathBuf::from("/tmp/a.txt")]);
+        assert!(restored.windows[0].roots.is_empty());
+        assert!(!restored.windows[0].sidebar_visible);
+        assert!(restored.recent.is_empty());
     }
 
     #[test]
     fn session_ignores_the_legacy_workspace_root_key() {
-        let restored: SessionState =
-            serde_json::from_str(r#"{"workspace_root": "/tmp/project"}"#).unwrap();
+        let restored = parse_session(r#"{"workspace_root": "/tmp/project"}"#).unwrap();
 
-        assert!(restored.roots.is_empty());
+        assert_eq!(restored.windows.len(), 1);
+        assert!(restored.windows[0].roots.is_empty());
+    }
+
+    #[test]
+    fn empty_windows_array_stays_empty() {
+        let restored = parse_session(r#"{"windows": [], "recent": []}"#).unwrap();
+
+        assert!(restored.windows.is_empty());
     }
 }
