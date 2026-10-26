@@ -5,6 +5,7 @@
 //! the print sheet, which is the same one every other macOS app shows: printer
 //! selection, presets and PDF export all come for free.
 
+use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
 use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSFont, NSPrintInfo, NSPrintOperation, NSTextView};
@@ -15,9 +16,19 @@ const PRINT_FONT_SIZE: f64 = 11.;
 
 /// Opens the native print sheet for `text`, titled `title`.
 ///
-/// Must run on the main thread. AppKit blocks in `runOperation` until the sheet
-/// closes, so this is called straight from the menu handler.
+/// The panel runs its own modal event loop, so this only queues the work and
+/// returns. Opening it straight from a command handler would run that loop
+/// inside GPUI's update, and any GPUI task the loop picks up from the main
+/// queue would then re-enter the app while its state is still mutably borrowed
+/// and panic. The main queue runs the operation once the update has returned.
 pub(crate) fn print_text(text: &str, title: &str) {
+    let text = text.to_owned();
+    let title = title.to_owned();
+    DispatchQueue::main().exec_async(move || run(&text, &title));
+}
+
+/// Shows the print panel and blocks until it closes. Runs on the main thread.
+fn run(text: &str, title: &str) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };

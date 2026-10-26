@@ -45,10 +45,10 @@ in headless environments.
 
 - Use `gpui-kit` as the only UI dependency. Import GPUI via `use gpui_kit::*;` and
   components via `gpui_kit::component`. Do not add `gpui` or `gpui-component` directly —
-  the kit pins their versions together. `objc2`, `objc2-app-kit` and
-  `objc2-foundation` are the one exception: `print.rs` links them for the native
-  print panel, which GPUI does not provide. Keep them on the versions gpui-pre
-  already uses so no second copy of the bindings is built.
+  the kit pins their versions together. `objc2`, `objc2-app-kit`,
+  `objc2-foundation` and `dispatch2` are the one exception: `print.rs` links them
+  for the native print panel, which GPUI does not provide. Keep them on the
+  versions gpui-pre already uses so no second copy of the bindings is built.
 - Bring element helper traits into scope: `use gpui_kit::base::StyledExt as _;` for
   `.h_flex()` / `.v_flex()`, and `use gpui_kit::component::ActiveTheme as _;` for
   `cx.theme()`.

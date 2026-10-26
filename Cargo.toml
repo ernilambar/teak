@@ -38,6 +38,9 @@ globset = "0.4.20"
 ignore = "0.4.33"
 # Printing goes through AppKit's NSTextView + NSPrintOperation; GPUI has no
 # print API. The feature list is the smallest set those two need.
+# `dispatch2` defers the print panel to the main queue, off the GPUI update that
+# asked for it; it comes from the same family and is already in the tree.
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",
