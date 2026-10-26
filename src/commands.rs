@@ -282,7 +282,8 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Find Next",
         make: || Box::new(FindNextInEditor),
-        bindings: &[("f3", Scope::Global)],
+        // `⌘G` is Find Next on macOS; keep `F3` as the alternate.
+        bindings: &[("secondary-g", Scope::Global), ("f3", Scope::Global)],
         menu: Some((MenuKind::Edit, 7)),
         palette: Some((PaletteGroup::Edit, 32)),
         keywords: &["search", "find", "match"],
@@ -290,7 +291,10 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Find Previous",
         make: || Box::new(FindPreviousInEditor),
-        bindings: &[("shift-f3", Scope::Global)],
+        bindings: &[
+            ("secondary-shift-g", Scope::Global),
+            ("shift-f3", Scope::Global),
+        ],
         menu: Some((MenuKind::Edit, 7)),
         palette: Some((PaletteGroup::Edit, 33)),
         keywords: &["search", "find", "match"],
@@ -554,7 +558,9 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Go to Line…",
         make: || Box::new(GoToLine),
-        bindings: &[("secondary-g", Scope::Editor)],
+        // `⌘G` stays Find Next, as on macOS and in VS Code; this is VS Code's
+        // macOS chord for the same command.
+        bindings: &[("ctrl-g", Scope::Editor)],
         menu: Some((MenuKind::Edit, 5)),
         palette: Some((PaletteGroup::Edit, 9)),
         keywords: &["goto"],
@@ -1343,7 +1349,7 @@ mod tests {
     fn every_binding_parses() {
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
-        assert_eq!(app_bindings().len(), 48);
+        assert_eq!(app_bindings().len(), 50);
         assert_eq!(editor_bindings().len(), 21);
         assert_eq!(find_bindings().len(), 6);
     }
@@ -1364,6 +1370,17 @@ mod tests {
         assert!(resolve(&keymap, "secondary-shift-p", &["Input"])[0].ends_with("CommandPalette"));
         assert!(resolve(&keymap, "secondary-/", &[]).is_empty());
         assert!(resolve(&keymap, "secondary-/", &["Input"])[0].ends_with("ToggleLineComment"));
+
+        // `⌘G` is Find Next on macOS, so it stays global and Go to Line moves
+        // to VS Code's `⌃G`, which only applies to a focused editor.
+        assert!(resolve(&keymap, "secondary-g", &[])[0].ends_with("FindNextInEditor"));
+        assert!(resolve(&keymap, "secondary-g", &["Input"])[0].ends_with("FindNextInEditor"));
+        assert!(resolve(&keymap, "secondary-shift-g", &[])[0].ends_with("FindPreviousInEditor"));
+        assert!(
+            resolve(&keymap, "secondary-shift-g", &["Input"])[0].ends_with("FindPreviousInEditor")
+        );
+        assert!(resolve(&keymap, "ctrl-g", &[]).is_empty());
+        assert!(resolve(&keymap, "ctrl-g", &["Input"])[0].ends_with("GoToLine"));
 
         // The Option+secondary family added for view/file toggles must stay
         // global so it also fires while an editor has focus.

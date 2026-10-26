@@ -31,7 +31,9 @@
 | `⇧⌥↑` / `⇧⌥↓` | `Shift + Option + Up` / `Shift + Option + Down` | Copy Line Up / Down |
 | `⌘↩` | `Cmd + Enter` | Insert Line Below |
 | `⌘⇧↩` | `Cmd + Shift + Enter` | Insert Line Above |
-| `⌘G` | `Cmd + G` | Go to Line… |
+| `⌃G` | `Ctrl + G` | Go to Line… |
+| `⌘G` / `⌘⇧G` | `Cmd + G` / `Cmd + Shift + G` | Find Next / Previous |
+| `F3` / `⇧F3` | `F3` / `Shift + F3` | Find Next / Previous (alternate) |
 | `⌘⇧F` | `Cmd + Shift + F` | Find in Files… |
 | `F4` / `⇧F4` | `F4` / `Shift + F4` | Next / Previous Result |
 
