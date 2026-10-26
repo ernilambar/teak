@@ -140,7 +140,7 @@ impl TeakApp {
                 None => window.focus(&self.focus_handle, cx),
             }
         }
-        self.save_session();
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -209,7 +209,7 @@ impl TeakApp {
     /// the Find Results tab, then, for Replace All, asks to replace them.
     fn run_find(&mut self, after: After, window: &mut Window, cx: &mut Context<Self>) {
         self.remember_find_text(cx);
-        self.save_session();
+        self.save_session(cx);
         let generation = self.overlays.next_find_generation();
         let FindText {
             query,
@@ -647,7 +647,7 @@ impl TeakApp {
     ) {
         let flag = option(self.overlays.find_options_mut());
         *flag = !*flag;
-        self.save_session();
+        self.save_session(cx);
         if let Some(fields) = self.overlays.find() {
             fields.query.update(cx, |state, cx| state.focus(window, cx));
         }

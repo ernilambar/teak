@@ -11,9 +11,10 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-use crate::CloseTab;
 use crate::language::{editor_language_id, language_for};
 use crate::paths::file_name;
+use crate::windows::{WindowSeed, cascaded_frame};
+use crate::{CloseTab, MoveTabToNewWindow};
 
 use super::TeakApp;
 use super::chrome::count_text;
@@ -379,7 +380,7 @@ impl TeakApp {
         editor.update(cx, |state, cx| state.focus(window, cx));
         self.chrome.sync_cursor(editor.read(cx));
         self.sync_counts(cx);
-        self.save_session();
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -462,6 +463,63 @@ impl TeakApp {
         }
     }
 
+    pub(super) fn on_move_tab_to_new_window(
+        &mut self,
+        _: &MoveTabToNewWindow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ix) = self.tabs.active_index() {
+            self.move_tab_to_new_window(ix, window, cx);
+        }
+    }
+
+    /// Moves a clean, file-backed tab into a fresh window. Buffers that are
+    /// dirty, generated, raster, or previewing are refused: moving them would
+    /// either discard unsaved text or lose the state that gives them meaning.
+    pub(super) fn move_tab_to_new_window(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(ix) else {
+            return;
+        };
+        if tab.dirty {
+            window.push_notification(
+                Notification::info("Save the tab before moving it to a new window"),
+                cx,
+            );
+            return;
+        }
+        if tab.raster || tab.find_results.is_some() || tab.previewing().is_some() {
+            window.push_notification(
+                Notification::info("This tab cannot be moved to a new window"),
+                cx,
+            );
+            return;
+        }
+        let Some(path) = tab.path.clone().filter(|path| path.is_file()) else {
+            window.push_notification(
+                Notification::info("Only saved files can be moved to a new window"),
+                cx,
+            );
+            return;
+        };
+
+        let mut seed = WindowSeed::for_paths(self.settings.values.clone(), vec![path]);
+        seed.frame = Some(cascaded_frame(window));
+        if self.services.open_window(cx, seed).is_none() {
+            window.push_notification(Notification::error("Could not open a new window"), cx);
+            return;
+        }
+
+        // The copy is already open in the new window, so close this one without
+        // the unsaved-changes prompt. `close_tab` sees a clean tab and does so.
+        self.close_tab(ix, window, cx);
+    }
+
     /// Reveals the active tab in the horizontally scrolling tab strip. The
     /// strip only scrolls when tabs overflow; with few tabs this is a no-op.
     fn reveal_active_tab(&self) {
@@ -511,7 +569,7 @@ impl TeakApp {
         if let Some(ix) = self.tabs.active_index() {
             self.focus_tab(ix, window, cx);
         }
-        self.save_session();
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -634,25 +692,39 @@ impl TeakApp {
     }
 
     /// True when any open tab has unsaved edits.
-    pub(super) fn any_dirty(&self) -> bool {
+    pub(crate) fn any_dirty(&self) -> bool {
         self.tabs.any_dirty()
     }
 
-    /// Quits after confirming that unsaved edits are discarded.
-    pub(super) fn confirm_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Quits after confirming that unsaved edits in `dirty` windows are
+    /// discarded. The prompt lives in the window that started the quit.
+    pub(super) fn confirm_quit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        dirty: usize,
+    ) {
         let entity = cx.entity();
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             let entity = entity.clone();
+            let description = if dirty > 1 {
+                format!("{dirty} windows have unsaved changes. Quit without saving?")
+            } else {
+                "Some windows have unsaved changes. Quit without saving?".to_string()
+            };
             alert
                 .confirm()
                 .title("Unsaved Changes")
-                .description("Some tabs have unsaved changes. Quit without saving?")
+                .description(description)
                 .ok_text("Quit Without Saving")
                 .ok_variant(ButtonVariant::Danger)
                 .cancel_text("Keep Editing")
-                .on_ok(move |_, _window, cx| {
+                .on_ok(move |_, window, cx| {
                     entity.update(cx, |this, cx| {
-                        this.chrome.set_allow_close(true);
+                        this.remember_window_bounds(window);
+                        this.save_session(cx);
+                        this.services.save_other_windows(this.window_id, cx);
+                        this.services.begin_quit(cx);
                         cx.quit();
                     });
                     true
@@ -662,13 +734,19 @@ impl TeakApp {
 
     /// Answers the platform's close request. When there is unsaved work it opens
     /// the confirmation alert and refuses this close; the dialog re-closes once
-    /// the user confirms.
+    /// the user confirms. During app teardown it lets the close through without
+    /// prompting or touching the saved session.
     pub(crate) fn handle_window_should_close(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.services.is_quitting(cx) {
+            return true;
+        }
+        self.remember_window_bounds(window);
         if self.chrome.allow_close() || !self.any_dirty() {
+            self.forget_window(cx);
             return true;
         }
         self.confirm_close_window(window, cx);
@@ -688,7 +766,11 @@ impl TeakApp {
                 .ok_variant(ButtonVariant::Danger)
                 .cancel_text("Keep Editing")
                 .on_ok(move |_, window, cx| {
-                    entity.update(cx, |this, _cx| this.chrome.set_allow_close(true));
+                    entity.update(cx, |this, cx| {
+                        this.chrome.set_allow_close(true);
+                        this.remember_window_bounds(window);
+                        this.forget_window(cx);
+                    });
                     window.remove_window();
                     true
                 })
@@ -724,7 +806,7 @@ impl TeakApp {
             self.focus_handle.focus(window, cx);
         }
         self.sync_counts(cx);
-        self.save_session();
+        self.save_session(cx);
         cx.notify();
     }
 

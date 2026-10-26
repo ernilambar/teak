@@ -353,11 +353,27 @@ impl TeakApp {
                 let right_entity = menu_entity.clone();
                 let all_entity = menu_entity.clone();
                 let deleted_entity = menu_entity.clone();
+                let move_entity = menu_entity.clone();
+                let movable = menu_entity.read(cx).tabs.get(ix).is_some_and(|tab| {
+                    !tab.dirty
+                        && !tab.raster
+                        && tab.find_results.is_none()
+                        && tab.previewing().is_none()
+                        && tab.path.as_deref().is_some_and(Path::is_file)
+                });
 
                 menu.item(
                     PopupMenuItem::new("Close Tab").on_click(move |_, window, cx| {
                         close_entity.update(cx, |this, cx| this.close_tab(ix, window, cx));
                     }),
+                )
+                .item(
+                    PopupMenuItem::new("Move to New Window")
+                        .disabled(!movable)
+                        .on_click(move |_, window, cx| {
+                            move_entity
+                                .update(cx, |this, cx| this.move_tab_to_new_window(ix, window, cx));
+                        }),
                 )
                 .separator()
                 .item(
@@ -489,7 +505,7 @@ impl TeakApp {
                             .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
                         if width != this.workspace.width() {
                             this.workspace.set_width(width);
-                            this.save_session();
+                            this.save_session(cx);
                         }
                     })
                     .ok();
@@ -685,7 +701,7 @@ impl TeakApp {
                 } else if event.click_count() == 1 {
                     this.request_open(click_path.clone(), window, cx);
                 }
-                this.save_session();
+                this.save_session(cx);
                 cx.notify();
             }))
             .context_menu(move |menu, _, cx| {

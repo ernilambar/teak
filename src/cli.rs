@@ -109,10 +109,10 @@ pub(crate) fn print_help() {
 A fast, lightweight text editor
 
 Usage:
-  {name} [OPTIONS] [FOLDER]...
+  {name} [OPTIONS] [PATH]...
 
 Arguments:
-  [FOLDER]...  Add the given folders to the sidebar
+  [PATH]...  Folders to open in the sidebar, files to open in tabs
 
 Options:
   -h, --help     Print this help and exit

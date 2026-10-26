@@ -764,6 +764,11 @@ impl TeakApp {
             Ok(_) => None,
             Err(message) => Some(format!("Could not save settings: {message}").into()),
         });
+        // The value changed in memory whether or not the write landed, so keep
+        // every other window's snapshot in step with this one.
+        let settings = self.settings.values.clone();
+        self.services
+            .broadcast_settings(self.window_id, &settings, cx);
         cx.notify();
     }
 

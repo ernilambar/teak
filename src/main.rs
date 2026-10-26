@@ -13,23 +13,31 @@ mod session;
 mod settings;
 mod theme;
 mod update;
+mod windows;
 
 use std::path::PathBuf;
 
-use gpui_kit::component::{ThemeMode, ThemeRegistry, WindowExt as _, notification::Notification};
-use gpui_kit::*;
+use gpui_kit::component::{ThemeMode, ThemeRegistry};
 
-use app::{TeakApp, WINDOW_TITLE};
 use cli::{CliCommand, parse_args, print_help};
 use paths::path_from_file_url;
 use session::load_session;
 use settings::{ICON_STYLE_COLORFUL, ICON_STYLE_MONOCHROME, load_settings};
+use windows::{AppServices, WindowSeed};
 
 gpui_kit::actions!(
     teak,
     [
         NewFile,
+        NewWindow,
+        CloseWindow,
         OpenFile,
+        OpenFolderInNewWindow,
+        MoveTabToNewWindow,
+        MinimizeWindow,
+        ZoomWindow,
+        ToggleFullScreen,
+        BringAllToFront,
         QuickOpen,
         FindInEditor,
         FindAndReplaceInEditor,
@@ -154,6 +162,9 @@ fn main() {
     }
 
     let (open_tx, open_rx) = async_channel::unbounded::<Vec<PathBuf>>();
+    // `Application::on_reopen` runs without access to `App`, so a dock click
+    // hands the request to a task that can create the window.
+    let (reopen_tx, reopen_rx) = async_channel::unbounded::<()>();
 
     let application = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     application.on_open_urls(move |urls| {
@@ -165,132 +176,132 @@ fn main() {
             let _ = open_tx.try_send(paths);
         }
     });
+    application.on_reopen(move |_cx| {
+        let _ = reopen_tx.try_send(());
+    });
 
     application.run(move |cx| {
         gpui_kit::init(cx);
-        let settings = load_settings();
+        let (settings, settings_error) = match load_settings() {
+            Ok(settings) => (settings, None),
+            Err(message) => (Default::default(), Some(message)),
+        };
         // Apply the saved appearance and color scheme now. User-installed themes
         // load asynchronously from the themes directory (below), so a scheme the
         // settings name but that is not registered yet falls back to the
         // built-in palette and is re-applied once the load finishes.
-        let resolved = settings.clone().unwrap_or_default();
-        theme::apply(&resolved, None, cx);
-        let theme_choice = resolved.ui.theme().to_string();
+        theme::apply(&settings, None, cx);
+        let theme_choice = settings.ui.theme().to_string();
 
-        // Positional arguments are the folders to open at launch. Passing any
-        // of them defines the initial root set, so the saved session is skipped.
+        // Positional arguments are paths to open at launch. Passing any of them
+        // replaces the saved window layout, but still shares its recent list.
         let arguments: Vec<PathBuf> = std::env::args()
             .skip(1)
             .filter(|argument| !argument.starts_with('-'))
             .map(PathBuf::from)
             .collect();
-        let initial_folders: Vec<PathBuf> = arguments
-            .iter()
-            .filter(|path| path.is_dir())
-            .cloned()
-            .collect();
-        let session = if arguments.is_empty() {
-            load_session()
-        } else {
-            None
-        };
+        let saved = load_session();
+        let recent = saved
+            .as_ref()
+            .map(|session| session.recent.clone())
+            .unwrap_or_default();
+        let services = AppServices::new(cx, recent.clone());
 
         keymap::bind_keys(cx);
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+        // With no window focused, the menu bar still dispatches app-level
+        // actions here; the per-window handlers cover the normal case.
+        let services_for_new = services.clone();
+        cx.on_action(move |_: &NewWindow, cx| {
+            if cx.active_window().is_none() {
+                services_for_new
+                    .open_window(cx, WindowSeed::blank(load_settings().unwrap_or_default()));
+            }
+        });
+        cx.on_action(|_: &Quit, cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        });
+        // The menu bar stays usable after the last window closes; an Open Recent
+        // row then starts a window at that file.
+        let services_for_open_path = services.clone();
+        cx.on_action(move |action: &OpenPath, cx| {
+            if cx.active_window().is_none() {
+                services_for_open_path.route_open(vec![action.0.clone()], cx);
+            }
+        });
         // The app replaces these once it has loaded the recent list.
-        cx.set_menus(commands::menus(&theme_choice, &[]));
+        cx.set_menus(commands::menus(&theme_choice, &recent));
 
-        let options = WindowOptions {
-            titlebar: Some(TitlebarOptions {
-                title: Some(WINDOW_TITLE.into()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        gpui_kit::open_window(options, cx, move |window, cx| {
-            let (settings, settings_error) = match settings {
-                Ok(settings) => (settings, None),
-                Err(message) => (Default::default(), Some(message)),
-            };
-            let app = cx.new(|cx| TeakApp::new(initial_folders.clone(), settings, cx));
-            // Block the red close button (and app termination) while there are
-            // unsaved edits, prompting instead.
-            let close_guard = app.clone();
-            window.on_window_should_close(cx, move |window, cx| {
-                close_guard.update(cx, |this, cx| this.handle_window_should_close(window, cx))
-            });
-            // The notification layer is attached after this closure returns.
-            if let Some(message) = settings_error {
-                window.defer(cx, move |window, cx| {
-                    window.push_notification(Notification::error(message), cx);
-                });
-            }
-            if let Some(session) = session {
-                app.update(cx, |this, cx| this.restore_session(session, window, cx));
-            }
-            app.update(cx, |this, cx| this.check_font_family(window, cx));
-            // Watch the user themes directory so installed color schemes load
-            // and hot-reload. The initial load is asynchronous, so re-apply the
-            // scheme once it finishes to pick up one the settings named.
-            if let Some(dir) = theme::themes_dir() {
-                let weak = app.downgrade();
-                theme::watch(dir, cx, move |cx| {
-                    weak.update(cx, |this, cx| this.reapply_theme(cx)).ok();
-                });
-            }
-            // A reload of the themes directory re-applies the library's copy of
-            // the default palettes, which share the bundled names. Re-apply the
-            // scheme the settings select whenever the registry changes so the
-            // bundled palettes stay in effect.
-            let registry_weak = app.downgrade();
-            cx.observe_global::<ThemeRegistry>(move |cx| {
-                registry_weak
-                    .update(cx, |this, cx| this.reapply_theme(cx))
-                    .ok();
-            })
-            .detach();
-            // Re-render whenever the window is (de)activated so a file deleted
-            // while the app was in the background is reflected in its tab.
-            app.update(cx, |_this, cx| {
-                cx.observe_window_activation(window, |this, window, cx| {
-                    this.reload_tree();
-                    if window.is_window_active() {
-                        this.check_outside_change(window, cx);
-                    }
-                    cx.notify()
-                })
-                .detach();
-            });
-            // Follow macOS appearance changes while the user chose System.
-            app.update(cx, |_this, cx| {
-                cx.observe_window_appearance(window, |this, window, cx| {
-                    this.on_system_appearance_changed(window, cx);
-                })
-                .detach();
-            });
-            let focus_handle = app.read(cx).focus_handle.clone();
-            focus_handle.focus(window, cx);
-
-            app.update(cx, |_this, cx| {
-                cx.spawn_in(window, async move |this, cx| {
-                    while let Ok(paths) = open_rx.recv().await {
-                        this.update_in(cx, |this, window, cx| {
-                            for path in paths {
-                                this.request_open(path, window, cx);
-                            }
-                        })
-                        .ok();
-                    }
-                })
-                .detach();
-            });
-
-            app
+        // Watch the user themes directory so installed color schemes load and
+        // hot-reload. The watcher belongs to the app, not a window: one watcher
+        // serves every window, and a scheme that finishes loading re-applies to
+        // all of them.
+        if let Some(dir) = theme::themes_dir() {
+            let services = services.clone();
+            theme::watch(dir, cx, move |cx| services.reapply_theme_all(cx));
+        }
+        // A reload of the themes directory re-applies the library's copy of the
+        // default palettes, which share the bundled names. Re-apply the scheme
+        // the settings select whenever the registry changes so the bundled
+        // palettes stay in effect.
+        let services_for_registry = services.clone();
+        cx.observe_global::<ThemeRegistry>(move |cx| {
+            services_for_registry.reapply_theme_all(cx);
         })
-        .expect("failed to open window");
+        .detach();
+
+        // Dock click or Cmd+Tab after the last window closed: open a fresh one.
+        let services_for_reopen = services.clone();
+        cx.spawn(async move |cx| {
+            while reopen_rx.recv().await.is_ok() {
+                cx.update(|cx| {
+                    if services_for_reopen.has_windows(cx) {
+                        // Minimized or hidden windows come back to the front.
+                        cx.activate(true);
+                    } else {
+                        services_for_reopen.open_window(
+                            cx,
+                            WindowSeed::blank(load_settings().unwrap_or_default()),
+                        );
+                    }
+                });
+            }
+        })
+        .detach();
+
+        // External opens (the command-line launcher and file associations) go to
+        // one window, whichever is focused, or start one when none is open.
+        let services_for_open = services.clone();
+        cx.spawn(async move |cx| {
+            while let Ok(paths) = open_rx.recv().await {
+                cx.update(|cx| services_for_open.route_open(paths, cx));
+            }
+        })
+        .detach();
+
+        let mut seeds: Vec<WindowSeed> = Vec::new();
+        if arguments.is_empty() {
+            if let Some(saved) = saved {
+                for window in saved.windows {
+                    seeds.push(WindowSeed::restored(settings.clone(), window));
+                }
+            }
+        } else {
+            seeds.push(WindowSeed::for_paths(settings.clone(), arguments));
+        }
+        if seeds.is_empty() {
+            seeds.push(WindowSeed::blank(settings.clone()));
+        }
+        for (ix, mut seed) in seeds.into_iter().enumerate() {
+            if ix == 0 {
+                seed.settings_error = settings_error.clone();
+            }
+            services.open_window(cx, seed);
+        }
     });
 }
 
