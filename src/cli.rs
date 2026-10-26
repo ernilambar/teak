@@ -1,4 +1,8 @@
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
+
+use crate::paths::hex_digit;
 
 /// What the installed command-line tool launches: the `.app` bundle.
 pub(crate) fn launcher_target() -> Option<PathBuf> {
@@ -18,23 +22,47 @@ set -euo pipefail
 
 APP="${TEAK_APP:-__BUNDLE__}"
 
-# Options are handled by the binary itself; `open` would treat them as files.
+# Help, version and unknown options go to the binary. `--new-window` is
+# separated out so it can also reach an already-running app; everything else is
+# a path for `open`.
+new_window=0
+separator=0
+paths=()
 for arg in "$@"; do
+    if [ "$separator" = 1 ]; then
+        paths+=("$arg")
+        continue
+    fi
     case "$arg" in
-        --) break ;;
+        --) separator=1 ;;
+        -h|--help|-V|--version) exec "$APP/Contents/MacOS/teak" "$@" ;;
+        -n|--new-window) new_window=1 ;;
         -*) exec "$APP/Contents/MacOS/teak" "$@" ;;
+        *) paths+=("$arg") ;;
     esac
 done
 
-if [ "${1:-}" = "--" ]; then
-    shift
+# A running app cannot see argv, so a URL carries the paths through
+# LaunchServices. A cold launch uses argv, which also skips nothing: the new
+# window joins the restored layout just as it does while running.
+if [ "$new_window" = 1 ]; then
+    if pgrep -f "$APP/Contents/MacOS/teak" >/dev/null 2>&1; then
+        payload=""
+        if [ "${#paths[@]}" -gt 0 ]; then
+            payload=$(printf '%s\0' "${paths[@]}" | od -An -tx1 | tr -d ' \n')
+        fi
+        exec open "teak://new-window?payload=$payload"
+    fi
+    if [ "${#paths[@]}" -gt 0 ]; then
+        exec open -a "$APP" --args --new-window "${paths[@]}"
+    fi
+    exec open -a "$APP" --args --new-window
 fi
 
-if [ "$#" -eq 0 ]; then
+if [ "${#paths[@]}" -eq 0 ]; then
     exec open -a "$APP"
 fi
-
-exec open -a "$APP" -- "$@"
+exec open -a "$APP" -- "${paths[@]}"
 "#;
     template.replace("__BUNDLE__", &bundle.display().to_string())
 }
@@ -79,7 +107,7 @@ pub(crate) fn install_cli(bundle: &Path) -> Result<PathBuf, String> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum CliCommand {
-    Run,
+    Run { new_window: bool },
     Help,
     Version,
     Unknown(String),
@@ -88,18 +116,60 @@ pub(crate) enum CliCommand {
 /// Scans arguments (without the program name) for options. The first option
 /// wins; everything after `--` is treated as a path.
 pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> CliCommand {
+    let mut new_window = false;
     for arg in args {
         match arg.as_str() {
             "--" => break,
             "-h" | "--help" => return CliCommand::Help,
             "-V" | "--version" => return CliCommand::Version,
+            "-n" | "--new-window" => new_window = true,
             // Older macOS passes a process serial number when launched from Finder.
             _ if arg.starts_with("-psn_") => {}
             _ if arg.starts_with('-') => return CliCommand::Unknown(arg),
             _ => {}
         }
     }
-    CliCommand::Run
+    CliCommand::Run { new_window }
+}
+
+/// Parses the URL the launcher builds for an already-running app:
+/// `teak://new-window?payload=<hex of NUL-separated paths>`.
+pub(crate) fn parse_new_window_url(url: &str) -> Option<Vec<PathBuf>> {
+    let rest = url.strip_prefix("teak://new-window")?;
+    if rest.is_empty() {
+        return Some(Vec::new());
+    }
+    if !(rest.starts_with('?') || rest.starts_with('/')) {
+        return None;
+    }
+    let rest = rest.trim_start_matches('/');
+    if rest.is_empty() {
+        return Some(Vec::new());
+    }
+    let payload = rest.strip_prefix("?payload=")?;
+    let payload = payload.split('&').next().unwrap_or(payload);
+    let bytes = decode_hex(payload)?;
+    Some(
+        bytes
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| PathBuf::from(OsString::from_vec(path.to_vec())))
+            .collect(),
+    )
+}
+
+fn decode_hex(input: &str) -> Option<Vec<u8>> {
+    let bytes = input.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut decoded = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.as_chunks::<2>().0 {
+        let high = hex_digit(pair[0])?;
+        let low = hex_digit(pair[1])?;
+        decoded.push((high << 4) | low);
+    }
+    Some(decoded)
 }
 
 pub(crate) fn print_help() {
@@ -115,8 +185,9 @@ Arguments:
   [PATH]...  Folders to open in the sidebar, files to open in tabs
 
 Options:
-  -h, --help     Print this help and exit
-  -V, --version  Print version and exit",
+  -n, --new-window  Open the given paths in a new window
+  -h, --help        Print this help and exit
+  -V, --version     Print version and exit",
         name = env!("CARGO_PKG_NAME"),
         version = env!("CARGO_PKG_VERSION"),
     );
@@ -131,6 +202,9 @@ mod tests {
         let script = mac_launcher_script(Path::new("/Applications/Example.app"));
         assert!(script.starts_with("#!/usr/bin/env bash\n"));
         assert!(script.contains(r#"APP="${TEAK_APP:-/Applications/Example.app}""#));
+        assert!(script.contains("teak://new-window"));
+        assert!(script.contains("--args --new-window"));
+        assert!(script.contains("pgrep -f"));
         assert!(!script.contains("__BUNDLE__"));
     }
 
@@ -140,16 +214,68 @@ mod tests {
 
     #[test]
     fn parse_args_detects_options() {
-        assert_eq!(parse(&[]), CliCommand::Run);
-        assert_eq!(parse(&["notes"]), CliCommand::Run);
+        assert_eq!(parse(&[]), CliCommand::Run { new_window: false });
+        assert_eq!(parse(&["notes"]), CliCommand::Run { new_window: false });
         assert_eq!(parse(&["--help"]), CliCommand::Help);
         assert_eq!(parse(&["-V"]), CliCommand::Version);
         assert_eq!(parse(&["notes", "--version"]), CliCommand::Version);
         assert_eq!(
+            parse(&["--new-window", "notes"]),
+            CliCommand::Run { new_window: true }
+        );
+        assert_eq!(
+            parse(&["-n", "notes"]),
+            CliCommand::Run { new_window: true }
+        );
+        assert_eq!(
             parse(&["--versioin"]),
             CliCommand::Unknown("--versioin".to_string())
         );
-        assert_eq!(parse(&["--", "--version"]), CliCommand::Run);
-        assert_eq!(parse(&["-psn_0_12345"]), CliCommand::Run);
+        assert_eq!(
+            parse(&["--", "--version"]),
+            CliCommand::Run { new_window: false }
+        );
+        assert_eq!(
+            parse(&["-psn_0_12345"]),
+            CliCommand::Run { new_window: false }
+        );
+    }
+
+    #[test]
+    fn mac_launcher_script_is_valid_bash() {
+        let script = mac_launcher_script(Path::new("/Applications/Example.app"));
+        let path = std::env::temp_dir().join(format!(
+            "teak-launcher-{}-{}.sh",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, script).unwrap();
+        let status = std::process::Command::new("bash")
+            .arg("-n")
+            .arg(&path)
+            .status()
+            .unwrap();
+        let _ = std::fs::remove_file(path);
+        assert!(status.success(), "the launcher script must parse as bash");
+    }
+
+    #[test]
+    fn parse_new_window_url_decodes_hex_paths() {
+        assert_eq!(parse_new_window_url("teak://new-window"), Some(Vec::new()));
+        assert_eq!(
+            parse_new_window_url("teak://new-window?payload="),
+            Some(Vec::new())
+        );
+        // /tmp\0/tmp/a\0
+        assert_eq!(
+            parse_new_window_url("teak://new-window?payload=2f746d70002f746d702f6100"),
+            Some(vec![PathBuf::from("/tmp"), PathBuf::from("/tmp/a")])
+        );
+        assert_eq!(
+            parse_new_window_url("teak://new-window/?payload=2f746d70"),
+            Some(vec![PathBuf::from("/tmp")])
+        );
+        assert_eq!(parse_new_window_url("https://example.com"), None);
+        assert_eq!(parse_new_window_url("teak://new-window?payload=zz"), None);
     }
 }

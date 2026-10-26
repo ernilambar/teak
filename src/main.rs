@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use gpui_kit::component::{ThemeMode, ThemeRegistry};
 
-use cli::{CliCommand, parse_args, print_help};
+use cli::{CliCommand, parse_args, parse_new_window_url, print_help};
 use paths::path_from_file_url;
 use session::load_session;
 use settings::{ICON_STYLE_COLORFUL, ICON_STYLE_MONOCHROME, load_settings};
@@ -137,9 +137,16 @@ pub struct OpenPath(pub(crate) PathBuf);
 #[action(namespace = teak, no_json)]
 pub struct SetTheme(pub(crate) String);
 
+/// An open request delivered by macOS. Ordinary file opens go to the active
+/// window; a `--new-window` request always creates a fresh one.
+enum OpenRequest {
+    Paths(Vec<PathBuf>),
+    NewWindow(Vec<PathBuf>),
+}
+
 fn main() {
-    match parse_args(std::env::args().skip(1)) {
-        CliCommand::Run => {}
+    let new_window = match parse_args(std::env::args().skip(1)) {
+        CliCommand::Run { new_window } => new_window,
         CliCommand::Help => {
             print_help();
             return;
@@ -159,21 +166,29 @@ fn main() {
             );
             std::process::exit(2);
         }
-    }
+    };
 
-    let (open_tx, open_rx) = async_channel::unbounded::<Vec<PathBuf>>();
+    let (open_tx, open_rx) = async_channel::unbounded::<OpenRequest>();
     // `Application::on_reopen` runs without access to `App`, so a dock click
     // hands the request to a task that can create the window.
     let (reopen_tx, reopen_rx) = async_channel::unbounded::<()>();
 
     let application = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     application.on_open_urls(move |urls| {
-        let paths: Vec<PathBuf> = urls
-            .iter()
-            .filter_map(|url| path_from_file_url(url))
-            .collect();
+        let mut paths = Vec::new();
+        let mut windows = Vec::new();
+        for url in urls {
+            if let Some(window_paths) = parse_new_window_url(&url) {
+                windows.push(window_paths);
+            } else if let Some(path) = path_from_file_url(&url) {
+                paths.push(path);
+            }
+        }
         if !paths.is_empty() {
-            let _ = open_tx.try_send(paths);
+            let _ = open_tx.try_send(OpenRequest::Paths(paths));
+        }
+        for paths in windows {
+            let _ = open_tx.try_send(OpenRequest::NewWindow(paths));
         }
     });
     application.on_reopen(move |_cx| {
@@ -182,6 +197,9 @@ fn main() {
 
     application.run(move |cx| {
         gpui_kit::init(cx);
+        // Make the launcher's `teak://new-window` URLs resolve to this app.
+        // A development binary has no bundle identifier, so ignore that error.
+        cx.register_url_scheme("teak").detach();
         let (settings, settings_error) = match load_settings() {
             Ok(settings) => (settings, None),
             Err(message) => (Default::default(), Some(message)),
@@ -193,13 +211,21 @@ fn main() {
         theme::apply(&settings, None, cx);
         let theme_choice = settings.ui.theme().to_string();
 
-        // Positional arguments are paths to open at launch. Passing any of them
-        // replaces the saved window layout, but still shares its recent list.
-        let arguments: Vec<PathBuf> = std::env::args()
+        // Positional arguments are paths to open at launch. They join the
+        // restored layout in the active window; `--new-window` puts them in a
+        // window of their own instead.
+        let mut arguments: Vec<PathBuf> = std::env::args()
             .skip(1)
             .filter(|argument| !argument.starts_with('-'))
             .map(PathBuf::from)
             .collect();
+        // Without `--new-window`, direct argv paths behave like an open event:
+        // they join the restored layout instead of becoming a new window.
+        let route_paths = if !new_window && !arguments.is_empty() {
+            Some(std::mem::take(&mut arguments))
+        } else {
+            None
+        };
         let saved = load_session();
         let recent = saved
             .as_ref()
@@ -277,21 +303,41 @@ fn main() {
         // one window, whichever is focused, or start one when none is open.
         let services_for_open = services.clone();
         cx.spawn(async move |cx| {
-            while let Ok(paths) = open_rx.recv().await {
-                cx.update(|cx| services_for_open.route_open(paths, cx));
+            while let Ok(request) = open_rx.recv().await {
+                cx.update(|cx| match request {
+                    OpenRequest::Paths(paths) => services_for_open.route_open(paths, cx),
+                    OpenRequest::NewWindow(paths) => {
+                        let settings = load_settings().unwrap_or_default();
+                        let seed = if paths.is_empty() {
+                            WindowSeed::blank(settings)
+                        } else {
+                            WindowSeed::for_paths(settings, paths)
+                        };
+                        services_for_open.open_window(cx, seed);
+                    }
+                });
             }
         })
         .detach();
 
         let mut seeds: Vec<WindowSeed> = Vec::new();
-        if arguments.is_empty() {
+        if new_window {
+            // A new window joins the restored layout, matching what the flag
+            // does in a running app. With no session, it is the only window.
             if let Some(saved) = saved {
                 for window in saved.windows {
                     seeds.push(WindowSeed::restored(settings.clone(), window));
                 }
             }
-        } else {
-            seeds.push(WindowSeed::for_paths(settings.clone(), arguments));
+            if arguments.is_empty() {
+                seeds.push(WindowSeed::blank(settings.clone()));
+            } else {
+                seeds.push(WindowSeed::for_paths(settings.clone(), arguments));
+            }
+        } else if let Some(saved) = saved {
+            for window in saved.windows {
+                seeds.push(WindowSeed::restored(settings.clone(), window));
+            }
         }
         if seeds.is_empty() {
             seeds.push(WindowSeed::blank(settings.clone()));
@@ -301,6 +347,11 @@ fn main() {
                 seed.settings_error = settings_error.clone();
             }
             services.open_window(cx, seed);
+        }
+        // Paths given directly to the binary behave like an open event: they
+        // join the active window after the saved layout is up.
+        if let Some(paths) = route_paths {
+            services.route_open(paths, cx);
         }
     });
 }
