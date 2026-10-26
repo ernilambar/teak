@@ -258,7 +258,7 @@ pub(crate) struct ResultsDocument {
     pub(crate) highlights: Vec<Range<usize>>,
 }
 
-/// Lays `results` out Sublime-style: a header, each file's path with its
+/// Lays `results` out as one text document: a header, each file's path with its
 /// matching lines (`12:`) between context lines (`12 `), `..` for skipped
 /// lines, and a summary. `display` names each file.
 pub(crate) fn results_document(

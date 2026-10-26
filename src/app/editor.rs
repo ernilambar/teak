@@ -1,5 +1,5 @@
-//! Editor commands that VS Code exposes but gpui-kit's engine does not, plus
-//! the handler glue that applies them to the focused editor.
+//! Editor commands the engine does not provide, plus the handler glue that
+//! applies them to the focused editor.
 //!
 //! The line arithmetic lives in free functions over [`LineBuffer`] so it can be
 //! unit tested without a window. Each command computes a single byte range to
@@ -254,7 +254,7 @@ fn move_lines(buf: &LineBuffer, selection: &Range<usize>, up: bool) -> Option<Co
 }
 
 /// Duplicates the selected lines. Copy up and copy down produce the same text
-/// and both leave the caret on the lower of the two copies, matching VS Code.
+/// and both leave the caret on the lower of the two copies.
 fn duplicate_lines(buf: &LineBuffer, selection: &Range<usize>) -> Commit {
     let (first, last) = buf.touched(selection);
     let moved = &buf.lines[first..=last];
@@ -366,12 +366,12 @@ fn word_at(text: &str, offset: usize) -> Option<Range<usize>> {
     (start < end).then_some(start..end)
 }
 
-/// Sublime's "quick add next" (`⌘D`). `selections` lists the active selection
-/// first and the result keeps that order. An empty active selection expands to
-/// the word under it; otherwise the next match of the active selection's text
-/// after the last selection in the document, wrapping around and skipping
-/// matches already selected, is appended. Returns `None` when there is nothing
-/// to add.
+/// Adds the next occurrence of the current selection (`⌘D`). `selections` lists
+/// the active selection first and the result keeps that order. An empty active
+/// selection expands to the word under it; otherwise the next match of the
+/// active selection's text after the last selection in the document, wrapping
+/// around and skipping matches already selected, is appended. Returns `None`
+/// when there is nothing to add.
 fn add_next_occurrence(text: &str, selections: &[Range<usize>]) -> Option<Vec<Range<usize>>> {
     let active = selections.first()?;
     if active.is_empty() {

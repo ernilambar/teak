@@ -148,7 +148,9 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Add Folder…",
         make: || Box::new(AddFolder),
-        bindings: &[("secondary-shift-o", Scope::Global)],
+        // `⇧⌘O` is the customary Go to Symbol chord, so keep it free and put
+        // the folder action on `⌃⌘O`.
+        bindings: &[("ctrl-secondary-o", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 4)),
         keywords: &[],
@@ -164,7 +166,8 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Close All Folders",
         make: || Box::new(CloseAllFolders),
-        bindings: &[("alt-secondary-w", Scope::Global)],
+        // `⌥⌘W` is Close All Windows on macOS, so this uses `⌃⌘W`.
+        bindings: &[("ctrl-secondary-w", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 6)),
         keywords: &[],
@@ -341,7 +344,9 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Replace All",
         make: || Box::new(ReplaceAll),
-        bindings: &[("alt-enter", Scope::FindPanel)],
+        // `⌥↩` is the customary Select All Matches chord, so Replace All takes
+        // `⌥⌘↩` inside the panel.
+        bindings: &[("alt-secondary-enter", Scope::FindPanel)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -558,8 +563,8 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Go to Line…",
         make: || Box::new(GoToLine),
-        // `⌘G` stays Find Next, as on macOS and in VS Code; this is VS Code's
-        // macOS chord for the same command.
+        // `⌘G` stays Find Next, as macOS expects; Go to Line uses the customary
+        // `⌃G` chord for a focused editor.
         bindings: &[("ctrl-g", Scope::Editor)],
         menu: Some((MenuKind::Edit, 5)),
         palette: Some((PaletteGroup::Edit, 9)),
@@ -699,7 +704,8 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Toggle Preview",
         make: || Box::new(ToggleMarkdownPreview),
-        bindings: &[("secondary-shift-v", Scope::Global)],
+        // `⇧⌘V` is Paste and Match Style system-wide; leave it free.
+        bindings: &[("ctrl-secondary-v", Scope::Global)],
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 10)),
         keywords: &[],
@@ -723,7 +729,10 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Next Tab",
         make: || Box::new(NextTab),
-        bindings: &[("secondary-shift-]", Scope::Global)],
+        bindings: &[
+            ("secondary-shift-]", Scope::Global),
+            ("ctrl-tab", Scope::Global),
+        ],
         menu: Some((MenuKind::View, 4)),
         palette: Some((PaletteGroup::View, 13)),
         keywords: &[],
@@ -731,7 +740,10 @@ static COMMANDS: &[Command] = &[
     Command {
         label: "Previous Tab",
         make: || Box::new(PreviousTab),
-        bindings: &[("secondary-shift-[", Scope::Global)],
+        bindings: &[
+            ("secondary-shift-[", Scope::Global),
+            ("ctrl-shift-tab", Scope::Global),
+        ],
         menu: Some((MenuKind::View, 4)),
         palette: Some((PaletteGroup::View, 14)),
         keywords: &[],
@@ -1127,19 +1139,19 @@ pub(crate) fn app_bindings() -> Vec<KeyBinding> {
     bindings(Scope::Global)
 }
 
-/// The editing chords adopted from VS Code, scoped to the focused editor.
+/// The editing chords, scoped to the focused editor.
 ///
 /// These are registered after the engine's own `"Input"` bindings; at equal
 /// context depth the later registration wins, so these take precedence where
 /// they overlap:
-/// - `shift-alt-up` / `shift-alt-down` — VS Code copies the line, replacing the
-///   engine's alternate add-cursor chord.
+/// - `shift-alt-up` / `shift-alt-down` — the customary copy-line chords,
+///   replacing the engine's alternate add-cursor chord.
 /// - `secondary-alt-up` / `secondary-alt-down` (and the `ctrl-alt-*`
 ///   alternate) — the engine binds these to its own add-cursor
 ///   actions; the app binds the same chords to its `AddCursorAbove` /
 ///   `AddCursorBelow` so the menu and palette share one path (the handler
 ///   re-dispatches the engine action at the editor).
-/// - `secondary-enter` — VS Code inserts a line below; the engine maps
+/// - `secondary-enter` — the customary insert-line-below chord; the engine maps
 ///   `secondary-enter` to a plain newline on macOS, so this is the useful one.
 pub(crate) fn editor_bindings() -> Vec<KeyBinding> {
     bindings(Scope::Editor)
@@ -1349,7 +1361,7 @@ mod tests {
     fn every_binding_parses() {
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
-        assert_eq!(app_bindings().len(), 50);
+        assert_eq!(app_bindings().len(), 52);
         assert_eq!(editor_bindings().len(), 21);
         assert_eq!(find_bindings().len(), 6);
     }
@@ -1372,7 +1384,7 @@ mod tests {
         assert!(resolve(&keymap, "secondary-/", &["Input"])[0].ends_with("ToggleLineComment"));
 
         // `⌘G` is Find Next on macOS, so it stays global and Go to Line moves
-        // to VS Code's `⌃G`, which only applies to a focused editor.
+        // to the customary `⌃G`, which only applies to a focused editor.
         assert!(resolve(&keymap, "secondary-g", &[])[0].ends_with("FindNextInEditor"));
         assert!(resolve(&keymap, "secondary-g", &["Input"])[0].ends_with("FindNextInEditor"));
         assert!(resolve(&keymap, "secondary-shift-g", &[])[0].ends_with("FindPreviousInEditor"));
@@ -1382,12 +1394,22 @@ mod tests {
         assert!(resolve(&keymap, "ctrl-g", &[]).is_empty());
         assert!(resolve(&keymap, "ctrl-g", &["Input"])[0].ends_with("GoToLine"));
 
-        // The Option+secondary family added for view/file toggles must stay
-        // global so it also fires while an editor has focus.
+        // Chords that were moved off macOS conventions: `⇧⌘O` and `⌥⌘W` are
+        // Go to Symbol / Close All Windows elsewhere, `⇧⌘V` is Paste and
+        // Match Style. `⌃⇥` / `⌃⇧⇥` are the universal next/previous tab keys.
+        assert!(resolve(&keymap, "ctrl-secondary-o", &[])[0].ends_with("AddFolder"));
+        assert!(resolve(&keymap, "secondary-shift-o", &[]).is_empty());
+        assert!(resolve(&keymap, "alt-secondary-w", &[]).is_empty());
+        assert!(resolve(&keymap, "secondary-shift-v", &[]).is_empty());
+        assert!(resolve(&keymap, "ctrl-tab", &[])[0].ends_with("NextTab"));
+        assert!(resolve(&keymap, "ctrl-shift-tab", &[])[0].ends_with("PreviousTab"));
+
+        // The chords added for view/file toggles must stay global so they also
+        // fire while an editor has focus.
         for (keys, action) in [
             ("alt-secondary-i", "ToggleWhitespace"),
-            ("secondary-shift-v", "ToggleMarkdownPreview"),
-            ("alt-secondary-w", "CloseAllFolders"),
+            ("ctrl-secondary-v", "ToggleMarkdownPreview"),
+            ("ctrl-secondary-w", "CloseAllFolders"),
             ("alt-secondary-r", "RevealInFinder"),
             ("alt-secondary-c", "CopyFilePath"),
             ("alt-secondary-shift-c", "CopyRelativePath"),
@@ -1440,6 +1462,22 @@ mod tests {
             resolve(&keymap, "ctrl-alt-up", &["Input"])[0],
             crate::AddCursorAbove.name()
         );
+    }
+
+    #[test]
+    fn find_panel_uses_its_own_chords() {
+        let mut keymap = Keymap::default();
+        keymap.add_bindings(find_bindings());
+
+        // `⌥↩` is the customary Select All Matches chord, so Replace All moved
+        // to `⌥⌘↩` inside the panel.
+        assert!(resolve(&keymap, "enter", &["FindPanel", "Input"])[0].ends_with("RunFind"));
+        assert!(
+            resolve(&keymap, "alt-secondary-enter", &["FindPanel", "Input"])[0]
+                .ends_with("ReplaceAll")
+        );
+        assert!(resolve(&keymap, "alt-enter", &["FindPanel", "Input"]).is_empty());
+        assert!(resolve(&keymap, "alt-secondary-enter", &["Input"]).is_empty());
     }
 
     /// Whether `entries`, or a submenu inside them, shows `cluster`.

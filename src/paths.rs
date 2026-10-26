@@ -133,8 +133,8 @@ pub(crate) fn collect_files(
             .hidden(false)
             // Honor a `.gitignore` even in a folder that is not a repository.
             .require_git(false)
-            // Only the project's own ignore files count, as in VS Code; the
-            // user's global git excludes would make results differ per machine.
+            // Only the project's own ignore files count; the user's global git
+            // excludes would make results differ per machine.
             .git_global(false)
             .sort_by_file_name(|a, b| a.cmp(b))
             .filter_entry(move |entry| {

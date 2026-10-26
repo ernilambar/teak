@@ -1,5 +1,5 @@
 //! Find in Files: a panel docked above the status bar runs the search, and the
-//! matches land in a read-only Find Results tab, Sublime-style.
+//! matches land in a read-only Find Results tab.
 //!
 //! The panel holds plain text fields, not a picker, so its keys (Enter, Tab,
 //! Escape) are bound in its own `FindPanel` key context. The results tab is an
