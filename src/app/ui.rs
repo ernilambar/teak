@@ -102,10 +102,19 @@ const COLOR_ICON_PIXELS: i32 = 28;
 /// The status bar's totals: `1,234 words · 5,678 chars`. Above the word-count
 /// limit only the character count is shown.
 fn count_label(words: usize, chars: usize) -> String {
+    let chars_label = format!(
+        "{} {}",
+        grouped(chars),
+        if chars == 1 { "char" } else { "chars" }
+    );
     if chars > MAX_COUNT_CHARS {
-        return format!("{} chars", grouped(chars));
+        return chars_label;
     }
-    format!("{} words · {} chars", grouped(words), grouped(chars))
+    format!(
+        "{} {} · {chars_label}",
+        grouped(words),
+        if words == 1 { "word" } else { "words" }
+    )
 }
 
 /// `1234` as `1,234`.
@@ -1189,7 +1198,10 @@ mod tests {
     #[test]
     fn labels_words_and_chars() {
         assert_eq!(count_label(1_234, 5_678), "1,234 words · 5,678 chars");
+        assert_eq!(count_label(1, 1), "1 word · 1 char");
+        assert_eq!(count_label(0, 0), "0 words · 0 chars");
         // Past the limit only the character count is kept.
         assert_eq!(count_label(0, 1_000_001), "1,000,001 chars");
+        assert_eq!(count_label(1, 1_000_001), "1,000,001 chars");
     }
 }

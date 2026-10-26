@@ -8,7 +8,7 @@
 use objc2::MainThreadMarker;
 use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSFont, NSPrintInfo, NSPrintOperation, NSTextView};
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSPoint, NSRect, NSString};
 
 /// Point size of the fixed-pitch font the printed document uses.
 const PRINT_FONT_SIZE: f64 = 11.;
@@ -24,20 +24,20 @@ pub(crate) fn print_text(text: &str, title: &str) {
 
     autoreleasepool(|_| {
         let print_info = NSPrintInfo::sharedPrintInfo();
-        // Lay the text out in the imageable area of the page; NSTextView
-        // paginates the text to the width it is given.
-        let paper = print_info.paperSize();
-        let width = paper.width - print_info.leftMargin() - print_info.rightMargin();
-        let height = paper.height - print_info.topMargin() - print_info.bottomMargin();
-        let frame = NSRect::new(
-            NSPoint::new(0., 0.),
-            NSSize::new(width.max(1.), height.max(1.)),
-        );
+        // Lay the text out in the imageable area of the page. It already
+        // accounts for the user's paper size, orientation and margins, so the
+        // view prints one page's worth at a time and NSTextView paginates the
+        // text to the width it is given.
+        let frame = NSRect::new(NSPoint::ZERO, print_info.imageablePageBounds().size);
 
         let view = NSTextView::initWithFrame(mtm.alloc::<NSTextView>(), frame);
         view.setEditable(false);
         view.setSelectable(false);
         view.setRichText(false);
+        // The canonical print setup: wrap to the page width and let the view
+        // grow along the text so pagination stays predictable.
+        view.setVerticallyResizable(true);
+        view.setHorizontallyResizable(false);
         if let Some(font) = NSFont::userFixedPitchFontOfSize(PRINT_FONT_SIZE) {
             view.setFont(Some(&font));
         }

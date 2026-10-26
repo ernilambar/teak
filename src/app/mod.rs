@@ -638,8 +638,10 @@ impl TeakApp {
             return;
         };
         // `set_value` clears the undo history and emits no change event, so the
-        // refreshed tab is not marked dirty by this reload.
+        // refreshed tab is not marked dirty by this reload. The missing change
+        // event also skips the counts subscription, so refresh them here.
         editor.update(cx, |state, cx| state.set_value(contents, window, cx));
+        self.sync_counts(cx);
     }
 
     fn on_next_tab(&mut self, _: &NextTab, window: &mut Window, cx: &mut Context<Self>) {
