@@ -87,8 +87,8 @@ pub use crate::number_input::{NumberInputEvent, NumberStep};
 pub use base::{InputBase, InputContextMenuCapabilities, InputStyles};
 pub use cursor::Selection;
 pub use decorations::{
-    RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, TextDecoration,
-    TextDecorationCollection,
+    GutterMark, GutterMarkKind, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle,
+    TextDecoration, TextDecorationCollection,
 };
 pub use diagnostics::{
     Diagnostic, DiagnosticEntry, DiagnosticRelatedInformation, DiagnosticSet, DiagnosticSeverity,

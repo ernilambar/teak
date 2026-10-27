@@ -89,7 +89,9 @@ in headless environments.
   Group new settings keys by area (`editor.*`, `ui.*`).
 - `vendor/gpui-base` is gpui-base with `patches/gpui-base.patch` applied, wired in through
   `[patch.crates-io]`. It adds `selected_ranges()` (read every selection); upstream
-  `add_selection` covers adding them.
+  `add_selection` covers adding them. It also adds the gutter-mark API
+  (`GutterMark` / `EditorState::set_gutter_marks`), which paints changed-line bars in the
+  gutter's leading padding; `git.rs` supplies the lines and `app/mod.rs` the colors.
   Never edit `vendor/` without regenerating the patch: `./scripts/vendor-gpui-base.sh
   --diff`. After bumping `gpui-kit`, run `cargo fetch`, then
   `./scripts/vendor-gpui-base.sh <version>` with the gpui-base version from `Cargo.lock`;

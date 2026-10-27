@@ -27,6 +27,7 @@ use super::{
     blink_cursor::BlinkCursor,
     change::Change,
     cursor::{CursorSelection, Selections},
+    decorations::GutterMark,
     element::{
         EditorScrollbar, EditorScrollbarSnapshot, LongestLineKey, TextElement,
         clamp_horizontal_scroll_offset,
@@ -516,6 +517,9 @@ pub struct InputBaseState<M: InputModeKind> {
     /// The widest measured unwrapped line width and what it was measured for.
     pub(super) longest_line_width: Cell<Option<(LongestLineKey, Pixels)>>,
     pub(super) editor_paddings: Edges<Pixels>,
+    /// Changed-line marks the application keeps in step with its own diff.
+    /// See [`GutterMark`].
+    pub(crate) gutter_marks: Vec<GutterMark>,
     /// The style this state paints with: what was projected onto it, with
     /// every colour left unset resolved from the palette that is current. It
     /// is rebuilt at the top of every render, which is what keeps it current
@@ -1003,6 +1007,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             editor_scrollbar_snapshot: Cell::new(None),
             longest_line_width: Cell::new(None),
             editor_paddings: Edges::default(),
+            gutter_marks: Vec::new(),
             deferred_scroll_offset: None,
             placeholder: SharedString::default(),
             mask_pattern: MaskPattern::default(),

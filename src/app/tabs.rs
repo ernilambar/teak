@@ -360,6 +360,7 @@ impl TeakApp {
                 this.set_dirty(editor.entity_id(), true, cx);
                 this.sync_preview(&editor, cx);
                 this.sync_counts(cx);
+                this.schedule_git_marks(editor.entity_id(), cx);
             }
         });
         let cursor_subscription = cx.observe(&editor, |this, editor, cx| {
@@ -390,6 +391,9 @@ impl TeakApp {
         self.chrome.sync_cursor(editor.read(cx));
         self.sync_counts(cx);
         self.save_session(cx);
+        // The marks land as soon as git status knows about the file, which can
+        // be after the tab exists.
+        self.refresh_git_marks(cx);
         cx.notify();
     }
 

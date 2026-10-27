@@ -11,6 +11,7 @@ mod ui;
 mod workspace;
 
 use self::chrome::Chrome;
+use self::files::LARGE_FILE_BYTES;
 use self::overlays::{FindText, Overlays};
 use self::preferences::SettingsState;
 use self::tabs::{OpenTab, Preview, TabSet};
@@ -21,9 +22,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::input::GutterMark;
 use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _,
-    input::{TabSize, WrappingIndent},
+    input::{EditorState, TabSize, WrappingIndent},
     link::Link,
     notification::Notification,
     resizable::ResizableState,
@@ -74,6 +76,11 @@ pub(crate) const WINDOW_TITLE: &str = "Teak";
 /// reports hundreds, and only the last of them matters.
 const WATCH_SETTLE: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// How long typing may pause before the buffer's changed lines are re-read.
+/// Long enough that a burst of keystrokes costs one read, short enough that
+/// the marks keep up with the text.
+const GIT_MARKS_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// Whether a changed path can move git state. Anything inside a `.git`
 /// directory can (a commit or checkout writes only there), except the bulk
 /// stores that `gc`, `fetch` and `clone` churn without changing what
@@ -89,6 +96,23 @@ fn git_may_have_changed(path: &Path, roots: &[PathBuf]) -> bool {
         return !matches!(after, Some("objects" | "logs" | "lfs" | "modules"));
     }
     !is_noise_path(path, roots)
+}
+
+/// The gutter color for a changed line: green for an addition, blue for a
+/// modification and red for a removal. Yellow is left to warnings and search
+/// matches, so a changed line reads as information instead of a problem.
+fn line_change_color(kind: git::LineKind, cx: &App) -> Hsla {
+    let theme = cx.theme();
+    match kind {
+        git::LineKind::Added => theme.success,
+        git::LineKind::Modified => theme.info,
+        git::LineKind::Deleted => theme.danger,
+    }
+}
+
+/// Drops a tab's gutter marks, for a file git cannot describe.
+fn clear_gutter_marks(editor: &Entity<EditorState>, cx: &mut App) {
+    editor.update(cx, |state, cx| state.set_gutter_marks(Vec::new(), cx));
 }
 
 pub(crate) struct TeakApp {
@@ -109,6 +133,9 @@ pub(crate) struct TeakApp {
     chrome: Chrome,
     /// The user's preferences and the Settings overlay's own state.
     settings: SettingsState,
+    /// Bumped whenever line marks are scheduled, so a read that lands after a
+    /// newer one started is dropped instead of painting stale lines.
+    git_marks_generation: u64,
 }
 
 impl TeakApp {
@@ -132,6 +159,7 @@ impl TeakApp {
             overlays: Overlays::new(),
             chrome: Chrome::new(),
             settings: SettingsState::new(settings),
+            git_marks_generation: 0,
         };
         app.workspace.reload();
         app.refresh_menus(cx);
@@ -362,6 +390,9 @@ impl TeakApp {
                         // A repository may have appeared since the last read,
                         // and its git directory needs following.
                         this.workspace.sync_watches();
+                        // Commits, checkouts and saves all land here, so the
+                        // editor's marks follow them too.
+                        this.refresh_git_marks(cx);
                         cx.notify();
                         again
                     })
@@ -372,6 +403,131 @@ impl TeakApp {
             }
         })
         .detach();
+    }
+
+    /// Re-reads the changed lines of every open file in a repository, off the
+    /// main thread, and repaints their marks.
+    pub(crate) fn refresh_git_marks(&mut self, cx: &mut Context<Self>) {
+        self.read_git_marks(None, cx);
+    }
+
+    /// Reads the marks of the tab holding `editor`, or of every tab. Comparisons
+    /// against `HEAD` are born of the buffer, not the file on disk, so unsaved
+    /// edits show up as soon as typing settles. Folders outside a repository
+    /// contribute nothing and cost no `git` call.
+    fn read_git_marks(&mut self, editor: Option<EntityId>, cx: &mut Context<Self>) {
+        let generation = self.bump_git_marks();
+        let mut jobs = Vec::new();
+        for ix in 0..self.tabs.len() {
+            let Some(tab) = self.tabs.get(ix) else {
+                continue;
+            };
+            if editor.is_some_and(|editor| tab.editor.entity_id() != editor) {
+                continue;
+            }
+            let Some(path) = tab.path.clone() else {
+                continue;
+            };
+            if !self.in_repository(&path) {
+                clear_gutter_marks(&tab.editor, cx);
+                continue;
+            }
+            // A huge file is opened as Plain Text for speed; marking it would
+            // copy the whole buffer on every pause in typing.
+            let text = tab.editor.read(cx).text().to_string();
+            if text.len() > LARGE_FILE_BYTES {
+                clear_gutter_marks(&tab.editor, cx);
+                continue;
+            }
+            let status = self.workspace.git().status(&path);
+            jobs.push((ix, path, text, status));
+        }
+        if jobs.is_empty() {
+            return;
+        }
+
+        cx.spawn(async move |this, cx| {
+            let spans = cx
+                .background_executor()
+                .spawn(async move {
+                    jobs.into_iter()
+                        .map(|(ix, path, text, status)| {
+                            let changes = git::line_changes(&path, &text, status);
+                            (ix, git::gutter_lines(&changes, &text))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.git_marks_generation != generation {
+                    return;
+                }
+                for (ix, lines) in spans {
+                    this.paint_git_marks(ix, lines, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// True when `path` can be compared with `HEAD`: it sits under a workspace
+    /// folder git holds a branch for, or a repository holds it directly, as
+    /// when a single file is opened without its folder.
+    fn in_repository(&self, path: &Path) -> bool {
+        if self
+            .workspace
+            .roots()
+            .iter()
+            .any(|root| path.starts_with(root) && self.workspace.git().branch(root).is_some())
+        {
+            return true;
+        }
+        // A `.git` entry is a directory in a normal clone and a file in a
+        // worktree or submodule; both name a repository.
+        path.ancestors()
+            .skip(1)
+            .any(|folder| folder.join(".git").exists())
+    }
+
+    /// Re-reads `editor`'s marks once typing settles. Each edit supersedes the
+    /// wait before it, so a burst of keystrokes costs one read at most.
+    pub(crate) fn schedule_git_marks(&mut self, editor: EntityId, cx: &mut Context<Self>) {
+        let generation = self.bump_git_marks();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(GIT_MARKS_SETTLE).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.git_marks_generation == generation {
+                    this.read_git_marks(Some(editor), cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn bump_git_marks(&mut self) -> u64 {
+        self.git_marks_generation = self.git_marks_generation.wrapping_add(1);
+        self.git_marks_generation
+    }
+
+    /// Replaces one tab's gutter with the lines read from its buffer.
+    fn paint_git_marks(
+        &mut self,
+        ix: usize,
+        lines: Vec<(u32, git::LineKind)>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(ix) else {
+            return;
+        };
+        let marks = lines
+            .into_iter()
+            .map(|(line, kind)| match kind {
+                git::LineKind::Deleted => GutterMark::deleted(line, line_change_color(kind, cx)),
+                _ => GutterMark::changed(line, line_change_color(kind, cx)),
+            })
+            .collect();
+        tab.editor
+            .update(cx, |state, cx| state.set_gutter_marks(marks, cx));
     }
 
     fn active(&self) -> Option<&OpenTab> {
@@ -1400,6 +1556,8 @@ impl Render for TeakApp {
 /// the same setup `main` performs: the kit initialized and the keymap bound.
 #[cfg(test)]
 pub(super) mod test_support {
+    use std::path::PathBuf;
+
     use gpui_kit::{
         AnyWindowHandle, AppContext as _, Entity, TestAppContext, WindowOptions, open_window,
     };
@@ -1411,6 +1569,14 @@ pub(super) mod test_support {
 
     /// A headless window running the app with no workspace folders open.
     pub(super) fn open_app(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<TeakApp>) {
+        open_app_in(cx, Vec::new())
+    }
+
+    /// The same window, with `roots` open as workspace folders.
+    pub(super) fn open_app_in(
+        cx: &mut TestAppContext,
+        roots: Vec<PathBuf>,
+    ) -> (AnyWindowHandle, Entity<TeakApp>) {
         cx.update(|cx| {
             gpui_kit::init(cx);
             keymap::bind_keys(cx);
@@ -1418,7 +1584,7 @@ pub(super) mod test_support {
         cx.update(|cx| {
             let services = AppServices::new(cx, Vec::new());
             open_window(WindowOptions::default(), cx, |_window, cx| {
-                cx.new(|cx| TeakApp::new(Vec::new(), Settings::default(), services, 0, None, cx))
+                cx.new(|cx| TeakApp::new(roots, Settings::default(), services, 0, None, cx))
             })
             .unwrap()
         })
@@ -1433,7 +1599,111 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::git_may_have_changed;
-    use super::test_support::open_app;
+    use super::test_support::{open_app, open_app_in};
+
+    /// Initializes a repository in `dir` and commits what it holds. A machine
+    /// without git leaves the caller with nothing to check.
+    fn commit_all(dir: &Path) -> bool {
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .is_ok_and(|output| output.status.success())
+        };
+        run(&["init", "-q", "-b", "trunk"])
+            && run(&["add", "."])
+            && run(&[
+                "-c",
+                "user.email=a@b",
+                "-c",
+                "user.name=a",
+                "commit",
+                "-qm",
+                "init",
+            ])
+    }
+
+    /// The marks follow the buffer, not just the file on disk, so an unsaved
+    /// edit is painted straight away, and reverting it clears them again.
+    #[gpui_kit::test]
+    async fn changed_lines_are_marked_from_the_buffer(cx: &mut TestAppContext) {
+        let root = std::env::temp_dir().join(format!("teak-marks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("notes.txt");
+        std::fs::write(&path, "one\ntwo\nthree\n").unwrap();
+        if !commit_all(&root) {
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+
+        let (handle, app) = open_app_in(cx, vec![root.clone()]);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let content = super::files::read_file(&path).unwrap();
+                this.add_file_tab(path.clone(), content, window, cx);
+            });
+        })
+        .unwrap();
+        // The window bootstrap does this; the harness opens the app directly.
+        cx.update(|cx| app.update(cx, |this, cx| this.refresh_git_status(cx)));
+        cx.run_until_parked();
+
+        let marks = |cx: &mut TestAppContext| {
+            cx.update(|cx| {
+                let this = app.read(cx);
+                let editor = &this.tabs.active().unwrap().editor;
+                editor
+                    .read(cx)
+                    .gutter_marks()
+                    .iter()
+                    .map(|mark| mark.line)
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert!(marks(cx).is_empty(), "a clean file has no marks");
+
+        let editor = cx
+            .update_window(handle, |_, window, cx| {
+                let editor = app.read(cx).tabs.active().unwrap().editor.clone();
+                editor.update(cx, |state, cx| {
+                    state.set_value("one\nchanged\nthree\nfour\n", window, cx);
+                });
+                app.update(cx, |this, cx| {
+                    this.schedule_git_marks(editor.entity_id(), cx)
+                });
+                editor
+            })
+            .unwrap();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(400));
+        cx.run_until_parked();
+        // Painting a frame runs the gutter path the marks are drawn in.
+        cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+            .unwrap();
+
+        assert_eq!(marks(cx), vec![2, 4], "the changed line and the added one");
+
+        cx.update_window(handle, |_, window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_value("one\ntwo\nthree\n", window, cx);
+            });
+            app.update(cx, |this, cx| {
+                this.schedule_git_marks(editor.entity_id(), cx)
+            });
+        })
+        .unwrap();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(400));
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+            .unwrap();
+
+        assert!(marks(cx).is_empty(), "back at the commit, nothing to mark");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// Cmd+Shift+N goes through the app root, creates a second window, and the
     /// registry keeps both alive.
