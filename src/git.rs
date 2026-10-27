@@ -1,11 +1,11 @@
-//! Working-tree status for the sidebar tree.
+//! Working-tree status and branch for the workspace.
 //!
 //! The app needs a file's state, not repository objects, so this shells out to
 //! `git status` instead of linking a git library: macOS always ships a usable
 //! `git`, and the short calls it makes stay off the main thread.
 //!
-//! GPUI-free on purpose: [`statuses`] takes the workspace folders and returns
-//! what the tree renderer queries by path.
+//! GPUI-free on purpose: [`state`] takes the workspace folders and returns
+//! what the tree and the status bar query by path.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -39,15 +39,27 @@ impl Status {
     }
 }
 
-/// Changed files and, for every folder, the most serious change beneath it,
-/// so a collapsed folder can still show what is in it.
-#[derive(Debug, Default)]
-pub(crate) struct Statuses {
-    files: HashMap<PathBuf, Status>,
-    folders: HashMap<PathBuf, Status>,
+/// The checked-out branch of one repository.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Branch {
+    /// The branch name, or the short commit id when HEAD is detached.
+    pub(crate) name: String,
+    /// Commits this branch has that its upstream does not, and the reverse.
+    pub(crate) ahead: u32,
+    pub(crate) behind: u32,
 }
 
-impl Statuses {
+/// One read of git state for the workspace: the changed files, the most
+/// serious change beneath each folder, and the branch of each workspace
+/// folder's repository.
+#[derive(Debug, Default)]
+pub(crate) struct GitState {
+    files: HashMap<PathBuf, Status>,
+    folders: HashMap<PathBuf, Status>,
+    branches: HashMap<PathBuf, Branch>,
+}
+
+impl GitState {
     pub(crate) fn status(&self, path: &Path) -> Option<Status> {
         self.files.get(path).copied()
     }
@@ -55,6 +67,11 @@ impl Statuses {
     /// The most serious change somewhere beneath `path`, for a folder row.
     pub(crate) fn folder_status(&self, path: &Path) -> Option<Status> {
         self.folders.get(path).copied()
+    }
+
+    /// The branch of the repository `root` belongs to, when it has one.
+    pub(crate) fn branch(&self, root: &Path) -> Option<&Branch> {
+        self.branches.get(root)
     }
 
     /// Records `relative`, a path from `git status` read in `root`, along with
@@ -83,10 +100,11 @@ impl Statuses {
     }
 }
 
-/// Reads the status of every workspace folder. A folder outside a repository
-/// contributes nothing; a folder inside one reports only its own subtree.
-pub(crate) fn statuses(roots: &[PathBuf]) -> Statuses {
-    let mut statuses = Statuses::default();
+/// Reads the status and branch of every workspace folder. A folder outside a
+/// repository contributes nothing; a folder inside one reports only its own
+/// subtree and its repository's branch.
+pub(crate) fn state(roots: &[PathBuf]) -> GitState {
+    let mut state = GitState::default();
     for root in roots {
         let Some(prefix) = show_prefix(root) else {
             continue;
@@ -94,9 +112,9 @@ pub(crate) fn statuses(roots: &[PathBuf]) -> Statuses {
         let Some(output) = run_status(root) else {
             continue;
         };
-        parse_into(&output, root, &prefix, &mut statuses);
+        parse_into(&output, root, &prefix, &mut state);
     }
-    statuses
+    state
 }
 
 /// The folder's path inside its repository, such as `src/`, or empty at the
@@ -129,7 +147,15 @@ fn run_status(root: &Path) -> Option<Vec<u8>> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["status", "--porcelain=v2", "-z", "--untracked-files=normal"])
+        .args([
+            "status",
+            "--porcelain=v2",
+            // Branch headers name the branch and count its divergence from the
+            // upstream, which the status bar shows.
+            "--branch",
+            "-z",
+            "--untracked-files=normal",
+        ])
         .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()?;
@@ -137,10 +163,15 @@ fn run_status(root: &Path) -> Option<Vec<u8>> {
 }
 
 /// Walks the NUL-separated records of `output`, recording every changed path
-/// that sits under `root`.
-fn parse_into(output: &[u8], root: &Path, prefix: &[u8], statuses: &mut Statuses) {
+/// that sits under `root` and the repository's branch.
+fn parse_into(output: &[u8], root: &Path, prefix: &[u8], state: &mut GitState) {
     let mut records = output.split(|byte| *byte == 0);
+    let mut branch = BranchRead::default();
     while let Some(record) = records.next() {
+        if let Some(header) = record.strip_prefix(b"# ") {
+            branch.record(header);
+            continue;
+        }
         let Some((start, status)) = parse_record(record) else {
             continue;
         };
@@ -153,7 +184,52 @@ fn parse_into(output: &[u8], root: &Path, prefix: &[u8], statuses: &mut Statuses
         let Some(relative) = record[start..].strip_prefix(prefix) else {
             continue;
         };
-        statuses.insert(root, relative, status);
+        state.insert(root, relative, status);
+    }
+    if let Some(branch) = branch.finish() {
+        state.branches.insert(root.to_path_buf(), branch);
+    }
+}
+
+/// The `# branch.*` headers of one repository, collected as they arrive.
+#[derive(Default)]
+struct BranchRead {
+    head: Option<String>,
+    oid: Option<String>,
+    ahead: u32,
+    behind: u32,
+}
+
+impl BranchRead {
+    fn record(&mut self, header: &[u8]) {
+        let header = String::from_utf8_lossy(header);
+        if let Some(head) = header.strip_prefix("branch.head ") {
+            self.head = Some(head.to_string());
+        } else if let Some(oid) = header.strip_prefix("branch.oid ") {
+            self.oid = Some(oid.to_string());
+        } else if let Some(divergence) = header.strip_prefix("branch.ab ") {
+            let mut counts = divergence.split_whitespace();
+            if let (Some(ahead), Some(behind)) = (counts.next(), counts.next()) {
+                self.ahead = ahead.trim_start_matches('+').parse().unwrap_or(0);
+                self.behind = behind.trim_start_matches('-').parse().unwrap_or(0);
+            }
+        }
+    }
+
+    /// `None` when the output carried no branch header at all, which is what a
+    /// repository-less folder looks like.
+    fn finish(self) -> Option<Branch> {
+        let name = match self.head? {
+            // Detached HEAD is reported as a marker, so the short commit id is
+            // the only thing that names what is checked out.
+            head if head == "(detached)" => self.oid.as_deref()?.chars().take(7).collect(),
+            head => head,
+        };
+        Some(Branch {
+            name,
+            ahead: self.ahead,
+            behind: self.behind,
+        })
     }
 }
 
@@ -220,8 +296,8 @@ fn trim_trailing_slashes(bytes: &[u8]) -> &[u8] {
 mod tests {
     use super::*;
 
-    fn parse(records: &str) -> Statuses {
-        let mut statuses = Statuses::default();
+    fn parse(records: &str) -> GitState {
+        let mut statuses = GitState::default();
         parse_into(records.as_bytes(), Path::new("/repo"), b"", &mut statuses);
         statuses
     }
@@ -376,7 +452,7 @@ mod tests {
 
     #[test]
     fn a_folder_inside_a_repository_reports_only_its_own_subtree() {
-        let mut statuses = Statuses::default();
+        let mut statuses = GitState::default();
         parse_into(
             b"1 .M N... 100644 100644 100644 aaa bbb src/main.rs\0\
               1 .M N... 100644 100644 100644 aaa bbb lib/x.rs\0",
@@ -397,6 +473,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn branch_headers_name_the_branch_and_its_divergence() {
+        let state = parse(
+            "# branch.oid aaa111\0# branch.head main\0\
+             # branch.upstream origin/main\0# branch.ab +2 -3\0",
+        );
+
+        assert_eq!(
+            state.branch(Path::new("/repo")),
+            Some(&Branch {
+                name: "main".to_string(),
+                ahead: 2,
+                behind: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn a_detached_head_is_named_by_its_short_commit() {
+        let state = parse("# branch.oid 0123456789abcdef\0# branch.head (detached)\0");
+
+        assert_eq!(
+            state
+                .branch(Path::new("/repo"))
+                .map(|branch| branch.name.as_str()),
+            Some("0123456")
+        );
+    }
+
+    #[test]
+    fn an_empty_repository_keeps_its_unborn_branch_name() {
+        let state = parse("# branch.oid (initial)\0# branch.head trunk\0");
+
+        assert_eq!(
+            state
+                .branch(Path::new("/repo"))
+                .map(|branch| branch.name.as_str()),
+            Some("trunk")
+        );
+    }
+
+    #[test]
+    fn output_without_headers_has_no_branch() {
+        let state = parse("1 .M N... 100644 100644 100644 aaa bbb a.rs\0");
+        assert_eq!(state.branch(Path::new("/repo")), None);
+    }
+
     /// Runs `git` in `dir` and says whether it succeeded. A machine without git
     /// just skips the check below.
     fn git(dir: &Path, args: &[&str]) -> bool {
@@ -415,7 +538,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/kept.rs"), "x\n").unwrap();
 
-        let committed = git(&dir, &["init", "-q"])
+        let committed = git(&dir, &["init", "-q", "-b", "trunk"])
             && git(&dir, &["add", "."])
             && git(
                 &dir,
@@ -437,7 +560,7 @@ mod tests {
         std::fs::write(dir.join("src/kept.rs"), "changed\n").unwrap();
         std::fs::write(dir.join("src/new.rs"), "new\n").unwrap();
 
-        let found = statuses(std::slice::from_ref(&dir));
+        let found = state(std::slice::from_ref(&dir));
 
         assert_eq!(
             found.status(&dir.join("src/kept.rs")),
@@ -452,6 +575,10 @@ mod tests {
             Some(Status::Modified)
         );
         assert_eq!(found.folder_status(&dir), Some(Status::Modified));
+        assert_eq!(
+            found.branch(&dir).map(|branch| branch.name.as_str()),
+            Some("trunk")
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

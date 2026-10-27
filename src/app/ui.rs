@@ -25,7 +25,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::file_icons::{file_icon, folder_icon};
-use crate::git::Status;
+use crate::git::{Branch, Status};
 use crate::language::{LANGUAGES, editor_language_id};
 use crate::paths::{display_path, file_name, format_size};
 use crate::settings::IconStyle;
@@ -92,6 +92,38 @@ fn status_dot(visible: bool, color: Hsla) -> Div {
         .when(visible, |this| {
             this.child(div().size(px(6.)).rounded_full().bg(color))
         })
+}
+
+/// The branch glyph in the status bar. Vendored from Lucide because the icon
+/// set the app registers is the small default subset, which has no git icons;
+/// embedding the full catalogue for one glyph would cost megabytes.
+const GIT_BRANCH_ICON: &[u8] = include_bytes!("../../assets/icons/git-branch.svg");
+
+/// The status-bar text for a branch: its name, and how far it has diverged
+/// from its upstream when it tracks one.
+fn branch_label(branch: &Branch) -> String {
+    let mut label = branch.name.clone();
+    if branch.ahead > 0 {
+        label.push_str(&format!(" ↑{}", branch.ahead));
+    }
+    if branch.behind > 0 {
+        label.push_str(&format!(" ↓{}", branch.behind));
+    }
+    label
+}
+
+/// The git change tint: the theme's warning yellow, desaturated and pulled
+/// halfway toward the text lightness. The raw warning is bright enough to
+/// compete with the row content, and on light themes it is too pale to read at
+/// this size; the pull gives it the softer, sandier tone of a change marker
+/// while staying inside the theme's palette.
+fn change_tint(warning: Hsla, foreground: Hsla) -> Hsla {
+    hsla(
+        warning.h,
+        warning.s * 0.5,
+        warning.l + (foreground.l - warning.l) * 0.5,
+        warning.a,
+    )
 }
 
 /// Logical edge length of a file-type icon, matching `Size::Small` (0.875rem).
@@ -663,7 +695,8 @@ impl TeakApp {
         let selected = self.workspace.selected() == Some(path);
         let expanded = self.workspace.is_expanded(path);
         let muted = cx.theme().muted_foreground;
-        let git = self.workspace.statuses();
+        let git = self.workspace.git();
+        let tint = change_tint(cx.theme().warning, cx.theme().foreground);
         // A file shows its own state. A folder shows the most serious change
         // beneath it, or its own entry when it is untracked, so the cue
         // survives collapsing it.
@@ -674,13 +707,13 @@ impl TeakApp {
         };
         let status_color = status.map(|status| match status {
             Status::Untracked | Status::Added => cx.theme().success,
-            Status::Modified | Status::Renamed => cx.theme().warning,
+            Status::Modified | Status::Renamed => tint,
             Status::Deleted | Status::Conflicted => cx.theme().danger,
         });
         // A modification tints the name, for a file and for every folder above
         // it, so it is visible while the folder is still collapsed.
         let name_color = match status.or(below) {
-            Some(Status::Modified | Status::Renamed) => Some(cx.theme().warning),
+            Some(Status::Modified | Status::Renamed) => Some(tint),
             _ => None,
         };
         let folder_changed = below.is_some();
@@ -1204,6 +1237,37 @@ impl TeakApp {
                 .left(divider())
                 .left(div().child(count_label(words, chars)));
         }
+        // The branch of the repository the active tab lives in, or of the only
+        // workspace folder when the tab has no path yet.
+        let branch = self
+            .workspace
+            .branch_for(self.active().and_then(|tab| tab.path.as_deref()));
+        if let Some(branch) = branch {
+            status = status
+                .right(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        // A line-art branch glyph, monochrome: the Git logo is
+                        // a solid shape that turns into a blob at this size.
+                        .child(
+                            Icon::empty()
+                                .data(GIT_BRANCH_ICON)
+                                .with_size(Size::XSmall)
+                                .flex_none(),
+                        )
+                        .child(
+                            div()
+                                // A long branch name must not crowd out the
+                                // rest of the status bar.
+                                .max_w(px(200.))
+                                .truncate()
+                                .child(branch_label(branch)),
+                        ),
+                )
+                .right(divider());
+        }
         status
             .right(language_button)
             .right(divider())
@@ -1216,12 +1280,43 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use gpui_kit::{DevicePixels, RenderImage, SvgRenderer, SvgSize};
+    use gpui_kit::{DevicePixels, RenderImage, SvgRenderer, SvgSize, hsla};
 
     use crate::file_icons::file_icon;
+    use crate::git::Branch;
 
     use super::COLOR_ICON_PIXELS;
-    use super::{count_label, grouped};
+    use super::{GIT_BRANCH_ICON, branch_label, change_tint, count_label, grouped};
+
+    #[test]
+    fn the_status_bar_git_glyph_is_a_valid_svg() {
+        let renderer = SvgRenderer::new(Arc::new(()));
+        assert!(renderer.parse_svg(GIT_BRANCH_ICON).is_ok());
+    }
+
+    #[test]
+    fn branch_labels_show_divergence_only_when_there_is_some() {
+        let branch = |name: &str, ahead, behind| Branch {
+            name: name.to_string(),
+            ahead,
+            behind,
+        };
+
+        assert_eq!(branch_label(&branch("main", 0, 0)), "main");
+        assert_eq!(branch_label(&branch("main", 2, 0)), "main ↑2");
+        assert_eq!(branch_label(&branch("main", 0, 3)), "main ↓3");
+        assert_eq!(branch_label(&branch("main", 2, 3)), "main ↑2 ↓3");
+    }
+
+    #[test]
+    fn change_tint_halves_saturation_and_meets_the_foreground_halfway() {
+        let tint = change_tint(hsla(0.25, 0.5, 0.5, 1.), hsla(0., 0., 0.75, 1.));
+
+        assert_eq!(tint.h, 0.25);
+        assert_eq!(tint.s, 0.25);
+        assert_eq!(tint.l, 0.625);
+        assert_eq!(tint.a, 1.);
+    }
 
     fn rasterize(bytes: &'static [u8]) -> Arc<RenderImage> {
         let renderer = SvgRenderer::new(Arc::new(()));

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::*;
 
-use crate::git::Statuses;
+use crate::git::{Branch, GitState};
 use crate::paths::{DirEntry, RootConflict, read_dir, remap_prefix, root_conflict};
 use crate::session::WindowSession;
 
@@ -59,9 +59,9 @@ pub(super) struct Workspace {
     /// The flattened, visible rows derived from `dir_cache` + `expanded`,
     /// rebuilt only when the tree changes.
     rows: Vec<TreeRow>,
-    /// Git status of the entries under every root, plus the folders holding a
-    /// change. Read in the background by the app, never by the tree itself.
-    statuses: Statuses,
+    /// Git status and branch of the entries under every root, plus the folders
+    /// holding a change. Read in the background by the app, never by the tree.
+    git: GitState,
     /// True while a status read is in flight. A reload that arrives meanwhile
     /// sets `status_pending` instead of starting a second process.
     status_running: bool,
@@ -103,7 +103,7 @@ impl Workspace {
             selected: None,
             dir_cache: HashMap::new(),
             rows: Vec::new(),
-            statuses: Statuses::default(),
+            git: GitState::default(),
             status_running: false,
             status_pending: false,
             scroll: UniformListScrollHandle::default(),
@@ -134,8 +134,23 @@ impl Workspace {
         &self.rows
     }
 
-    pub(super) fn statuses(&self) -> &Statuses {
-        &self.statuses
+    pub(super) fn git(&self) -> &GitState {
+        &self.git
+    }
+
+    /// The branch to show for `path`, falling back to the only root when no
+    /// tab carries a path. Roots never overlap, so the first match decides.
+    pub(super) fn branch_for(&self, path: Option<&Path>) -> Option<&Branch> {
+        let root = match path.and_then(|path| {
+            self.roots
+                .iter()
+                .find(|root| path.starts_with(root.as_path()))
+        }) {
+            Some(root) => root,
+            None if self.roots.len() == 1 => &self.roots[0],
+            None => return None,
+        };
+        self.git.branch(root)
     }
 
     /// Claims the right to start a status read. `false` means one is already
@@ -152,9 +167,9 @@ impl Workspace {
 
     /// Stores a finished read and says whether another was asked for while it
     /// ran. The tree repaints on its own; callers only need to notify.
-    pub(super) fn finish_status_read(&mut self, statuses: Statuses) -> bool {
+    pub(super) fn finish_status_read(&mut self, git: GitState) -> bool {
         self.status_running = false;
-        self.statuses = statuses;
+        self.git = git;
         std::mem::take(&mut self.status_pending)
     }
 
@@ -360,7 +375,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::{AddRoot, Workspace};
-    use crate::git::Statuses;
+    use crate::git::GitState;
     use crate::paths::file_name;
 
     /// An empty directory named uniquely per test.
@@ -506,8 +521,8 @@ mod tests {
         assert!(!workspace.start_status_read());
         assert!(!workspace.start_status_read());
 
-        assert!(workspace.finish_status_read(Statuses::default()));
+        assert!(workspace.finish_status_read(GitState::default()));
         assert!(workspace.start_status_read());
-        assert!(!workspace.finish_status_read(Statuses::default()));
+        assert!(!workspace.finish_status_read(GitState::default()));
     }
 }

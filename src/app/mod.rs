@@ -277,7 +277,7 @@ impl TeakApp {
                 };
                 let statuses = cx
                     .background_executor()
-                    .spawn(async move { git::statuses(&roots) })
+                    .spawn(async move { git::state(&roots) })
                     .await;
                 let again = this
                     .update(cx, |this, cx| {
