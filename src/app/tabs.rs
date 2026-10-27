@@ -35,6 +35,10 @@ pub(super) struct OpenTab {
     /// The file's modification time when last read or written, compared on
     /// activation and before saving to spot edits made by other programs.
     pub(super) disk_modified: Option<SystemTime>,
+    /// A later on-disk version the user chose to keep the buffer over. Compared
+    /// only to stop the same change asking again; saving still warns, because
+    /// [`Self::disk_modified`] stays behind.
+    pub(super) dismissed_disk_change: Option<SystemTime>,
     pub(super) format: TextFormat,
     pub(super) editor: Entity<EditorState>,
     /// The rendered view shown in place of the editor while preview is on.
@@ -367,6 +371,7 @@ impl TeakApp {
             language_override: false,
             dirty: false,
             disk_modified,
+            dismissed_disk_change: None,
             format: TextFormat::default(),
             editor: editor.clone(),
             preview: None,
@@ -927,6 +932,7 @@ mod tests {
                 language_override: false,
                 dirty: false,
                 disk_modified: None,
+                dismissed_disk_change: None,
                 format: TextFormat::default(),
                 editor,
                 preview: None,

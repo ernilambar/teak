@@ -16,6 +16,7 @@ use gpui_kit::*;
 use crate::git::{Branch, GitState};
 use crate::paths::{DirEntry, RootConflict, read_dir, remap_prefix, root_conflict};
 use crate::session::WindowSession;
+use crate::watcher::Watcher;
 
 /// Sidebar width used when the session does not carry one.
 const DEFAULT_SIDEBAR_WIDTH: u32 = 240;
@@ -62,6 +63,9 @@ pub(super) struct Workspace {
     /// Git status and branch of the entries under every root, plus the folders
     /// holding a change. Read in the background by the app, never by the tree.
     git: GitState,
+    /// Follows the roots and their git directories, so the app hears about
+    /// changes made outside it. `None` until the window starts it.
+    watcher: Option<Watcher>,
     /// True while a status read is in flight. A reload that arrives meanwhile
     /// sets `status_pending` instead of starting a second process.
     status_running: bool,
@@ -104,6 +108,7 @@ impl Workspace {
             dir_cache: HashMap::new(),
             rows: Vec::new(),
             git: GitState::default(),
+            watcher: None,
             status_running: false,
             status_pending: false,
             scroll: UniformListScrollHandle::default(),
@@ -136,6 +141,41 @@ impl Workspace {
 
     pub(super) fn git(&self) -> &GitState {
         &self.git
+    }
+
+    /// Starts following the filesystem, unless a watcher already runs.
+    pub(super) fn set_watcher(&mut self, watcher: Watcher) {
+        self.watcher = Some(watcher);
+    }
+
+    pub(super) fn has_watcher(&self) -> bool {
+        self.watcher.is_some()
+    }
+
+    /// Makes the watcher follow exactly the workspace roots and the git
+    /// directories of their repositories. Cheap when nothing changed.
+    pub(super) fn sync_watches(&mut self) {
+        let Some(watcher) = self.watcher.as_mut() else {
+            return;
+        };
+        let mut paths = self.roots.clone();
+        paths.extend(self.git.git_dirs().cloned());
+        paths.sort();
+        paths.dedup();
+        watcher.sync(&paths);
+    }
+
+    /// Drops the cached listing of a changed path and of its folder, so the
+    /// next render reads the disk again. Only expanded folders are cached, and
+    /// [`Self::rebuild_rows`] re-reads just the entries that are missing.
+    pub(super) fn invalidate_path(&mut self, path: &Path) {
+        let mut changed = self.dir_cache.remove(path).is_some();
+        if let Some(parent) = path.parent() {
+            changed |= self.dir_cache.remove(parent).is_some();
+        }
+        if changed {
+            self.rebuild_rows();
+        }
     }
 
     /// The branch to show for `path`, falling back to the only root when no
@@ -214,6 +254,8 @@ impl Workspace {
     pub(super) fn reload(&mut self) {
         self.dir_cache.clear();
         self.rebuild_rows();
+        // Root changes land here, so this is where the watched set follows.
+        self.sync_watches();
     }
 
     /// Re-flattens the visible rows, reading and caching any expanded directory
@@ -507,6 +549,30 @@ mod tests {
             workspace.selected(),
             Some(renamed.join("sub").join("file.txt").as_path())
         );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[gpui_kit::test]
+    async fn invalidating_a_path_rereads_only_its_folder(cx: &mut TestAppContext) {
+        let root = fixture("invalidate");
+        std::fs::write(root.join("gone.txt"), "").unwrap();
+        std::fs::write(root.join("kept.txt"), "").unwrap();
+
+        let mut workspace = workspace(cx, vec![root.clone()]);
+        workspace.reload();
+        assert!(
+            shape(&workspace)
+                .iter()
+                .any(|(name, _, _)| name == "gone.txt")
+        );
+
+        std::fs::remove_file(root.join("gone.txt")).unwrap();
+        workspace.invalidate_path(&root.join("gone.txt"));
+
+        let rows = shape(&workspace);
+        assert!(!rows.iter().any(|(name, _, _)| name == "gone.txt"));
+        assert!(rows.iter().any(|(name, _, _)| name == "kept.txt"));
 
         std::fs::remove_dir_all(&root).unwrap();
     }

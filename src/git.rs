@@ -7,7 +7,7 @@
 //! GPUI-free on purpose: [`state`] takes the workspace folders and returns
 //! what the tree and the status bar query by path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -57,6 +57,7 @@ pub(crate) struct GitState {
     files: HashMap<PathBuf, Status>,
     folders: HashMap<PathBuf, Status>,
     branches: HashMap<PathBuf, Branch>,
+    git_dirs: HashSet<PathBuf>,
 }
 
 impl GitState {
@@ -72,6 +73,12 @@ impl GitState {
     /// The branch of the repository `root` belongs to, when it has one.
     pub(crate) fn branch(&self, root: &Path) -> Option<&Branch> {
         self.branches.get(root)
+    }
+
+    /// The repositories' git directories, which the filesystem watcher follows
+    /// so a commit or checkout refreshes the tree by itself.
+    pub(crate) fn git_dirs(&self) -> impl Iterator<Item = &PathBuf> {
+        self.git_dirs.iter()
     }
 
     /// Records `relative`, a path from `git status` read in `root`, along with
@@ -106,9 +113,10 @@ impl GitState {
 pub(crate) fn state(roots: &[PathBuf]) -> GitState {
     let mut state = GitState::default();
     for root in roots {
-        let Some(prefix) = show_prefix(root) else {
+        let Some((prefix, git_dir)) = repo_paths(root) else {
             continue;
         };
+        state.git_dirs.insert(git_dir);
         let Some(output) = run_status(root) else {
             continue;
         };
@@ -118,27 +126,22 @@ pub(crate) fn state(roots: &[PathBuf]) -> GitState {
 }
 
 /// The folder's path inside its repository, such as `src/`, or empty at the
-/// repository root. `git status` reports paths from the repository root, so
-/// this is what turns them back into paths under the workspace folder. It also
-/// fails outside a repository, which is how a plain folder is skipped.
-fn show_prefix(root: &Path) -> Option<Vec<u8>> {
+/// repository root, plus the repository's git directory. Fails outside a
+/// repository, which is how a plain folder is skipped.
+fn repo_paths(root: &Path) -> Option<(Vec<u8>, PathBuf)> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["rev-parse", "--show-prefix"])
+        .args(["rev-parse", "--show-prefix", "--absolute-git-dir"])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
-    let mut prefix = output.stdout;
-    while prefix
-        .last()
-        .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
-    {
-        prefix.pop();
-    }
-    Some(prefix)
+    let mut lines = output.stdout.split(|byte| *byte == b'\n');
+    let prefix = lines.next()?.to_vec();
+    let git_dir = lines.next()?;
+    (!git_dir.is_empty()).then(|| (prefix, PathBuf::from(OsStr::from_bytes(git_dir))))
 }
 
 /// Runs `git status` in `root`. Porcelain v2 with `-z` keeps paths unambiguous
@@ -579,6 +582,9 @@ mod tests {
             found.branch(&dir).map(|branch| branch.name.as_str()),
             Some("trunk")
         );
+        // The watcher follows the git directory, which git reports canonically.
+        let git_dir = dir.canonicalize().unwrap().join(".git");
+        assert!(found.git_dirs().any(|path| path == &git_dir));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

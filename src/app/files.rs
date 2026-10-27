@@ -611,6 +611,7 @@ impl TeakApp {
                 tab.language = language;
             }
             tab.disk_modified = modified_time(&path);
+            tab.dismissed_disk_change = None;
             // The bad bytes were replaced on disk, so the file is clean UTF-8.
             tab.format.lossy = false;
             tab.path = Some(path.clone());
@@ -622,41 +623,76 @@ impl TeakApp {
         cx.notify();
     }
 
-    /// Picks up edits another program made to the active tab's file. A tab
-    /// without unsaved edits reloads silently; one with edits asks first.
-    /// Other tabs are checked when they become active.
-    pub(crate) fn check_outside_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.active() else {
+    /// Follows a file changed by another program. A tab without unsaved edits
+    /// reloads silently; one with edits asks before discarding them. Only the
+    /// visible tab interrupts — the rest ask when they become active.
+    pub(super) fn handle_disk_change(
+        &mut self,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self
+            .tabs
+            .iter()
+            .find(|tab| tab.path.as_deref() == Some(path))
+        else {
             return;
         };
         if tab.raster {
             return;
         }
-        let Some(path) = tab.path.clone() else {
-            return;
-        };
-        // A missing file is shown as deleted elsewhere; nothing to reload.
-        let Some(modified) = modified_time(&path) else {
-            return;
-        };
-        if tab.disk_modified == Some(modified) {
-            return;
-        }
         let id = tab.editor.entity_id();
+        let change = classify_disk_change(
+            tab.dirty,
+            tab.disk_modified,
+            tab.dismissed_disk_change,
+            // A missing file is shown as deleted elsewhere; nothing to reload.
+            match modified_time(path) {
+                Some(modified) => modified,
+                None => return,
+            },
+        );
+        let active = self.tabs.active().map(|tab| tab.editor.entity_id()) == Some(id);
 
-        if !tab.dirty {
-            self.reload_from_disk(id, path, window, cx);
-            return;
+        match change {
+            DiskChange::Ignored => {}
+            DiskChange::Reload => self.reload_from_disk(id, path.to_path_buf(), window, cx),
+            DiskChange::Ask if active => {
+                self.prompt_disk_conflict(id, path.to_path_buf(), window, cx);
+            }
+            DiskChange::Ask => {}
         }
+    }
 
-        // Record the new time up front so later activations do not ask again;
-        // keeping the edits is the default.
+    /// Picks up edits another program made to the active tab's file, and asks
+    /// when those edits would overwrite unsaved work.
+    pub(crate) fn check_outside_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.active().and_then(|tab| tab.path.clone()) else {
+            return;
+        };
+        self.handle_disk_change(&path, window, cx);
+    }
+
+    /// Asks whether to reload a file that changed under unsaved edits. The
+    /// version is recorded as dismissed before the dialog opens, so Escape or
+    /// Keep My Edits does not ask again about the same state, while saving over
+    /// it still warns: `disk_modified` stays on the version the buffer is
+    /// based on.
+    fn prompt_disk_conflict(
+        &mut self,
+        id: EntityId,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modified = modified_time(&path);
         if let Some(tab) = self
             .tabs
             .iter_mut()
             .find(|tab| tab.editor.entity_id() == id)
         {
-            tab.disk_modified = Some(modified);
+            tab.dismissed_disk_change = modified;
         }
         let name = file_name(&path);
         let entity = cx.entity();
@@ -665,16 +701,16 @@ impl TeakApp {
             let path = path.clone();
             alert
                 .confirm()
-                .title("File Changed")
+                .title("File Changed on Disk")
                 .description(format!(
-                    "\"{name}\" changed on disk. Reload it and discard your unsaved edits?"
+                    "\"{name}\" changed on disk and has unsaved edits. Reload it and discard them?"
                 ))
-                .ok_text("Reload")
+                .ok_text("Reload from Disk")
                 .ok_variant(ButtonVariant::Danger)
                 .cancel_text("Keep My Edits")
                 .on_ok(move |_, window, cx| {
                     entity.update(cx, |this, cx| {
-                        this.reload_from_disk(id, path.clone(), window, cx)
+                        this.reload_from_disk(id, path.clone(), window, cx);
                     });
                     true
                 })
@@ -724,6 +760,7 @@ impl TeakApp {
                     return;
                 }
                 tab.disk_modified = modified;
+                tab.dismissed_disk_change = None;
                 tab.format = format;
                 let editor = tab.editor.clone();
                 let is_active = this.tabs.active().map(|tab| tab.editor.entity_id()) == Some(id);
@@ -1254,13 +1291,183 @@ impl TeakApp {
     }
 }
 
+/// What a changed file means for a tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiskChange {
+    /// Nothing to do: the buffer is based on that version, or the user already
+    /// chose to keep the buffer over it.
+    Ignored,
+    /// The tab has no unsaved edits, so the new contents can load silently.
+    Reload,
+    /// Loading would throw away unsaved edits, so ask first.
+    Ask,
+}
+
+/// `disk_modified` is the version the buffer is based on, `dismissed` a later
+/// version the user chose to keep the buffer over. A dismissal only silences a
+/// conflict: a clean tab always follows the disk.
+fn classify_disk_change(
+    dirty: bool,
+    disk_modified: Option<SystemTime>,
+    dismissed: Option<SystemTime>,
+    modified: SystemTime,
+) -> DiskChange {
+    if disk_modified == Some(modified) {
+        return DiskChange::Ignored;
+    }
+    if !dirty {
+        return DiskChange::Reload;
+    }
+    if dismissed == Some(modified) {
+        return DiskChange::Ignored;
+    }
+    DiskChange::Ask
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::time::SystemTime;
 
-    use gpui_kit::ImageFormat;
+    use gpui_kit::{AppContext as _, ImageFormat, TestAppContext};
 
-    use super::{TextFormat, raster_format};
+    use super::{DiskChange, TextFormat, classify_disk_change, raster_format};
+    use crate::app::TeakApp;
+    use crate::app::tabs::TabSet;
+    use crate::app::test_support::open_app;
+
+    /// One tab is left in the background so the dirty case never opens a
+    /// dialog: only the visible tab asks.
+    #[gpui_kit::test]
+    async fn an_external_change_reloads_a_clean_tab_and_spares_an_edited_one(
+        cx: &mut TestAppContext,
+    ) {
+        let edited = temp_path("a");
+        let other = temp_path("b");
+        std::fs::write(&edited, "one\n").unwrap();
+        std::fs::write(&other, "other\n").unwrap();
+
+        let (handle, app) = open_app(cx);
+        for path in [&edited, &other] {
+            cx.update_window(handle, |_, window, cx| {
+                app.update(cx, |this, cx| {
+                    let content = super::read_file(path).unwrap();
+                    this.add_file_tab(path.clone(), content, window, cx);
+                });
+            })
+            .unwrap();
+        }
+
+        write_and_handle(cx, handle, &app, &edited, "two\n");
+        assert_eq!(tab_text(&app, cx, &edited).as_deref(), Some("two\n"));
+
+        cx.update_window(handle, |_, _, cx| {
+            app.update(cx, |this, cx| {
+                let id = tab_id(&this.tabs, &edited);
+                this.set_dirty(id, true, cx);
+            });
+        })
+        .unwrap();
+        write_and_handle(cx, handle, &app, &edited, "three\n");
+        assert_eq!(
+            tab_text(&app, cx, &edited).as_deref(),
+            Some("two\n"),
+            "an edited buffer is never replaced silently"
+        );
+        assert!(cx.update(|cx| {
+            let app = app.read(cx);
+            app.tabs
+                .iter()
+                .find(|tab| tab.path.as_deref() == Some(edited.as_path()))
+                .unwrap()
+                .dirty
+        }));
+        assert_eq!(tab_text(&app, cx, &other).as_deref(), Some("other\n"));
+
+        let _ = std::fs::remove_file(&edited);
+        let _ = std::fs::remove_file(&other);
+    }
+
+    #[test]
+    fn an_external_change_asks_only_when_the_buffer_has_edits() {
+        let old = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(5);
+        let new = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10);
+        let newer = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20);
+
+        // Our own write: nothing to do.
+        assert_eq!(
+            classify_disk_change(true, Some(new), None, new),
+            DiskChange::Ignored
+        );
+        // A clean buffer follows the disk.
+        assert_eq!(
+            classify_disk_change(false, Some(old), None, new),
+            DiskChange::Reload
+        );
+        // Edits are never discarded silently.
+        assert_eq!(
+            classify_disk_change(true, Some(old), None, new),
+            DiskChange::Ask
+        );
+        // A version the user already kept their buffer over is not asked again.
+        assert_eq!(
+            classify_disk_change(true, Some(old), Some(new), new),
+            DiskChange::Ignored
+        );
+        assert_eq!(
+            classify_disk_change(true, Some(old), Some(new), newer),
+            DiskChange::Ask
+        );
+        // A clean buffer follows the disk even after such a dismissal.
+        assert_eq!(
+            classify_disk_change(false, Some(old), Some(new), new),
+            DiskChange::Reload
+        );
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("app-reload-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    fn tab_id(tabs: &TabSet, path: &Path) -> gpui_kit::EntityId {
+        tabs.iter()
+            .find(|tab| tab.path.as_deref() == Some(path))
+            .unwrap()
+            .editor
+            .entity_id()
+    }
+
+    fn write_and_handle(
+        cx: &mut TestAppContext,
+        handle: gpui_kit::AnyWindowHandle,
+        app: &gpui_kit::Entity<TeakApp>,
+        path: &Path,
+        text: &str,
+    ) {
+        std::fs::write(path, text).unwrap();
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| this.handle_disk_change(path, window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    fn tab_text(
+        app: &gpui_kit::Entity<TeakApp>,
+        cx: &mut TestAppContext,
+        path: &Path,
+    ) -> Option<String> {
+        cx.update(|cx| {
+            let app = app.read(cx);
+            let tab = app
+                .tabs
+                .iter()
+                .find(|tab| tab.path.as_deref() == Some(path))?;
+            Some(tab.editor.read(cx).text().to_string())
+        })
+    }
 
     #[test]
     fn raster_format_maps_image_extensions() {

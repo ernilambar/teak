@@ -14,6 +14,7 @@ mod session;
 mod settings;
 mod theme;
 mod update;
+mod watcher;
 mod windows;
 
 use std::path::PathBuf;

@@ -11,6 +11,7 @@ A fast, lightweight text editor.
 - Tabs and syntax highlighting
 - File explorer sidebar with git status marks
 - Git branch, with ahead/behind counts, in the status bar
+- Watches open folders, so changes made by other programs show up on their own
 - Command palette (`Cmd+Shift+P`)
 - Quick Open (`Cmd+P`) to fuzzy-find files
 - Find and Replace in Files (`Cmd+Shift+F`), with regex and globs

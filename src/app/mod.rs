@@ -31,6 +31,7 @@ use gpui_kit::*;
 
 use crate::cli::{install_cli, launcher_target};
 use crate::git;
+use crate::paths::is_noise_path;
 use crate::session::{WindowFrame, WindowSession};
 use crate::settings::{
     DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, UiSettings,
@@ -38,6 +39,7 @@ use crate::settings::{
     save_show_whitespace, save_soft_wrap, save_theme, settings_path, ui_font_family_issue,
 };
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
+use crate::watcher::Watcher;
 use crate::windows::{AppServices, WindowSeed, cascaded_frame};
 use crate::{
     About, BringAllToFront, CheckForUpdates, ClearRecent, CloseWindow, CopyFileName, CopyFilePath,
@@ -65,6 +67,20 @@ pub(super) fn scroll_beyond_last_line(editor: &EditorSettings) -> Option<usize> 
 
 /// The app name shown in the window title, before the focused tab's path.
 pub(crate) const WINDOW_TITLE: &str = "Teak";
+
+/// How long a burst of filesystem events is allowed to settle before the tree
+/// and git state are refreshed. One save reports a few paths; a checkout
+/// reports hundreds, and only the last of them matters.
+const WATCH_SETTLE: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Whether a changed path can move git state. Anything inside a `.git`
+/// directory can (a commit or checkout writes only there), and anything in the
+/// worktree outside the folders the app already treats as build noise can.
+fn git_may_have_changed(path: &Path, roots: &[PathBuf]) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == ".git")
+        || !is_noise_path(path, roots)
+}
 
 pub(crate) struct TeakApp {
     pub(crate) focus_handle: FocusHandle,
@@ -262,6 +278,58 @@ impl TeakApp {
         self.refresh_git_status(cx);
     }
 
+    /// Follows the workspace folders with a filesystem watcher, so a change
+    /// made by another program reaches the tree, the git marks and every clean
+    /// tab without waiting for a refocus. Called once per window.
+    pub(crate) fn start_watching(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace.has_watcher() {
+            return;
+        }
+        let (sender, events) = async_channel::unbounded::<PathBuf>();
+        let Some(watcher) = Watcher::new(sender) else {
+            // No usable platform watcher: keep refreshing on explicit triggers.
+            return;
+        };
+        self.workspace.set_watcher(watcher);
+        self.workspace.sync_watches();
+
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let Ok(path) = events.recv().await else {
+                    return;
+                };
+                let mut paths = vec![path];
+                // Let a burst land before touching anything: one save reports
+                // a few paths, a checkout reports hundreds.
+                cx.background_executor().timer(WATCH_SETTLE).await;
+                while let Ok(path) = events.try_recv() {
+                    paths.push(path);
+                }
+                // One gesture reports each path more than once.
+                paths.sort();
+                paths.dedup();
+
+                let Ok(()) = this.update_in(cx, |this, window, cx| {
+                    let roots = this.workspace.roots().to_vec();
+                    let mut git = false;
+                    for path in &paths {
+                        this.workspace.invalidate_path(path);
+                        // A clean tab follows its file; an edited one asks first.
+                        this.handle_disk_change(path, window, cx);
+                        git |= git_may_have_changed(path, &roots);
+                    }
+                    if git {
+                        this.refresh_git_status(cx);
+                    }
+                    cx.notify();
+                }) else {
+                    return;
+                };
+            }
+        })
+        .detach();
+    }
+
     /// Reads git status for the workspace folders off the main thread and
     /// repaints the sidebar when it lands. A reload while a read is running
     /// queues one repeat instead of starting a second process, so a burst of
@@ -282,6 +350,9 @@ impl TeakApp {
                 let again = this
                     .update(cx, |this, cx| {
                         let again = this.workspace.finish_status_read(statuses);
+                        // A repository may have appeared since the last read,
+                        // and its git directory needs following.
+                        this.workspace.sync_watches();
                         cx.notify();
                         again
                     })

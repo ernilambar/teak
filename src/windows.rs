@@ -521,9 +521,12 @@ pub(crate) fn open_app_window(
             app.update(cx, |this, cx| this.request_open(path, window, cx));
         }
         app.update(cx, |this, cx| this.check_font_family(window, cx));
-        // Start the tree's git decorations without waiting for a first
-        // activation event.
-        app.update(cx, |this, cx| this.refresh_git_status(cx));
+        // Start following the workspace and reading git state without waiting
+        // for a first activation event.
+        app.update(cx, |this, cx| {
+            this.start_watching(window, cx);
+            this.refresh_git_status(cx);
+        });
 
         let focus_handle = app.read(cx).focus_handle.clone();
         focus_handle.focus(window, cx);

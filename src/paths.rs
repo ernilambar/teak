@@ -94,8 +94,24 @@ pub(crate) fn read_dir(dir: &Path) -> Vec<DirEntry> {
     dirs
 }
 
-/// Directories whose contents never belong in the quick-open file index.
+/// Directories whose contents never belong in the quick-open file index, and
+/// whose churn never warrants a git refresh.
 const IGNORED_DIRS: &[&str] = &[".git", "node_modules", "target", "__pycache__"];
+
+/// Whether `path` sits in a folder the app already skips when it walks a tree:
+/// a dependency/build directory or a dot directory. `roots` decide where the
+/// comparison starts, so a workspace folder that itself lives under a dot
+/// directory is still treated as ordinary content.
+pub(crate) fn is_noise_path(path: &Path, roots: &[PathBuf]) -> bool {
+    let Some(root) = roots.iter().find(|root| path.starts_with(root)) else {
+        return false;
+    };
+    path.strip_prefix(root).is_ok_and(|relative| {
+        relative
+            .components()
+            .any(|component| is_ignored_dir(Path::new(component.as_os_str())))
+    })
+}
 
 /// Compiles `search.exclude` globs, matched against paths relative to their
 /// workspace root. A `dir/**` pattern also matches `dir` itself, so the walk
@@ -164,7 +180,7 @@ pub(crate) fn collect_files(
     files
 }
 
-fn is_ignored_dir(path: &Path) -> bool {
+pub(crate) fn is_ignored_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| IGNORED_DIRS.contains(&name) || name.starts_with('.'))
@@ -426,6 +442,41 @@ mod tests {
             3
         );
         assert_eq!(collect_files(&[root], 5, &none, &none).len(), 5);
+    }
+
+    #[test]
+    fn noise_paths_are_judged_from_the_workspace_root_down() {
+        let root = PathBuf::from("/code/app");
+
+        assert!(is_noise_path(
+            Path::new("/code/app/target/debug/app"),
+            std::slice::from_ref(&root)
+        ));
+        assert!(is_noise_path(
+            Path::new("/code/app/node_modules/x/index.js"),
+            std::slice::from_ref(&root)
+        ));
+        assert!(is_noise_path(
+            Path::new("/code/app/.git/HEAD"),
+            std::slice::from_ref(&root)
+        ));
+        assert!(!is_noise_path(
+            Path::new("/code/app/src/main.rs"),
+            std::slice::from_ref(&root)
+        ));
+
+        // A folder that itself lives under a dot directory is still content.
+        let hidden = PathBuf::from("/Users/me/.config/teak");
+        assert!(!is_noise_path(
+            Path::new("/Users/me/.config/teak/settings.json"),
+            std::slice::from_ref(&hidden)
+        ));
+
+        // Outside every root there is no noise rule to apply.
+        assert!(!is_noise_path(
+            Path::new("/elsewhere/target/x"),
+            std::slice::from_ref(&root)
+        ));
     }
 
     #[test]

@@ -64,8 +64,8 @@ in headless environments.
   fields so rendering can read them directly. `app/files.rs`, `editor.rs`, `find_in_files.rs`,
   `palette.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
   orchestration blocks; GPUI-free helpers live in `cli.rs`, `git.rs`, `language.rs`,
-  `paths.rs`, `search.rs`, `session.rs`, `settings.rs`, `update.rs`, and the AppKit
-  printing wrapper in `print.rs`. `windows.rs` holds app-level window coordination: the live-window
+  `paths.rs`, `search.rs`, `session.rs`, `settings.rs`, `update.rs`, `watcher.rs`, and the
+  AppKit printing wrapper in `print.rs`. `windows.rs` holds app-level window coordination: the live-window
   registry, the shared recent list, the one `session.json` writer, and the bootstrap every
   new or restored window goes through. Add a new module only once a feature is large enough
   to justify the boundary.
