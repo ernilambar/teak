@@ -98,14 +98,14 @@ fn git_may_have_changed(path: &Path, roots: &[PathBuf]) -> bool {
     !is_noise_path(path, roots)
 }
 
-/// The gutter color for a changed line. Additions take the success green,
-/// modifications the sidebar's own change tone, and deletions red, so the
-/// editor and the file tree name the same state with the same color.
+/// The gutter color for a changed line: green for an addition, blue for a
+/// modification and red for a removal. Yellow is left to warnings and search
+/// matches, so a changed line reads as information instead of a problem.
 fn line_change_color(kind: git::LineKind, cx: &App) -> Hsla {
     let theme = cx.theme();
     match kind {
         git::LineKind::Added => theme.success,
-        git::LineKind::Modified => ui::change_tint(theme.warning, theme.foreground),
+        git::LineKind::Modified => theme.info,
         git::LineKind::Deleted => theme.danger,
     }
 }
