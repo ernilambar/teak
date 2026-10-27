@@ -521,6 +521,9 @@ pub(crate) fn open_app_window(
             app.update(cx, |this, cx| this.request_open(path, window, cx));
         }
         app.update(cx, |this, cx| this.check_font_family(window, cx));
+        // Start the tree's git decorations without waiting for a first
+        // activation event.
+        app.update(cx, |this, cx| this.refresh_git_status(cx));
 
         let focus_handle = app.read(cx).focus_handle.clone();
         focus_handle.focus(window, cx);
@@ -530,7 +533,7 @@ pub(crate) fn open_app_window(
         // app-level menu bar follows the window that is now active.
         app.update(cx, |_this, cx| {
             cx.observe_window_activation(window, |this, window, cx| {
-                this.reload_tree();
+                this.reload_tree(cx);
                 this.remember_window_bounds(window);
                 this.refresh_menus(cx);
                 if window.is_window_active() {

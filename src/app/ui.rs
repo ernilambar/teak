@@ -25,6 +25,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::file_icons::{file_icon, folder_icon};
+use crate::git::Status;
 use crate::language::{LANGUAGES, editor_language_id};
 use crate::paths::{display_path, file_name, format_size};
 use crate::settings::IconStyle;
@@ -141,9 +142,17 @@ thread_local! {
 /// A file-type icon for the sidebar and tabs. GPUI's `svg` element — and the
 /// `Icon` component built on it — flattens an SVG to a single tinted color, so
 /// the colorful style draws the vendored SVG through the image pipeline
-/// instead, which preserves its fills.
-pub(super) fn file_type_icon(bytes: &'static [u8], style: IconStyle, cx: &App) -> AnyElement {
-    if style == IconStyle::Colorful
+/// instead, which preserves its fills. A rasterized icon cannot be recolored,
+/// so a requested `tint` draws the monochrome silhouette even in the colorful
+/// style; it is the same glyph, in one color.
+pub(super) fn file_type_icon(
+    bytes: &'static [u8],
+    style: IconStyle,
+    tint: Option<Hsla>,
+    cx: &App,
+) -> AnyElement {
+    if tint.is_none()
+        && style == IconStyle::Colorful
         && let Some(image) = colored_icon(bytes, cx)
     {
         return img(image)
@@ -153,11 +162,12 @@ pub(super) fn file_type_icon(bytes: &'static [u8], style: IconStyle, cx: &App) -
             .into_any_element();
     }
 
-    Icon::empty()
-        .data(bytes)
-        .with_size(Size::Small)
-        .flex_none()
-        .into_any_element()
+    let icon = Icon::empty().data(bytes).with_size(Size::Small).flex_none();
+    match tint {
+        Some(color) => icon.text_color(color),
+        None => icon,
+    }
+    .into_any_element()
 }
 
 /// Rasterizes `bytes` in full color, caching the result. `None` only when the
@@ -251,7 +261,7 @@ impl TeakApp {
                         }
                         // Untitled tabs have no path and fall back to the default file icon.
                         let path = tab.path.as_deref().unwrap_or(Path::new(""));
-                        this.child(file_type_icon(file_icon(path), icon_style, cx))
+                        this.child(file_type_icon(file_icon(path), icon_style, None, cx))
                     })
                     .child(
                         div()
@@ -653,6 +663,27 @@ impl TeakApp {
         let selected = self.workspace.selected() == Some(path);
         let expanded = self.workspace.is_expanded(path);
         let muted = cx.theme().muted_foreground;
+        let git = self.workspace.statuses();
+        // A file shows its own state. A folder shows the most serious change
+        // beneath it, or its own entry when it is untracked, so the cue
+        // survives collapsing it.
+        let (status, below) = if is_dir {
+            (None, git.folder_status(path).or_else(|| git.status(path)))
+        } else {
+            (git.status(path), None)
+        };
+        let status_color = status.map(|status| match status {
+            Status::Untracked | Status::Added => cx.theme().success,
+            Status::Modified | Status::Renamed => cx.theme().warning,
+            Status::Deleted | Status::Conflicted => cx.theme().danger,
+        });
+        // A modification tints the name, for a file and for every folder above
+        // it, so it is visible while the folder is still collapsed.
+        let name_color = match status.or(below) {
+            Some(Status::Modified | Status::Renamed) => Some(cx.theme().warning),
+            _ => None,
+        };
+        let folder_changed = below.is_some();
 
         let leading = if is_dir {
             Icon::new(if expanded {
@@ -668,31 +699,66 @@ impl TeakApp {
         };
 
         let icon_style = self.settings.values.ui.icon_style();
+        // Only folders take the tint. A file already shows its state in a
+        // yellow name and letter, while a collapsed folder needs the icon and
+        // dot to keep the cue visible.
         let type_icon = if is_dir {
-            file_type_icon(folder_icon(), icon_style, cx)
+            file_type_icon(folder_icon(), icon_style, name_color, cx)
         } else {
-            file_type_icon(file_icon(path), icon_style, cx)
+            file_type_icon(file_icon(path), icon_style, None, cx)
         };
 
         let click_path = path.to_path_buf();
         let label = file_name(path);
+        let accessible = match status.or(below) {
+            Some(change) => format!("{label} {}", change.letter()),
+            None => label.clone(),
+        };
         let menu_entity = cx.entity();
         let menu_path = path.to_path_buf();
 
         ListItem::new(path.display().to_string())
+            .w_full()
             .pl(px(8. + depth as f32 * 12.))
             .pr_2()
             .py_0p5()
             .selected(selected)
-            .accessibility_label(label.clone())
+            .accessibility_label(accessible)
             .child(
                 div()
                     .h_flex()
+                    .w_full()
                     .items_center()
                     .gap_1()
                     .child(leading)
                     .child(type_icon)
-                    .child(div().text_sm().whitespace_nowrap().child(label)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .when_some(name_color, |name, color| name.text_color(color))
+                            .child(label),
+                    )
+                    .when_some(status.zip(status_color), |row, (status, color)| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(color)
+                                .child(status.letter()),
+                        )
+                    })
+                    .when(folder_changed, |row| {
+                        row.child(
+                            div()
+                                .size(px(6.))
+                                .rounded_full()
+                                .flex_none()
+                                .bg(name_color.unwrap_or(muted)),
+                        )
+                    }),
             )
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.workspace.set_selected(Some(click_path.clone()));

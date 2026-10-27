@@ -1,5 +1,6 @@
 //! The sidebar's workspace state: the open folders, the expanded set, the
-//! cached directory listings and the flattened rows rendered from them.
+//! cached directory listings, the git status decorations and the flattened
+//! rows rendered from them.
 //!
 //! `rows` is derived from `roots` + `expanded`. Most methods rebuild it, but
 //! `expand`, `forget` and `remap` do not: their callers batch several changes
@@ -12,6 +13,7 @@ use std::path::{Path, PathBuf};
 use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::*;
 
+use crate::git::Statuses;
 use crate::paths::{DirEntry, RootConflict, read_dir, remap_prefix, root_conflict};
 use crate::session::WindowSession;
 
@@ -57,6 +59,13 @@ pub(super) struct Workspace {
     /// The flattened, visible rows derived from `dir_cache` + `expanded`,
     /// rebuilt only when the tree changes.
     rows: Vec<TreeRow>,
+    /// Git status of the entries under every root, plus the folders holding a
+    /// change. Read in the background by the app, never by the tree itself.
+    statuses: Statuses,
+    /// True while a status read is in flight. A reload that arrives meanwhile
+    /// sets `status_pending` instead of starting a second process.
+    status_running: bool,
+    status_pending: bool,
     /// Scroll position and extent of the virtualized sidebar list.
     scroll: UniformListScrollHandle,
     sidebar_visible: bool,
@@ -94,6 +103,9 @@ impl Workspace {
             selected: None,
             dir_cache: HashMap::new(),
             rows: Vec::new(),
+            statuses: Statuses::default(),
+            status_running: false,
+            status_pending: false,
             scroll: UniformListScrollHandle::default(),
             sidebar_visible,
             width: DEFAULT_SIDEBAR_WIDTH,
@@ -120,6 +132,30 @@ impl Workspace {
 
     pub(super) fn rows(&self) -> &[TreeRow] {
         &self.rows
+    }
+
+    pub(super) fn statuses(&self) -> &Statuses {
+        &self.statuses
+    }
+
+    /// Claims the right to start a status read. `false` means one is already
+    /// running; that read repeats when it lands, so a burst of reloads costs
+    /// one process instead of one per reload.
+    pub(super) fn start_status_read(&mut self) -> bool {
+        if self.status_running {
+            self.status_pending = true;
+            return false;
+        }
+        self.status_running = true;
+        true
+    }
+
+    /// Stores a finished read and says whether another was asked for while it
+    /// ran. The tree repaints on its own; callers only need to notify.
+    pub(super) fn finish_status_read(&mut self, statuses: Statuses) -> bool {
+        self.status_running = false;
+        self.statuses = statuses;
+        std::mem::take(&mut self.status_pending)
     }
 
     pub(super) fn scroll(&self) -> &UniformListScrollHandle {
@@ -324,6 +360,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::{AddRoot, Workspace};
+    use crate::git::Statuses;
     use crate::paths::file_name;
 
     /// An empty directory named uniquely per test.
@@ -457,5 +494,20 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[gpui_kit::test]
+    async fn a_status_read_in_flight_queues_one_repeat(cx: &mut TestAppContext) {
+        let mut workspace = workspace(cx, Vec::new());
+
+        assert!(workspace.start_status_read());
+        // Reloads arriving while the read runs queue a repeat, not a second
+        // process, however many arrive.
+        assert!(!workspace.start_status_read());
+        assert!(!workspace.start_status_read());
+
+        assert!(workspace.finish_status_read(Statuses::default()));
+        assert!(workspace.start_status_read());
+        assert!(!workspace.finish_status_read(Statuses::default()));
     }
 }

@@ -331,6 +331,7 @@ impl TeakApp {
         }
         self.note_recent(path, cx);
 
+        self.refresh_git_status(cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -348,6 +349,7 @@ impl TeakApp {
     /// stay open, and the sidebar stays visible.
     pub(super) fn remove_root(&mut self, path: &Path, cx: &mut Context<Self>) {
         self.workspace.remove_root(path);
+        self.refresh_git_status(cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -356,6 +358,7 @@ impl TeakApp {
     /// visible, showing its empty state.
     pub(super) fn close_all_roots(&mut self, cx: &mut Context<Self>) {
         self.workspace.close_all();
+        self.refresh_git_status(cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -614,7 +617,7 @@ impl TeakApp {
             tab.dirty = false;
         }
         self.note_recent(path, cx);
-        self.reload_tree();
+        self.reload_tree(cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -858,7 +861,7 @@ impl TeakApp {
                     this.workspace.expand(path.clone());
                 }
                 this.workspace.set_selected(Some(path.clone()));
-                this.reload_tree();
+                this.reload_tree(cx);
                 this.save_session(cx);
                 if is_dir {
                     cx.notify();
@@ -993,7 +996,7 @@ impl TeakApp {
                         }
                         let name = file_name(&destination);
                         this.workspace.set_selected(Some(destination));
-                        this.reload_tree();
+                        this.reload_tree(cx);
                         this.save_session(cx);
                         cx.notify();
                         window.push_notification(
@@ -1123,7 +1126,7 @@ impl TeakApp {
 
         self.workspace.remap(old, new);
 
-        self.reload_tree();
+        self.reload_tree(cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -1174,7 +1177,7 @@ impl TeakApp {
             Ok(()) => {
                 let name = file_name(path);
                 self.workspace.forget(path);
-                self.reload_tree();
+                self.reload_tree(cx);
                 self.save_session(cx);
                 cx.notify();
                 window
@@ -1239,7 +1242,7 @@ impl TeakApp {
                 } else {
                     self.workspace.expand(target_dir);
                     self.workspace.set_selected(Some(destination.clone()));
-                    self.reload_tree();
+                    self.reload_tree(cx);
                     self.save_session(cx);
                     cx.notify();
                     window.push_notification(Notification::success(format!("Pasted {name}")), cx);

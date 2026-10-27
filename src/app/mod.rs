@@ -30,6 +30,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::cli::{install_cli, launcher_target};
+use crate::git;
 use crate::session::{WindowFrame, WindowSession};
 use crate::settings::{
     DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, UiSettings,
@@ -251,12 +252,46 @@ impl TeakApp {
         self.services.forget_window(self.window_id, cx);
     }
 
-    /// Clears the directory cache and re-reads every workspace tree from disk.
+    /// Clears the directory cache and re-reads every workspace tree from disk,
+    /// then re-reads git status, since a save, rename or delete moves both.
     /// Call after any filesystem change or when the roots change. Kept on the
     /// app because `main` triggers it on window activation and cannot reach the
     /// workspace internals.
-    pub(crate) fn reload_tree(&mut self) {
+    pub(crate) fn reload_tree(&mut self, cx: &mut Context<Self>) {
         self.workspace.reload();
+        self.refresh_git_status(cx);
+    }
+
+    /// Reads git status for the workspace folders off the main thread and
+    /// repaints the sidebar when it lands. A reload while a read is running
+    /// queues one repeat instead of starting a second process, so a burst of
+    /// saves or tab switches cannot pile up `git` invocations.
+    pub(crate) fn refresh_git_status(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace.start_status_read() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            loop {
+                let Ok(roots) = this.update(cx, |this, _| this.workspace.roots().to_vec()) else {
+                    return;
+                };
+                let statuses = cx
+                    .background_executor()
+                    .spawn(async move { git::statuses(&roots) })
+                    .await;
+                let again = this
+                    .update(cx, |this, cx| {
+                        let again = this.workspace.finish_status_read(statuses);
+                        cx.notify();
+                        again
+                    })
+                    .unwrap_or(false);
+                if !again {
+                    return;
+                }
+            }
+        })
+        .detach();
     }
 
     fn active(&self) -> Option<&OpenTab> {
@@ -364,7 +399,7 @@ impl TeakApp {
     }
 
     fn on_refresh(&mut self, _: &Refresh, _window: &mut Window, cx: &mut Context<Self>) {
-        self.workspace.reload();
+        self.reload_tree(cx);
         cx.notify();
     }
 

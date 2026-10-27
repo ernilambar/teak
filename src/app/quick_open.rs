@@ -273,7 +273,7 @@ fn quick_open_item(rel: String, path: PathBuf, icon_style: IconStyle) -> Command
                 .min_w_0()
                 .items_center()
                 .gap_2()
-                .child(file_type_icon(file_icon(&path), icon_style, cx))
+                .child(file_type_icon(file_icon(&path), icon_style, None, cx))
                 .child(
                     div()
                         .min_w_0()

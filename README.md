@@ -9,7 +9,7 @@ A fast, lightweight text editor.
 ## Features
 
 - Tabs and syntax highlighting
-- File explorer sidebar
+- File explorer sidebar with git status marks
 - Command palette (`Cmd+Shift+P`)
 - Quick Open (`Cmd+P`) to fuzzy-find files
 - Find and Replace in Files (`Cmd+Shift+F`), with regex and globs
