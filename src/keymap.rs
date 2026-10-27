@@ -17,7 +17,7 @@ use crate::commands;
 
 /// Registers every binding. Call once during startup, after `gpui_kit::init`.
 pub(crate) fn bind_keys(cx: &mut App) {
-    cx.bind_keys(commands::app_bindings());
-    cx.bind_keys(commands::editor_bindings());
-    cx.bind_keys(commands::find_bindings());
+    cx.bind_keys(commands::app_bindings(cx));
+    cx.bind_keys(commands::editor_bindings(cx));
+    cx.bind_keys(commands::find_bindings(cx));
 }

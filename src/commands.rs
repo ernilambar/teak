@@ -1135,8 +1135,8 @@ fn outdent() -> MenuItem {
 }
 
 /// Bindings that are active regardless of which element has focus.
-pub(crate) fn app_bindings() -> Vec<KeyBinding> {
-    bindings(Scope::Global)
+pub(crate) fn app_bindings(cx: &App) -> Vec<KeyBinding> {
+    bindings(Scope::Global, cx)
 }
 
 /// The editing chords, scoped to the focused editor.
@@ -1153,28 +1153,28 @@ pub(crate) fn app_bindings() -> Vec<KeyBinding> {
 ///   re-dispatches the engine action at the editor).
 /// - `secondary-enter` — the customary insert-line-below chord; the engine maps
 ///   `secondary-enter` to a plain newline on macOS, so this is the useful one.
-pub(crate) fn editor_bindings() -> Vec<KeyBinding> {
-    bindings(Scope::Editor)
+pub(crate) fn editor_bindings(cx: &App) -> Vec<KeyBinding> {
+    bindings(Scope::Editor, cx)
 }
 
 /// Enter, Escape and Tab in the Find panel's fields, and Enter in the Find
 /// Results tab. Their contexts nest the engine's `"Input"`, and they are
 /// registered after the engine's own bindings, so they win over its Enter
 /// (newline / submit), Escape and Tab (indent).
-pub(crate) fn find_bindings() -> Vec<KeyBinding> {
-    let mut list = bindings(Scope::FindPanel);
-    list.extend(bindings(Scope::FindResults));
+pub(crate) fn find_bindings(cx: &App) -> Vec<KeyBinding> {
+    let mut list = bindings(Scope::FindPanel, cx);
+    list.extend(bindings(Scope::FindResults, cx));
     list
 }
 
-fn bindings(context: Scope) -> Vec<KeyBinding> {
+fn bindings(context: Scope, cx: &App) -> Vec<KeyBinding> {
     let mut bindings = Vec::new();
     for command in COMMANDS {
         for (chord, scope) in command.bindings {
             if *scope != context {
                 continue;
             }
-            bindings.push(binding(chord, (command.make)(), *scope));
+            bindings.push(binding(chord, (command.make)(), *scope, cx));
         }
     }
     bindings
@@ -1183,8 +1183,9 @@ fn bindings(context: Scope) -> Vec<KeyBinding> {
 /// Builds one binding. This is `KeyBinding::new` with the action already boxed:
 /// the table holds `Box<dyn Action>`, which does not satisfy `new`'s
 /// `impl Action` bound, so the equivalent public constructor is used with the
-/// same arguments (`new` passes `false`, `None` and `DummyKeyboardMapper`).
-fn binding(chord: &str, action: Box<dyn Action>, context: Scope) -> KeyBinding {
+/// same arguments (`new` passes `false` and `None`). `load` also takes `cx`,
+/// which is what resolves a chord's `secondary-` prefix against the host OS.
+fn binding(chord: &str, action: Box<dyn Action>, context: Scope, cx: &App) -> KeyBinding {
     let parse = |source: &str| {
         Some(Rc::new(
             KeyBindingContextPredicate::parse(source).expect("the key context parses"),
@@ -1196,7 +1197,7 @@ fn binding(chord: &str, action: Box<dyn Action>, context: Scope) -> KeyBinding {
         Scope::FindPanel => parse(&format!("FindPanel > {EDITOR}")),
         Scope::FindResults => parse(&format!("FindResults > {EDITOR}")),
     };
-    KeyBinding::load(chord, action, predicate, false, None, &DummyKeyboardMapper)
+    KeyBinding::load(chord, action, predicate, false, None, cx)
         .unwrap_or_else(|_| panic!("`{chord}` is a valid chord"))
 }
 
@@ -1320,11 +1321,11 @@ fn theme_menu(theme: &str) -> Menu {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{Action as _, KeyBinding, KeyContext, Keymap, Keystroke};
+    use gpui_kit::{Action, KeyContext, Keymap, Keystroke, OperatingSystem, TestAppContext};
 
     use super::{
         COMMANDS, Entry, MenuKind, PALETTE, PaletteGroup, PaletteSlot, Scope, app_bindings,
-        editor_bindings, find_bindings,
+        binding, editor_bindings, find_bindings,
     };
 
     /// The palette groups in display order, skipping the hand-written Appearance
@@ -1340,10 +1341,16 @@ mod tests {
     }
 
     /// Action names that would win for `keys` typed in `contexts`, best first.
+    ///
+    /// The chord text in these tests is the platform-independent kind the table
+    /// stores, `secondary-` included; `parse_with_os` is used because plain
+    /// `parse` handles only static, explicit-modifier chords and rejects
+    /// `secondary-`. The test platform reports macOS, which is the same `os`
+    /// that `KeyBinding::load` resolves the registered bindings against.
     fn resolve(keymap: &Keymap, keys: &str, contexts: &[&str]) -> Vec<String> {
         let input: Vec<Keystroke> = keys
             .split_whitespace()
-            .map(|key| Keystroke::parse(key).unwrap())
+            .map(|key| Keystroke::parse_with_os(key, OperatingSystem::Mac).unwrap())
             .collect();
         let stack: Vec<KeyContext> = contexts
             .iter()
@@ -1357,20 +1364,30 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn every_binding_parses() {
+    #[gpui_kit::test]
+    async fn every_binding_parses(cx: &mut TestAppContext) {
+        let (app, editor, find) = cx.read(|cx| {
+            (
+                app_bindings(cx).len(),
+                editor_bindings(cx).len(),
+                find_bindings(cx).len(),
+            )
+        });
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
-        assert_eq!(app_bindings().len(), 52);
-        assert_eq!(editor_bindings().len(), 21);
-        assert_eq!(find_bindings().len(), 6);
+        assert_eq!(app, 52);
+        assert_eq!(editor, 21);
+        assert_eq!(find, 6);
     }
 
-    #[test]
-    fn app_bindings_are_global_but_editor_bindings_are_not() {
-        let mut keymap = Keymap::default();
-        keymap.add_bindings(app_bindings());
-        keymap.add_bindings(editor_bindings());
+    #[gpui_kit::test]
+    async fn app_bindings_are_global_but_editor_bindings_are_not(cx: &mut TestAppContext) {
+        let keymap = cx.read(|cx| {
+            let mut keymap = Keymap::default();
+            keymap.add_bindings(app_bindings(cx));
+            keymap.add_bindings(editor_bindings(cx));
+            keymap
+        });
 
         assert!(resolve(&keymap, "secondary-n", &[])[0].ends_with("NewFile"));
         assert!(resolve(&keymap, "secondary-r", &[])[0].ends_with("Refresh"));
@@ -1420,30 +1437,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn editor_bindings_win_over_earlier_engine_defaults() {
+    #[gpui_kit::test]
+    async fn editor_bindings_win_over_earlier_engine_defaults(cx: &mut TestAppContext) {
         // Emulate the engine registering its defaults first (as gpui_kit::init
         // does), then this app's bindings afterwards. At equal context depth the
         // later registration must win.
-        let mut keymap = Keymap::default();
-        keymap.add_bindings([
-            KeyBinding::new("shift-alt-up", crate::MoveLineUp, Some("Input")),
-            KeyBinding::new("shift-alt-down", crate::MoveLineDown, Some("Input")),
-            KeyBinding::new("secondary-enter", crate::MoveLineUp, Some("Input")),
-            // The engine's own add-cursor chords. The app now binds the same
-            // chords to its actions, so the later registration must still win.
-            KeyBinding::new(
-                "secondary-alt-up",
-                gpui_kit::base::input::AddCursorAbove,
-                Some("Input"),
-            ),
-            KeyBinding::new(
-                "secondary-alt-down",
-                gpui_kit::base::input::AddCursorBelow,
-                Some("Input"),
-            ),
-        ]);
-        keymap.add_bindings(editor_bindings());
+        let keymap = cx.read(|cx| {
+            let mut keymap = Keymap::default();
+            // The engine's defaults, bound the way the engine binds them: same
+            // `"Input"` context, `secondary-` chords resolved through `cx`.
+            let engine =
+                |chord: &str, action: Box<dyn Action>| binding(chord, action, Scope::Editor, cx);
+            keymap.add_bindings([
+                engine("shift-alt-up", Box::new(crate::MoveLineUp)),
+                engine("shift-alt-down", Box::new(crate::MoveLineDown)),
+                engine("secondary-enter", Box::new(crate::MoveLineUp)),
+                // The engine's own add-cursor chords. The app now binds the same
+                // chords to its actions, so the later registration must still win.
+                engine(
+                    "secondary-alt-up",
+                    Box::new(gpui_kit::base::input::AddCursorAbove),
+                ),
+                engine(
+                    "secondary-alt-down",
+                    Box::new(gpui_kit::base::input::AddCursorBelow),
+                ),
+            ]);
+            keymap.add_bindings(editor_bindings(cx));
+            keymap
+        });
 
         assert!(resolve(&keymap, "shift-alt-up", &["Input"])[0].ends_with("CopyLineUp"));
         assert!(resolve(&keymap, "shift-alt-down", &["Input"])[0].ends_with("CopyLineDown"));
@@ -1464,10 +1486,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn find_panel_uses_its_own_chords() {
-        let mut keymap = Keymap::default();
-        keymap.add_bindings(find_bindings());
+    #[gpui_kit::test]
+    async fn find_panel_uses_its_own_chords(cx: &mut TestAppContext) {
+        let keymap = cx.read(|cx| {
+            let mut keymap = Keymap::default();
+            keymap.add_bindings(find_bindings(cx));
+            keymap
+        });
 
         // `⌥↩` is the customary Select All Matches chord, so Replace All moved
         // to `⌥⌘↩` inside the panel.
