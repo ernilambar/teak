@@ -25,6 +25,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::file_icons::{file_icon, folder_icon};
+use crate::git::{Branch, Status};
 use crate::language::{LANGUAGES, editor_language_id};
 use crate::paths::{display_path, file_name, format_size};
 use crate::settings::IconStyle;
@@ -93,6 +94,38 @@ fn status_dot(visible: bool, color: Hsla) -> Div {
         })
 }
 
+/// The branch glyph in the status bar. Vendored from Lucide because the icon
+/// set the app registers is the small default subset, which has no git icons;
+/// embedding the full catalogue for one glyph would cost megabytes.
+const GIT_BRANCH_ICON: &[u8] = include_bytes!("../../assets/icons/git-branch.svg");
+
+/// The status-bar text for a branch: its name, and how far it has diverged
+/// from its upstream when it tracks one.
+fn branch_label(branch: &Branch) -> String {
+    let mut label = branch.name.clone();
+    if branch.ahead > 0 {
+        label.push_str(&format!(" ↑{}", branch.ahead));
+    }
+    if branch.behind > 0 {
+        label.push_str(&format!(" ↓{}", branch.behind));
+    }
+    label
+}
+
+/// The git change tint: the theme's warning yellow, desaturated and pulled
+/// halfway toward the text lightness. The raw warning is bright enough to
+/// compete with the row content, and on light themes it is too pale to read at
+/// this size; the pull gives it the softer, sandier tone of a change marker
+/// while staying inside the theme's palette.
+fn change_tint(warning: Hsla, foreground: Hsla) -> Hsla {
+    hsla(
+        warning.h,
+        warning.s * 0.5,
+        warning.l + (foreground.l - warning.l) * 0.5,
+        warning.a,
+    )
+}
+
 /// Logical edge length of a file-type icon, matching `Size::Small` (0.875rem).
 const FILE_ICON_SIZE: f32 = 14.;
 /// Rasterized edge length of a colorful icon. Twice [`FILE_ICON_SIZE`] keeps it
@@ -141,9 +174,17 @@ thread_local! {
 /// A file-type icon for the sidebar and tabs. GPUI's `svg` element — and the
 /// `Icon` component built on it — flattens an SVG to a single tinted color, so
 /// the colorful style draws the vendored SVG through the image pipeline
-/// instead, which preserves its fills.
-pub(super) fn file_type_icon(bytes: &'static [u8], style: IconStyle, cx: &App) -> AnyElement {
-    if style == IconStyle::Colorful
+/// instead, which preserves its fills. A rasterized icon cannot be recolored,
+/// so a requested `tint` draws the monochrome silhouette even in the colorful
+/// style; it is the same glyph, in one color.
+pub(super) fn file_type_icon(
+    bytes: &'static [u8],
+    style: IconStyle,
+    tint: Option<Hsla>,
+    cx: &App,
+) -> AnyElement {
+    if tint.is_none()
+        && style == IconStyle::Colorful
         && let Some(image) = colored_icon(bytes, cx)
     {
         return img(image)
@@ -153,11 +194,12 @@ pub(super) fn file_type_icon(bytes: &'static [u8], style: IconStyle, cx: &App) -
             .into_any_element();
     }
 
-    Icon::empty()
-        .data(bytes)
-        .with_size(Size::Small)
-        .flex_none()
-        .into_any_element()
+    let icon = Icon::empty().data(bytes).with_size(Size::Small).flex_none();
+    match tint {
+        Some(color) => icon.text_color(color),
+        None => icon,
+    }
+    .into_any_element()
 }
 
 /// Rasterizes `bytes` in full color, caching the result. `None` only when the
@@ -251,7 +293,7 @@ impl TeakApp {
                         }
                         // Untitled tabs have no path and fall back to the default file icon.
                         let path = tab.path.as_deref().unwrap_or(Path::new(""));
-                        this.child(file_type_icon(file_icon(path), icon_style, cx))
+                        this.child(file_type_icon(file_icon(path), icon_style, None, cx))
                     })
                     .child(
                         div()
@@ -653,6 +695,28 @@ impl TeakApp {
         let selected = self.workspace.selected() == Some(path);
         let expanded = self.workspace.is_expanded(path);
         let muted = cx.theme().muted_foreground;
+        let git = self.workspace.git();
+        let tint = change_tint(cx.theme().warning, cx.theme().foreground);
+        // A file shows its own state. A folder shows the most serious change
+        // beneath it, or its own entry when it is untracked, so the cue
+        // survives collapsing it.
+        let (status, below) = if is_dir {
+            (None, git.folder_status(path).or_else(|| git.status(path)))
+        } else {
+            (git.status(path), None)
+        };
+        let status_color = status.map(|status| match status {
+            Status::Untracked | Status::Added => cx.theme().success,
+            Status::Modified | Status::Renamed => tint,
+            Status::Deleted | Status::Conflicted => cx.theme().danger,
+        });
+        // A modification tints the name, for a file and for every folder above
+        // it, so it is visible while the folder is still collapsed.
+        let name_color = match status.or(below) {
+            Some(Status::Modified | Status::Renamed) => Some(tint),
+            _ => None,
+        };
+        let folder_changed = below.is_some();
 
         let leading = if is_dir {
             Icon::new(if expanded {
@@ -668,31 +732,66 @@ impl TeakApp {
         };
 
         let icon_style = self.settings.values.ui.icon_style();
+        // Only folders take the tint. A file already shows its state in a
+        // yellow name and letter, while a collapsed folder needs the icon and
+        // dot to keep the cue visible.
         let type_icon = if is_dir {
-            file_type_icon(folder_icon(), icon_style, cx)
+            file_type_icon(folder_icon(), icon_style, name_color, cx)
         } else {
-            file_type_icon(file_icon(path), icon_style, cx)
+            file_type_icon(file_icon(path), icon_style, None, cx)
         };
 
         let click_path = path.to_path_buf();
         let label = file_name(path);
+        let accessible = match status.or(below) {
+            Some(change) => format!("{label} {}", change.letter()),
+            None => label.clone(),
+        };
         let menu_entity = cx.entity();
         let menu_path = path.to_path_buf();
 
         ListItem::new(path.display().to_string())
+            .w_full()
             .pl(px(8. + depth as f32 * 12.))
             .pr_2()
             .py_0p5()
             .selected(selected)
-            .accessibility_label(label.clone())
+            .accessibility_label(accessible)
             .child(
                 div()
                     .h_flex()
+                    .w_full()
                     .items_center()
                     .gap_1()
                     .child(leading)
                     .child(type_icon)
-                    .child(div().text_sm().whitespace_nowrap().child(label)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .when_some(name_color, |name, color| name.text_color(color))
+                            .child(label),
+                    )
+                    .when_some(status.zip(status_color), |row, (status, color)| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(color)
+                                .child(status.letter()),
+                        )
+                    })
+                    .when(folder_changed, |row| {
+                        row.child(
+                            div()
+                                .size(px(6.))
+                                .rounded_full()
+                                .flex_none()
+                                .bg(name_color.unwrap_or(muted)),
+                        )
+                    }),
             )
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.workspace.set_selected(Some(click_path.clone()));
@@ -1138,6 +1237,37 @@ impl TeakApp {
                 .left(divider())
                 .left(div().child(count_label(words, chars)));
         }
+        // The branch of the repository the active tab lives in, or of the only
+        // workspace folder when the tab has no path yet.
+        let branch = self
+            .workspace
+            .branch_for(self.active().and_then(|tab| tab.path.as_deref()));
+        if let Some(branch) = branch {
+            status = status
+                .right(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        // A line-art branch glyph, monochrome: the Git logo is
+                        // a solid shape that turns into a blob at this size.
+                        .child(
+                            Icon::empty()
+                                .data(GIT_BRANCH_ICON)
+                                .with_size(Size::XSmall)
+                                .flex_none(),
+                        )
+                        .child(
+                            div()
+                                // A long branch name must not crowd out the
+                                // rest of the status bar.
+                                .max_w(px(200.))
+                                .truncate()
+                                .child(branch_label(branch)),
+                        ),
+                )
+                .right(divider());
+        }
         status
             .right(language_button)
             .right(divider())
@@ -1150,12 +1280,43 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use gpui_kit::{DevicePixels, RenderImage, SvgRenderer, SvgSize};
+    use gpui_kit::{DevicePixels, RenderImage, SvgRenderer, SvgSize, hsla};
 
     use crate::file_icons::file_icon;
+    use crate::git::Branch;
 
     use super::COLOR_ICON_PIXELS;
-    use super::{count_label, grouped};
+    use super::{GIT_BRANCH_ICON, branch_label, change_tint, count_label, grouped};
+
+    #[test]
+    fn the_status_bar_git_glyph_is_a_valid_svg() {
+        let renderer = SvgRenderer::new(Arc::new(()));
+        assert!(renderer.parse_svg(GIT_BRANCH_ICON).is_ok());
+    }
+
+    #[test]
+    fn branch_labels_show_divergence_only_when_there_is_some() {
+        let branch = |name: &str, ahead, behind| Branch {
+            name: name.to_string(),
+            ahead,
+            behind,
+        };
+
+        assert_eq!(branch_label(&branch("main", 0, 0)), "main");
+        assert_eq!(branch_label(&branch("main", 2, 0)), "main ↑2");
+        assert_eq!(branch_label(&branch("main", 0, 3)), "main ↓3");
+        assert_eq!(branch_label(&branch("main", 2, 3)), "main ↑2 ↓3");
+    }
+
+    #[test]
+    fn change_tint_halves_saturation_and_meets_the_foreground_halfway() {
+        let tint = change_tint(hsla(0.25, 0.5, 0.5, 1.), hsla(0., 0., 0.75, 1.));
+
+        assert_eq!(tint.h, 0.25);
+        assert_eq!(tint.s, 0.25);
+        assert_eq!(tint.l, 0.625);
+        assert_eq!(tint.a, 1.);
+    }
 
     fn rasterize(bytes: &'static [u8]) -> Arc<RenderImage> {
         let renderer = SvgRenderer::new(Arc::new(()));

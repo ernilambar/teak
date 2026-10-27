@@ -3,6 +3,7 @@ mod cli;
 mod commands;
 mod file_icons;
 mod fuzzy;
+mod git;
 mod keymap;
 mod language;
 mod markdown;
