@@ -21,7 +21,7 @@ use crate::{
 };
 
 use super::{
-    InputBaseState, PrepaintCaretGeometry, RangeDecorationStyle, TextDecoration,
+    GutterMarkKind, InputBaseState, PrepaintCaretGeometry, RangeDecorationStyle, TextDecoration,
     layout::{LastLayout, WhitespaceIndicators},
     mode::LayoutMode,
     tab_stops::{expand_tabs, expanded_width, tab_stop_width},
@@ -3473,6 +3473,15 @@ impl<M: InputModeKind> Element for TextElement<M> {
             );
             window.paint_quad(fill(gutter_bounds, gutter_bg));
 
+            // Changed-line marks sit in the gutter's leading padding, left of
+            // the numbers, so they hold their column through soft wrap, folding
+            // and horizontal scroll. The marks arrive sorted by line, so one
+            // cursor walks them beside the visible lines.
+            let mut next_mark = 0;
+            let mark_x = gutter_bounds.origin.x + px(1.);
+            // Leave a pixel between the bar and the first digit.
+            let mark_width = (editor_paddings.left - px(3.)).clamp(px(0.), px(3.));
+
             // Each item is the normal lines.
             for (lines, &buffer_line) in line_numbers
                 .iter()
@@ -3492,6 +3501,42 @@ impl<M: InputModeKind> Element for TextElement<M> {
                             ),
                             bg_color,
                         ));
+                    }
+                }
+
+                if mark_width > px(0.) {
+                    let line = buffer_line as u32 + 1;
+                    // Copied out so the state borrow ends before painting text.
+                    let mark = {
+                        let state = self.state.read(cx);
+                        let marks = state.gutter_marks.as_slice();
+                        while next_mark < marks.len() && marks[next_mark].line < line {
+                            next_mark += 1;
+                        }
+                        marks
+                            .get(next_mark)
+                            .copied()
+                            .filter(|mark| mark.line == line)
+                    };
+                    if let Some(mark) = mark {
+                        match mark.kind {
+                            GutterMarkKind::Changed => window.paint_quad(fill(
+                                Bounds::new(point(mark_x, p.y), size(mark_width, height)),
+                                mark.color,
+                            )),
+                            // A removal has no row left, so it gets a point on
+                            // the top edge of the line it used to precede.
+                            GutterMarkKind::Deleted => {
+                                let mut builder = gpui::PathBuilder::fill();
+                                builder.move_to(point(mark_x, p.y));
+                                builder.line_to(point(mark_x + mark_width, p.y));
+                                builder.line_to(point(mark_x + mark_width.half(), p.y + mark_width));
+                                builder.close();
+                                if let Ok(path) = builder.build() {
+                                    window.paint_path(path, mark.color);
+                                }
+                            }
+                        }
                     }
                 }
 

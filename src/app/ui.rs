@@ -117,7 +117,7 @@ fn branch_label(branch: &Branch) -> String {
 /// compete with the row content, and on light themes it is too pale to read at
 /// this size; the pull gives it the softer, sandier tone of a change marker
 /// while staying inside the theme's palette.
-fn change_tint(warning: Hsla, foreground: Hsla) -> Hsla {
+pub(super) fn change_tint(warning: Hsla, foreground: Hsla) -> Hsla {
     hsla(
         warning.h,
         warning.s * 0.5,

@@ -1,8 +1,106 @@
+diff --git a/src/input/base/element.rs b/src/input/base/element.rs
+index 20b2b6d..15b69b1 100644
+--- a/src/input/base/element.rs
++++ b/src/input/base/element.rs
+@@ -21,7 +21,7 @@ use crate::{
+ };
+ 
+ use super::{
+-    InputBaseState, PrepaintCaretGeometry, RangeDecorationStyle, TextDecoration,
++    GutterMarkKind, InputBaseState, PrepaintCaretGeometry, RangeDecorationStyle, TextDecoration,
+     layout::{LastLayout, WhitespaceIndicators},
+     mode::LayoutMode,
+     tab_stops::{expand_tabs, expanded_width, tab_stop_width},
+@@ -3473,6 +3473,15 @@ impl<M: InputModeKind> Element for TextElement<M> {
+             );
+             window.paint_quad(fill(gutter_bounds, gutter_bg));
+ 
++            // Changed-line marks sit in the gutter's leading padding, left of
++            // the numbers, so they hold their column through soft wrap, folding
++            // and horizontal scroll. The marks arrive sorted by line, so one
++            // cursor walks them beside the visible lines.
++            let mut next_mark = 0;
++            let mark_x = gutter_bounds.origin.x + px(1.);
++            // Leave a pixel between the bar and the first digit.
++            let mark_width = (editor_paddings.left - px(3.)).clamp(px(0.), px(3.));
++
+             // Each item is the normal lines.
+             for (lines, &buffer_line) in line_numbers
+                 .iter()
+@@ -3495,6 +3504,42 @@ impl<M: InputModeKind> Element for TextElement<M> {
+                     }
+                 }
+ 
++                if mark_width > px(0.) {
++                    let line = buffer_line as u32 + 1;
++                    // Copied out so the state borrow ends before painting text.
++                    let mark = {
++                        let state = self.state.read(cx);
++                        let marks = state.gutter_marks.as_slice();
++                        while next_mark < marks.len() && marks[next_mark].line < line {
++                            next_mark += 1;
++                        }
++                        marks
++                            .get(next_mark)
++                            .copied()
++                            .filter(|mark| mark.line == line)
++                    };
++                    if let Some(mark) = mark {
++                        match mark.kind {
++                            GutterMarkKind::Changed => window.paint_quad(fill(
++                                Bounds::new(point(mark_x, p.y), size(mark_width, height)),
++                                mark.color,
++                            )),
++                            // A removal has no row left, so it gets a point on
++                            // the top edge of the line it used to precede.
++                            GutterMarkKind::Deleted => {
++                                let mut builder = gpui::PathBuilder::fill();
++                                builder.move_to(point(mark_x, p.y));
++                                builder.line_to(point(mark_x + mark_width, p.y));
++                                builder.line_to(point(mark_x + mark_width.half(), p.y + mark_width));
++                                builder.close();
++                                if let Ok(path) = builder.build() {
++                                    window.paint_path(path, mark.color);
++                                }
++                            }
++                        }
++                    }
++                }
++
+                 for line in lines {
+                     _ = line.paint(p, line_height, TextAlign::Left, None, window, cx);
+                     offset_y += line_height;
 diff --git a/src/input/base/state.rs b/src/input/base/state.rs
-index d35f083..8bf4663 100644
+index 62831b2..96a21de 100644
 --- a/src/input/base/state.rs
 +++ b/src/input/base/state.rs
-@@ -3163,6 +3163,14 @@ impl<M: InputModeKind> InputBaseState<M> {
+@@ -27,6 +27,7 @@ use super::{
+     blink_cursor::BlinkCursor,
+     change::Change,
+     cursor::{CursorSelection, Selections},
++    decorations::GutterMark,
+     element::{
+         EditorScrollbar, EditorScrollbarSnapshot, LongestLineKey, TextElement,
+         clamp_horizontal_scroll_offset,
+@@ -516,6 +517,9 @@ pub struct InputBaseState<M: InputModeKind> {
+     /// The widest measured unwrapped line width and what it was measured for.
+     pub(super) longest_line_width: Cell<Option<(LongestLineKey, Pixels)>>,
+     pub(super) editor_paddings: Edges<Pixels>,
++    /// Changed-line marks the application keeps in step with its own diff.
++    /// See [`GutterMark`].
++    pub(crate) gutter_marks: Vec<GutterMark>,
+     /// The style this state paints with: what was projected onto it, with
+     /// every colour left unset resolved from the palette that is current. It
+     /// is rebuilt at the top of every render, which is what keeps it current
+@@ -1003,6 +1007,7 @@ impl<M: InputModeKind> InputBaseState<M> {
+             editor_scrollbar_snapshot: Cell::new(None),
+             longest_line_width: Cell::new(None),
+             editor_paddings: Edges::default(),
++            gutter_marks: Vec::new(),
+             deferred_scroll_offset: None,
+             placeholder: SharedString::default(),
+             mask_pattern: MaskPattern::default(),
+@@ -3508,6 +3513,14 @@ impl<M: InputModeKind> InputBaseState<M> {
          self.select_to(end, cx);
      }
  
@@ -17,3 +115,98 @@ index d35f083..8bf4663 100644
      /// Add `range` as an additional selection, keeping the existing ones —
      /// the programmatic equivalent of Alt-clicking another cursor into the
      /// text.
+diff --git a/src/input/editor/decorations.rs b/src/input/editor/decorations.rs
+index e3965f0..86b1e0f 100644
+--- a/src/input/editor/decorations.rs
++++ b/src/input/editor/decorations.rs
+@@ -64,6 +64,53 @@ impl RangeDecoration {
+     }
+ }
+ 
++/// A changed-line mark in an editor's gutter.
++///
++/// The application owns the diff; this only says how one line of it looks.
++/// Marks are keyed by 1-based buffer line and painted in the gutter's left
++/// margin, left of the line numbers, so they keep their column through soft
++/// wrap, folding and horizontal scroll. They are presentation only: they track
++/// no edits, and the application replaces them after its own diff changes.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct GutterMark {
++    /// The 1-based buffer line the mark belongs to.
++    pub line: u32,
++    /// How the mark is drawn.
++    pub kind: GutterMarkKind,
++    /// The mark's color, chosen by the application so themes stay app-owned.
++    pub color: Hsla,
++}
++
++impl GutterMark {
++    /// A bar covering `line`, for a line added or changed against the
++    /// committed version.
++    pub fn changed(line: u32, color: Hsla) -> Self {
++        Self {
++            line,
++            kind: GutterMarkKind::Changed,
++            color,
++        }
++    }
++
++    /// A point on the top edge of `line`, where lines above it were removed.
++    pub fn deleted(line: u32, color: Hsla) -> Self {
++        Self {
++            line,
++            kind: GutterMarkKind::Deleted,
++            color,
++        }
++    }
++}
++
++/// How a [`GutterMark`] is painted.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum GutterMarkKind {
++    /// A bar covering the line's rows.
++    Changed,
++    /// A point on the line's top edge.
++    Deleted,
++}
++
+ /// A presentation style applied to a UTF-8 byte range in an input.
+ ///
+ /// This is the GPUI [`HighlightStyle`] counterpart of Monaco's
+@@ -552,6 +599,21 @@ impl InputBaseState<EditorMode> {
+             id,
+         }
+     }
++
++    /// Replace this editor's gutter marks. They paint in the gutter's left
++    /// margin, and nothing paints while line numbers are hidden. Marks must be
++    /// sorted by line: the painter walks them once beside the visible lines.
++    pub fn set_gutter_marks(&mut self, marks: Vec<GutterMark>, cx: &mut Context<Self>) {
++        if self.gutter_marks != marks {
++            self.gutter_marks = marks;
++            cx.notify();
++        }
++    }
++
++    /// The gutter marks the application last set.
++    pub fn gutter_marks(&self) -> &[GutterMark] {
++        &self.gutter_marks
++    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index 9ce0317..fb8f7ab 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -87,8 +87,8 @@ pub use crate::number_input::{NumberInputEvent, NumberStep};
+ pub use base::{InputBase, InputContextMenuCapabilities, InputStyles};
+ pub use cursor::Selection;
+ pub use decorations::{
+-    RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, TextDecoration,
+-    TextDecorationCollection,
++    GutterMark, GutterMarkKind, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle,
++    TextDecoration, TextDecorationCollection,
+ };
+ pub use diagnostics::{
+     Diagnostic, DiagnosticEntry, DiagnosticRelatedInformation, DiagnosticSet, DiagnosticSeverity,

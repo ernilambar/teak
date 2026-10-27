@@ -10,6 +10,7 @@ A fast, lightweight text editor.
 
 - Tabs and syntax highlighting
 - File explorer sidebar with git status marks
+- Changed lines marked in the editor gutter while you type, before saving
 - Git branch, with ahead/behind counts, in the status bar
 - Watches open folders, so changes made by other programs show up on their own
 - Command palette (`Cmd+Shift+P`)

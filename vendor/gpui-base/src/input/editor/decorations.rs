@@ -64,6 +64,53 @@ impl RangeDecoration {
     }
 }
 
+/// A changed-line mark in an editor's gutter.
+///
+/// The application owns the diff; this only says how one line of it looks.
+/// Marks are keyed by 1-based buffer line and painted in the gutter's left
+/// margin, left of the line numbers, so they keep their column through soft
+/// wrap, folding and horizontal scroll. They are presentation only: they track
+/// no edits, and the application replaces them after its own diff changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GutterMark {
+    /// The 1-based buffer line the mark belongs to.
+    pub line: u32,
+    /// How the mark is drawn.
+    pub kind: GutterMarkKind,
+    /// The mark's color, chosen by the application so themes stay app-owned.
+    pub color: Hsla,
+}
+
+impl GutterMark {
+    /// A bar covering `line`, for a line added or changed against the
+    /// committed version.
+    pub fn changed(line: u32, color: Hsla) -> Self {
+        Self {
+            line,
+            kind: GutterMarkKind::Changed,
+            color,
+        }
+    }
+
+    /// A point on the top edge of `line`, where lines above it were removed.
+    pub fn deleted(line: u32, color: Hsla) -> Self {
+        Self {
+            line,
+            kind: GutterMarkKind::Deleted,
+            color,
+        }
+    }
+}
+
+/// How a [`GutterMark`] is painted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GutterMarkKind {
+    /// A bar covering the line's rows.
+    Changed,
+    /// A point on the line's top edge.
+    Deleted,
+}
+
 /// A presentation style applied to a UTF-8 byte range in an input.
 ///
 /// This is the GPUI [`HighlightStyle`] counterpart of Monaco's
@@ -551,6 +598,21 @@ impl InputBaseState<EditorMode> {
             state: cx.entity().downgrade(),
             id,
         }
+    }
+
+    /// Replace this editor's gutter marks. They paint in the gutter's left
+    /// margin, and nothing paints while line numbers are hidden. Marks must be
+    /// sorted by line: the painter walks them once beside the visible lines.
+    pub fn set_gutter_marks(&mut self, marks: Vec<GutterMark>, cx: &mut Context<Self>) {
+        if self.gutter_marks != marks {
+            self.gutter_marks = marks;
+            cx.notify();
+        }
+    }
+
+    /// The gutter marks the application last set.
+    pub fn gutter_marks(&self) -> &[GutterMark] {
+        &self.gutter_marks
     }
 }
 

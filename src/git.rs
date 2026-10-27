@@ -1,17 +1,20 @@
-//! Working-tree status and branch for the workspace.
+//! Working-tree status, branch and line-level changes for the workspace.
 //!
 //! The app needs a file's state, not repository objects, so this shells out to
-//! `git status` instead of linking a git library: macOS always ships a usable
-//! `git`, and the short calls it makes stay off the main thread.
+//! `git status`, `git show` and `git diff` instead of linking a git library:
+//! macOS always ships a usable `git`, and the short calls it makes stay off the
+//! main thread.
 //!
 //! GPUI-free on purpose: [`state`] takes the workspace folders and returns
-//! what the tree and the status bar query by path.
+//! what the tree and the status bar query by path, and [`line_changes`] takes
+//! a buffer and returns what the editor marks under its changed lines.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A working-tree state. The variants are ordered by how much attention they
 /// deserve, so a path reported twice keeps the more serious one.
@@ -294,6 +297,180 @@ fn trim_trailing_slashes(bytes: &[u8]) -> &[u8] {
     }
     &bytes[..end]
 }
+
+/// A run of lines that differs from the file's committed version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LineChange {
+    /// The 1-based first line of the run in the buffer. For a deletion this is
+    /// the last line before the removal, and 0 when the removal sits above the
+    /// first line.
+    pub(crate) line: u32,
+    /// How many lines the run covers; zero for a deletion.
+    pub(crate) count: u32,
+    pub(crate) kind: LineKind,
+}
+
+/// What a run of lines carries against the committed file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LineKind {
+    Added,
+    Modified,
+    Deleted,
+}
+
+/// Reads the line-level changes of `text` against the file's version in `HEAD`.
+/// A file git has not committed yet is all addition; everything else compares
+/// against the blob, whether or not the change is saved, so marks follow the
+/// buffer while typing.
+pub(crate) fn line_changes(path: &Path, text: &str, status: Option<Status>) -> Vec<LineChange> {
+    match status {
+        // Git holds no committed version yet, so every line is an addition.
+        Some(Status::Untracked | Status::Added) => whole_file(text),
+        // Both sides of a conflict live in the index, and the working file
+        // holds markers HEAD never had.
+        Some(Status::Conflicted) => Vec::new(),
+        _ => committed(path)
+            .and_then(|old| diff_lines(&old, text))
+            .unwrap_or_default(),
+    }
+}
+
+/// The buffered lines as one addition, for a file git has not committed.
+fn whole_file(text: &str) -> Vec<LineChange> {
+    match text.lines().count() {
+        0 => Vec::new(),
+        count => vec![LineChange {
+            line: 1,
+            count: count as u32,
+            kind: LineKind::Added,
+        }],
+    }
+}
+
+/// The file's committed text. `./` makes the path relative to the file's own
+/// folder, so callers need no repository-prefix arithmetic.
+fn committed(path: &Path) -> Option<String> {
+    let dir = path.parent()?;
+    let name = path.file_name()?.to_str()?;
+    let output = Command::new("git")
+        .current_dir(dir)
+        .arg("show")
+        .arg(format!("HEAD:./{name}"))
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Line-level changes between two versions, read from `git diff`'s own hunks.
+/// The app ships no diff engine, and one more short `git` call off the main
+/// thread is cheaper than getting the hunks right by hand.
+fn diff_lines(old: &str, new: &str) -> Option<Vec<LineChange>> {
+    if old == new {
+        return Some(Vec::new());
+    }
+    // `git diff --no-index` compares two files, so the committed text and the
+    // buffer both go to temp files, outside any repository's attributes.
+    let stamp = TEMP_STAMP.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir();
+    let old_path = dir.join(format!("teak-head-{}-{stamp}", std::process::id()));
+    let new_path = dir.join(format!("teak-buffer-{}-{stamp}", std::process::id()));
+    let wrote = std::fs::write(&old_path, old).is_ok() && std::fs::write(&new_path, new).is_ok();
+    let output = wrote.then(|| {
+        Command::new("git")
+            .current_dir(&dir)
+            .args([
+                "diff",
+                "--no-index",
+                "--no-color",
+                "--no-ext-diff",
+                "-U0",
+                "--",
+            ])
+            .arg(&old_path)
+            .arg(&new_path)
+            .output()
+    });
+    let _ = std::fs::remove_file(&old_path);
+    let _ = std::fs::remove_file(&new_path);
+    // Exit status 1 means the files differ, which is the normal answer here.
+    let output = output?.ok()?;
+    Some(parse_hunks(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The changed runs named by a unified diff's hunk headers.
+fn parse_hunks(diff: &str) -> Vec<LineChange> {
+    diff.lines()
+        .filter_map(|line| line.strip_prefix("@@ "))
+        .filter_map(parse_hunk)
+        .collect()
+}
+
+/// One hunk header, `@@ -a,b +c,d @@`, as a changed run. No old lines mean the
+/// whole hunk is added, no new lines mean it is a deletion, and the rest
+/// modify the lines both sides share.
+fn parse_hunk(header: &str) -> Option<LineChange> {
+    let (old, new) = header.split_once(" +")?;
+    let (_, old_count) = parse_header_range(old.strip_prefix('-')?)?;
+    let (new_start, new_count) = parse_header_range(new)?;
+    let (line, kind) = if new_count == 0 {
+        // The removal sits after the line above it, which is where the editor
+        // paints the mark; `0` means it sits above the first line.
+        (new_start, LineKind::Deleted)
+    } else if old_count == 0 {
+        (new_start, LineKind::Added)
+    } else {
+        (new_start, LineKind::Modified)
+    };
+    Some(LineChange {
+        line,
+        count: new_count,
+        kind,
+    })
+}
+
+/// The `start,count` pair of one side of a hunk header. A bare start means one
+/// line, and `0,0` marks a side that is missing entirely.
+fn parse_header_range(text: &str) -> Option<(u32, u32)> {
+    let text = text.split(' ').next()?;
+    let (start, count) = text.split_once(',').unwrap_or((text, "1"));
+    Some((start.parse().ok()?, count.parse().ok()?))
+}
+
+/// The 1-based gutter line for each change: a run marks its own lines, and a
+/// deletion marks the top edge of the line it preceded, clamped to the buffer
+/// so a removal at the end still lands on the last line.
+pub(crate) fn gutter_lines(changes: &[LineChange], text: &str) -> Vec<(u32, LineKind)> {
+    let last = text.split('\n').count().max(1) as u32;
+    let mut lines: Vec<(u32, LineKind)> = Vec::new();
+    for change in changes {
+        match change.kind {
+            LineKind::Deleted => {
+                push_mark(&mut lines, (change.line + 1).min(last), LineKind::Deleted)
+            }
+            LineKind::Added | LineKind::Modified => {
+                for line in change.line..change.line + change.count.max(1) {
+                    push_mark(&mut lines, line.min(last), change.kind);
+                }
+            }
+        }
+    }
+    lines
+}
+
+/// Records one mark per line in buffer order. A later mark on a line already
+/// marked is dropped, so a removal and a changed line on the same boundary
+/// stay one mark.
+fn push_mark(lines: &mut Vec<(u32, LineKind)>, line: u32, kind: LineKind) {
+    if lines.last().is_none_or(|(last, _)| *last < line) {
+        lines.push((line, kind));
+    }
+}
+
+/// Distinguishes the temp files of overlapping reads in one process.
+static TEMP_STAMP: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(test)]
 mod tests {
@@ -585,6 +762,210 @@ mod tests {
         // The watcher follows the git directory, which git reports canonically.
         let git_dir = dir.canonicalize().unwrap().join(".git");
         assert!(found.git_dirs().any(|path| path == &git_dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hunk_headers_become_added_modified_and_deleted_runs() {
+        let diff = "\
+diff --git a/a.rs b/a.rs
+index aaa..bbb 100644
+--- a/a.rs
++++ b/a.rs
+@@ -2 +2 @@
+-two
++changed
+@@ -4,0 +5,2 @@
++new one
++new two
+@@ -8 +8,0 @@
+-gone
+";
+
+        assert_eq!(
+            parse_hunks(diff),
+            vec![
+                LineChange {
+                    line: 2,
+                    count: 1,
+                    kind: LineKind::Modified,
+                },
+                LineChange {
+                    line: 5,
+                    count: 2,
+                    kind: LineKind::Added,
+                },
+                // The removal sits after the line above it.
+                LineChange {
+                    line: 8,
+                    count: 0,
+                    kind: LineKind::Deleted,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_header_without_counts_covers_one_line() {
+        assert_eq!(
+            parse_hunks("@@ -1 +7 @@"),
+            vec![LineChange {
+                line: 7,
+                count: 1,
+                kind: LineKind::Modified,
+            }]
+        );
+        // A removal above the first line is recorded against line zero.
+        assert_eq!(
+            parse_hunks("@@ -1,2 +0,0 @@"),
+            vec![LineChange {
+                line: 0,
+                count: 0,
+                kind: LineKind::Deleted,
+            }]
+        );
+    }
+
+    #[test]
+    fn changed_runs_mark_one_gutter_line_each() {
+        let text = "one\ntwo\nthree\nfour\n";
+        let changes = [
+            LineChange {
+                line: 2,
+                count: 1,
+                kind: LineKind::Added,
+            },
+            LineChange {
+                line: 3,
+                count: 2,
+                kind: LineKind::Modified,
+            },
+            // A removal after line two sits on the top edge of line three.
+            LineChange {
+                line: 2,
+                count: 0,
+                kind: LineKind::Deleted,
+            },
+        ];
+
+        assert_eq!(
+            gutter_lines(&changes, text),
+            vec![
+                (2, LineKind::Added),
+                (3, LineKind::Modified),
+                (4, LineKind::Modified),
+            ],
+            "the removal shares line three with the change, and one mark wins"
+        );
+    }
+
+    #[test]
+    fn a_deletion_marks_the_line_it_preceded() {
+        let deleted = |line| LineChange {
+            line,
+            count: 0,
+            kind: LineKind::Deleted,
+        };
+
+        // A trailing newline leaves an empty last line to mark.
+        assert_eq!(
+            gutter_lines(&[deleted(2)], "a\nb\nc\nd\n"),
+            vec![(3, LineKind::Deleted)]
+        );
+        // A removal above the first line marks the top of line one.
+        assert_eq!(
+            gutter_lines(&[deleted(0)], "one\ntwo\n"),
+            vec![(1, LineKind::Deleted)]
+        );
+        // Past the end, the mark clamps to the last line the buffer holds.
+        assert_eq!(
+            gutter_lines(&[deleted(5)], "a\nb"),
+            vec![(2, LineKind::Deleted)]
+        );
+    }
+
+    #[test]
+    fn an_uncommitted_file_is_one_addition() {
+        assert_eq!(
+            line_changes(
+                Path::new("/nowhere/a.rs"),
+                "one\ntwo\n",
+                Some(Status::Untracked)
+            ),
+            vec![LineChange {
+                line: 1,
+                count: 2,
+                kind: LineKind::Added,
+            }]
+        );
+        assert!(line_changes(Path::new("/nowhere/a.rs"), "", Some(Status::Untracked)).is_empty());
+        // A rename has no committed text at its new path, so nothing is guessed.
+        assert!(
+            line_changes(Path::new("/nowhere/a.rs"), "one\n", Some(Status::Renamed)).is_empty()
+        );
+    }
+
+    #[test]
+    fn reads_line_changes_from_a_real_working_tree() {
+        let dir = std::env::temp_dir().join(format!("app-git-lines-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), "one\ntwo\nthree\n").unwrap();
+
+        let committed = git(&dir, &["init", "-q", "-b", "trunk"])
+            && git(&dir, &["add", "."])
+            && git(
+                &dir,
+                &[
+                    "-c",
+                    "user.email=a@b",
+                    "-c",
+                    "user.name=a",
+                    "commit",
+                    "-qm",
+                    "init",
+                ],
+            );
+        if !committed {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+
+        let path = dir.join("a.rs");
+        let modified = line_changes(
+            &path,
+            "one\nchanged\nthree\nadded\n",
+            Some(Status::Modified),
+        );
+        assert_eq!(
+            modified,
+            vec![
+                LineChange {
+                    line: 2,
+                    count: 1,
+                    kind: LineKind::Modified,
+                },
+                LineChange {
+                    line: 4,
+                    count: 1,
+                    kind: LineKind::Added,
+                },
+            ]
+        );
+
+        let removed = line_changes(&path, "one\nthree\n", Some(Status::Modified));
+        assert_eq!(
+            removed,
+            vec![LineChange {
+                line: 1,
+                count: 0,
+                kind: LineKind::Deleted,
+            }]
+        );
+
+        // A buffer the commit already holds has nothing to mark.
+        assert!(line_changes(&path, "one\ntwo\nthree\n", Some(Status::Modified)).is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
