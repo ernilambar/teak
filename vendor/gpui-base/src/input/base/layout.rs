@@ -22,6 +22,9 @@ pub(super) struct LastLayout {
     pub(super) wrap_width: Option<Pixels>,
     pub(super) wrapping_indent: WrappingIndent,
     pub(super) line_number_width: Pixels,
+    /// Width of the digits alone, so the gutter can place a mark between them
+    /// and the fold chevrons.
+    pub(super) line_number_digits_width: Pixels,
     /// Width of one space in the editor font.
     ///
     /// Past the end of a line there are no glyphs to hit-test against, so this is the

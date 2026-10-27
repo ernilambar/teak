@@ -67,10 +67,10 @@ impl RangeDecoration {
 /// A changed-line mark in an editor's gutter.
 ///
 /// The application owns the diff; this only says how one line of it looks.
-/// Marks are keyed by 1-based buffer line and painted in the gutter's left
-/// margin, left of the line numbers, so they keep their column through soft
-/// wrap, folding and horizontal scroll. They are presentation only: they track
-/// no edits, and the application replaces them after its own diff changes.
+/// Marks are keyed by 1-based buffer line and painted between the line number
+/// and the fold chevrons, so they keep their column through soft wrap, folding
+/// and horizontal scroll. They are presentation only: they track no edits, and
+/// the application replaces them after its own diff changes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GutterMark {
     /// The 1-based buffer line the mark belongs to.
@@ -600,9 +600,10 @@ impl InputBaseState<EditorMode> {
         }
     }
 
-    /// Replace this editor's gutter marks. They paint in the gutter's left
-    /// margin, and nothing paints while line numbers are hidden. Marks must be
-    /// sorted by line: the painter walks them once beside the visible lines.
+    /// Replace this editor's gutter marks. They paint between the line number
+    /// and the fold chevrons, and nothing paints while line numbers are hidden.
+    /// Marks must be sorted by line: the painter walks them once beside the
+    /// visible lines.
     pub fn set_gutter_marks(&mut self, marks: Vec<GutterMark>, cx: &mut Context<Self>) {
         if self.gutter_marks != marks {
             self.gutter_marks = marks;

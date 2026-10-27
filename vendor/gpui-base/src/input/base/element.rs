@@ -52,6 +52,12 @@ pub(super) const RIGHT_MARGIN: Pixels = px(10.);
 pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
 const FOLD_ICON_WIDTH: Pixels = px(14.);
 const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
+/// Gap between the line number and a changed-line mark, and the mark's width.
+/// The pair is reserved in the gutter so the mark never crowds the digits. The
+/// gap leaves the mark optically centered between the digits and the chevron,
+/// whose icon carries transparent margins of its own.
+const GUTTER_MARK_GAP: Pixels = px(6.);
+const GUTTER_MARK_WIDTH: Pixels = px(3.);
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
 const MIN_LINE_NUMBER_DIGITS: usize = 3;
 const MAX_LINE_NUMBER_DIGITS: usize = 7;
@@ -1175,19 +1181,20 @@ impl<M: InputModeKind> TextElement<M> {
         (visible_range, visible_buffer_lines, visible_top)
     }
 
-    /// Return (line_number_width, line_number_len)
+    /// Return (line_number_width, line_number_len, digits_width)
     fn layout_line_numbers(
         state: &InputBaseState<M>,
         text: &Rope,
         font_size: Pixels,
         style: &TextStyle,
         window: &mut Window,
-    ) -> (Pixels, usize) {
+    ) -> (Pixels, usize, Pixels) {
         let total_lines = text.lines_len();
         // Reserve three digits for small documents, then follow the actual
         // line count up to seven digits.
         let line_number_len = line_number_len(total_lines);
 
+        let mut digits_width = px(0.);
         let mut line_number_width = if state.mode.line_number() {
             let empty_line_number = window.text_system().shape_line(
                 "+".repeat(line_number_len).into(),
@@ -1203,7 +1210,10 @@ impl<M: InputModeKind> TextElement<M> {
                 None,
             );
 
-            empty_line_number.width + LINE_NUMBER_RIGHT_MARGIN
+            digits_width = empty_line_number.width;
+            // The mark sits between the number and the fold chevrons, so its
+            // share of the gutter is reserved here for every code editor.
+            digits_width + GUTTER_MARK_GAP + GUTTER_MARK_WIDTH + LINE_NUMBER_RIGHT_MARGIN
         } else if state.is_code_editor() {
             LINE_NUMBER_RIGHT_MARGIN
         } else {
@@ -1215,7 +1225,7 @@ impl<M: InputModeKind> TextElement<M> {
             line_number_width += FOLD_ICON_HITBOX_WIDTH
         }
 
-        (line_number_width, line_number_len)
+        (line_number_width, line_number_len, digits_width)
     }
 
     /// Layout shaped lines for whitespace indicators (space and tab).
@@ -2730,7 +2740,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         };
 
         // Calculate the width of the line numbers
-        let (line_number_width, line_number_len) =
+        let (line_number_width, line_number_len, line_number_digits_width) =
             Self::layout_line_numbers(&state, &text, text_size, &text_style, window);
 
         let mut bounds = bounds;
@@ -2818,6 +2828,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             wrap_width,
             wrapping_indent,
             line_number_width,
+            line_number_digits_width,
             space_width,
             lines: Rc::new(vec![]),
             cursor_bounds: None,
@@ -3473,14 +3484,14 @@ impl<M: InputModeKind> Element for TextElement<M> {
             );
             window.paint_quad(fill(gutter_bounds, gutter_bg));
 
-            // Changed-line marks sit in the gutter's leading padding, left of
-            // the numbers, so they hold their column through soft wrap, folding
+            // Changed-line marks sit between the number and the fold
+            // chevrons, so they hold their column through soft wrap, folding
             // and horizontal scroll. The marks arrive sorted by line, so one
             // cursor walks them beside the visible lines.
             let mut next_mark = 0;
-            let mark_x = gutter_bounds.origin.x + px(1.);
-            // Leave a pixel between the bar and the first digit.
-            let mark_width = (editor_paddings.left - px(3.)).clamp(px(0.), px(3.));
+            let mark_x = input_bounds.origin.x
+                + prepaint.last_layout.line_number_digits_width
+                + GUTTER_MARK_GAP;
 
             // Each item is the normal lines.
             for (lines, &buffer_line) in line_numbers
@@ -3504,37 +3515,41 @@ impl<M: InputModeKind> Element for TextElement<M> {
                     }
                 }
 
-                if mark_width > px(0.) {
-                    let line = buffer_line as u32 + 1;
-                    // Copied out so the state borrow ends before painting text.
-                    let mark = {
-                        let state = self.state.read(cx);
-                        let marks = state.gutter_marks.as_slice();
-                        while next_mark < marks.len() && marks[next_mark].line < line {
-                            next_mark += 1;
-                        }
-                        marks
-                            .get(next_mark)
-                            .copied()
-                            .filter(|mark| mark.line == line)
-                    };
-                    if let Some(mark) = mark {
-                        match mark.kind {
-                            GutterMarkKind::Changed => window.paint_quad(fill(
-                                Bounds::new(point(mark_x, p.y), size(mark_width, height)),
-                                mark.color,
-                            )),
-                            // A removal has no row left, so it gets a point on
-                            // the top edge of the line it used to precede.
-                            GutterMarkKind::Deleted => {
-                                let mut builder = gpui::PathBuilder::fill();
-                                builder.move_to(point(mark_x, p.y));
-                                builder.line_to(point(mark_x + mark_width, p.y));
-                                builder.line_to(point(mark_x + mark_width.half(), p.y + mark_width));
-                                builder.close();
-                                if let Ok(path) = builder.build() {
-                                    window.paint_path(path, mark.color);
-                                }
+                let line = buffer_line as u32 + 1;
+                // Copied out so the state borrow ends before painting text.
+                let mark = {
+                    let state = self.state.read(cx);
+                    let marks = state.gutter_marks.as_slice();
+                    while next_mark < marks.len() && marks[next_mark].line < line {
+                        next_mark += 1;
+                    }
+                    marks
+                        .get(next_mark)
+                        .copied()
+                        .filter(|mark| mark.line == line)
+                };
+                if let Some(mark) = mark {
+                    match mark.kind {
+                        GutterMarkKind::Changed => window.paint_quad(fill(
+                            Bounds::new(
+                                point(mark_x, p.y),
+                                size(GUTTER_MARK_WIDTH, height),
+                            ),
+                            mark.color,
+                        )),
+                        // A removal has no row left, so it gets a point on the
+                        // top edge of the line it used to precede.
+                        GutterMarkKind::Deleted => {
+                            let mut builder = gpui::PathBuilder::fill();
+                            builder.move_to(point(mark_x, p.y));
+                            builder.line_to(point(mark_x + GUTTER_MARK_WIDTH, p.y));
+                            builder.line_to(point(
+                                mark_x + GUTTER_MARK_WIDTH.half(),
+                                p.y + GUTTER_MARK_WIDTH,
+                            ));
+                            builder.close();
+                            if let Ok(path) = builder.build() {
+                                window.paint_path(path, mark.color);
                             }
                         }
                     }
