@@ -16,7 +16,28 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_channel::Sender;
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher as _};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
+
+/// What happened to a watched path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Change {
+    /// The path was written, created, or renamed into place.
+    Changed,
+    /// The path was removed or renamed away.
+    Removed,
+}
+
+impl Change {
+    /// Maps a platform event kind. Only removal is called out: a reload of a
+    /// path that is gone would fail, while every other kind is worth the same
+    /// "read it again" treatment.
+    fn of(kind: EventKind) -> Self {
+        match kind {
+            EventKind::Remove(_) => Self::Removed,
+            _ => Self::Changed,
+        }
+    }
+}
 
 /// Watches a set of folders and forwards every changed path to a channel.
 pub(crate) struct Watcher {
@@ -31,16 +52,17 @@ pub(crate) struct Watcher {
 impl Watcher {
     /// Builds a watcher that sends changed paths to `events`. `None` when the
     /// platform watcher cannot start; the app then stays pull-based, as before.
-    pub(crate) fn new(events: Sender<PathBuf>) -> Option<Self> {
+    pub(crate) fn new(events: Sender<(PathBuf, Change)>) -> Option<Self> {
         let aliases: Arc<Mutex<Vec<(PathBuf, PathBuf)>>> = Arc::default();
         let shared = aliases.clone();
         let inner = notify::recommended_watcher(move |result: notify::Result<Event>| {
             let Ok(event) = result else {
                 return;
             };
+            let change = Change::of(event.kind);
             let aliases = shared.lock().unwrap_or_else(PoisonError::into_inner);
             for path in event.paths {
-                let _ = events.try_send(rewrite(&path, &aliases));
+                let _ = events.try_send((rewrite(&path, &aliases), change));
             }
         })
         .ok()?;
@@ -133,6 +155,23 @@ mod tests {
     }
 
     #[test]
+    fn only_removals_are_called_out() {
+        assert_eq!(
+            Change::of(EventKind::Remove(notify::event::RemoveKind::File)),
+            Change::Removed
+        );
+        for kind in [
+            EventKind::Create(notify::event::CreateKind::File),
+            EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )),
+            EventKind::Any,
+        ] {
+            assert_eq!(Change::of(kind), Change::Changed);
+        }
+    }
+
+    #[test]
     fn a_file_created_in_a_watched_folder_is_reported() {
         let dir = std::env::temp_dir().join(format!("app-watch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -150,7 +189,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut seen = false;
         while Instant::now() < deadline {
-            if let Ok(path) = events.try_recv() {
+            if let Ok((path, _)) = events.try_recv() {
                 // Coarse events may name the folder instead of the file, but
                 // they must arrive in the caller's spelling of the folder.
                 if path.starts_with(&dir) {

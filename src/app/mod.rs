@@ -16,6 +16,7 @@ use self::preferences::SettingsState;
 use self::tabs::{OpenTab, Preview, TabSet};
 use self::workspace::Workspace;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -39,7 +40,7 @@ use crate::settings::{
     save_show_whitespace, save_soft_wrap, save_theme, settings_path, ui_font_family_issue,
 };
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
-use crate::watcher::Watcher;
+use crate::watcher::{Change, Watcher};
 use crate::windows::{AppServices, WindowSeed, cascaded_frame};
 use crate::{
     About, BringAllToFront, CheckForUpdates, ClearRecent, CloseWindow, CopyFileName, CopyFilePath,
@@ -74,12 +75,20 @@ pub(crate) const WINDOW_TITLE: &str = "Teak";
 const WATCH_SETTLE: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Whether a changed path can move git state. Anything inside a `.git`
-/// directory can (a commit or checkout writes only there), and anything in the
-/// worktree outside the folders the app already treats as build noise can.
+/// directory can (a commit or checkout writes only there), except the bulk
+/// stores that `gc`, `fetch` and `clone` churn without changing what
+/// `git status` or the branch would report. Worktree changes count too, unless
+/// they land in the folders the app already treats as build noise.
 fn git_may_have_changed(path: &Path, roots: &[PathBuf]) -> bool {
-    path.components()
-        .any(|component| component.as_os_str() == ".git")
-        || !is_noise_path(path, roots)
+    let mut components = path.components();
+    while let Some(component) = components.next() {
+        if component.as_os_str() != ".git" {
+            continue;
+        }
+        let after = components.next().and_then(|part| part.as_os_str().to_str());
+        return !matches!(after, Some("objects" | "logs" | "lfs" | "modules"));
+    }
+    !is_noise_path(path, roots)
 }
 
 pub(crate) struct TeakApp {
@@ -285,7 +294,7 @@ impl TeakApp {
         if self.workspace.has_watcher() {
             return;
         }
-        let (sender, events) = async_channel::unbounded::<PathBuf>();
+        let (sender, events) = async_channel::unbounded::<(PathBuf, Change)>();
         let Some(watcher) = Watcher::new(sender) else {
             // No usable platform watcher: keep refreshing on explicit triggers.
             return;
@@ -295,27 +304,27 @@ impl TeakApp {
 
         cx.spawn_in(window, async move |this, cx| {
             loop {
-                let Ok(path) = events.recv().await else {
+                let Ok((path, change)) = events.recv().await else {
                     return;
                 };
-                let mut paths = vec![path];
+                let mut paths: BTreeMap<PathBuf, Change> = BTreeMap::new();
+                paths.insert(path, change);
                 // Let a burst land before touching anything: one save reports
-                // a few paths, a checkout reports hundreds.
+                // a few paths, a checkout reports hundreds. A later event for
+                // the same path wins, so a file removed and put back is read
+                // again rather than treated as gone.
                 cx.background_executor().timer(WATCH_SETTLE).await;
-                while let Ok(path) = events.try_recv() {
-                    paths.push(path);
+                while let Ok((path, change)) = events.try_recv() {
+                    paths.insert(path, change);
                 }
-                // One gesture reports each path more than once.
-                paths.sort();
-                paths.dedup();
 
                 let Ok(()) = this.update_in(cx, |this, window, cx| {
                     let roots = this.workspace.roots().to_vec();
                     let mut git = false;
-                    for path in &paths {
+                    for (path, change) in &paths {
                         this.workspace.invalidate_path(path);
                         // A clean tab follows its file; an edited one asks first.
-                        this.handle_disk_change(path, window, cx);
+                        this.handle_disk_change(path, *change, window, cx);
                         git |= git_may_have_changed(path, &roots);
                     }
                     if git {
@@ -1418,9 +1427,12 @@ pub(super) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, TestAppContext};
 
+    use super::git_may_have_changed;
     use super::test_support::open_app;
 
     /// Cmd+Shift+N goes through the app root, creates a second window, and the
@@ -1440,5 +1452,46 @@ mod tests {
         cx.run_until_parked();
 
         assert_eq!(cx.windows().len(), 2);
+    }
+
+    #[test]
+    fn git_metadata_events_only_count_when_they_can_move_head() {
+        let roots = vec![PathBuf::from("/code/app")];
+        let git_dir = Path::new("/code/app/.git");
+
+        // Everything that can move HEAD, the index or a ref.
+        for path in [
+            "HEAD",
+            "index",
+            "packed-refs",
+            "refs/heads/main",
+            "MERGE_HEAD",
+        ] {
+            assert!(
+                git_may_have_changed(&git_dir.join(path), &roots),
+                "{path} should refresh git state"
+            );
+        }
+        // The bulk stores a gc, fetch or clone writes constantly.
+        for path in [
+            "objects/ab/cdef",
+            "logs/HEAD",
+            "lfs/data",
+            "modules/sub/HEAD",
+        ] {
+            assert!(
+                !git_may_have_changed(&git_dir.join(path), &roots),
+                "{path} should not refresh git state"
+            );
+        }
+        // Worktree edits count; build noise does not.
+        assert!(git_may_have_changed(
+            Path::new("/code/app/src/main.rs"),
+            &roots
+        ));
+        assert!(!git_may_have_changed(
+            Path::new("/code/app/target/debug/app"),
+            &roots
+        ));
     }
 }

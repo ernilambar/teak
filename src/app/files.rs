@@ -14,6 +14,7 @@ use crate::language::{editor_language_id, language_for};
 use crate::paths::{
     copy_entry, duplicate_name, file_name, is_valid_entry_name, move_to_trash, remap_prefix,
 };
+use crate::watcher::Change;
 use crate::windows::{WindowSeed, cascaded_frame};
 use crate::{
     AddFolder, CloseAllFolders, NewFile, OpenFile, OpenFolderInNewWindow, SaveAll, SaveFile,
@@ -522,27 +523,40 @@ impl TeakApp {
         };
 
         // Saving over the tab's own file after another program changed it
-        // would silently discard that change, so ask first.
+        // would silently discard that change, and a file deleted on disk would
+        // be silently recreated, so ask first.
+        let current = modified_time(&path);
         let changed_on_disk = tab.path.as_deref() == Some(path.as_path())
-            && tab.disk_modified.is_some()
-            && modified_time(&path).is_some_and(|modified| Some(modified) != tab.disk_modified);
+            && disk_moved_on(tab.disk_modified, current);
         if !changed_on_disk {
             self.write_editor(id, path, window, cx);
             return;
         }
 
         let name = file_name(&path);
+        let deleted = current.is_none();
         let entity = cx.entity();
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             let entity = entity.clone();
             let path = path.clone();
+            let (title, description, ok_text) = if deleted {
+                (
+                    "File Deleted",
+                    format!("\"{name}\" was deleted on disk. Write it again?"),
+                    "Write Again",
+                )
+            } else {
+                (
+                    "File Changed",
+                    format!("\"{name}\" changed on disk since it was opened. Overwrite it?"),
+                    "Overwrite",
+                )
+            };
             alert
                 .confirm()
-                .title("File Changed")
-                .description(format!(
-                    "\"{name}\" changed on disk since it was opened. Overwrite it?"
-                ))
-                .ok_text("Overwrite")
+                .title(title)
+                .description(description)
+                .ok_text(ok_text)
                 .ok_variant(ButtonVariant::Danger)
                 .cancel_text("Cancel")
                 .on_ok(move |_, window, cx| {
@@ -612,6 +626,7 @@ impl TeakApp {
             }
             tab.disk_modified = modified_time(&path);
             tab.dismissed_disk_change = None;
+            tab.deleted_on_disk = false;
             // The bad bytes were replaced on disk, so the file is clean UTF-8.
             tab.format.lossy = false;
             tab.path = Some(path.clone());
@@ -625,10 +640,12 @@ impl TeakApp {
 
     /// Follows a file changed by another program. A tab without unsaved edits
     /// reloads silently; one with edits asks before discarding them. Only the
-    /// visible tab interrupts — the rest ask when they become active.
+    /// visible tab interrupts — the rest ask when they become active. A file
+    /// that vanished leaves the buffer alone and flags the tab instead.
     pub(super) fn handle_disk_change(
         &mut self,
         path: &Path,
+        change: Change,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -643,19 +660,27 @@ impl TeakApp {
             return;
         }
         let id = tab.editor.entity_id();
-        let change = classify_disk_change(
-            tab.dirty,
-            tab.disk_modified,
-            tab.dismissed_disk_change,
-            // A missing file is shown as deleted elsewhere; nothing to reload.
-            match modified_time(path) {
-                Some(modified) => modified,
-                None => return,
-            },
-        );
+        let dirty = tab.dirty;
+        let disk_modified = tab.disk_modified;
+        let dismissed = tab.dismissed_disk_change;
+        // A removal flags the tab: there is nothing to reload, and the buffer
+        // keeps its text so the user can write the file back deliberately.
+        let modified = if change == Change::Changed {
+            modified_time(path)
+        } else {
+            None
+        };
+        let Some(modified) = modified else {
+            self.set_deleted_on_disk(id, true, cx);
+            return;
+        };
+        // Back on disk after a removal we missed.
+        self.set_deleted_on_disk(id, false, cx);
+
+        let decision = classify_disk_change(dirty, disk_modified, dismissed, modified);
         let active = self.tabs.active().map(|tab| tab.editor.entity_id()) == Some(id);
 
-        match change {
+        match decision {
             DiskChange::Ignored => {}
             DiskChange::Reload => self.reload_from_disk(id, path.to_path_buf(), window, cx),
             DiskChange::Ask if active => {
@@ -665,13 +690,29 @@ impl TeakApp {
         }
     }
 
+    /// Flags the tab for a file that is gone from disk, or clears the flag when
+    /// it is back. Repaints only on a real change.
+    fn set_deleted_on_disk(&mut self, id: EntityId, deleted: bool, cx: &mut Context<Self>) {
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.editor.entity_id() == id)
+            && tab.deleted_on_disk != deleted
+        {
+            tab.deleted_on_disk = deleted;
+            cx.notify();
+        }
+    }
+
     /// Picks up edits another program made to the active tab's file, and asks
-    /// when those edits would overwrite unsaved work.
+    /// when those edits would overwrite unsaved work. Also refreshes whether the
+    /// file still exists, which is how a tab deleted while the app was in the
+    /// background learns about it.
     pub(crate) fn check_outside_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.active().and_then(|tab| tab.path.clone()) else {
             return;
         };
-        self.handle_disk_change(&path, window, cx);
+        self.handle_disk_change(&path, Change::Changed, window, cx);
     }
 
     /// Asks whether to reload a file that changed under unsaved edits. The
@@ -761,6 +802,7 @@ impl TeakApp {
                 }
                 tab.disk_modified = modified;
                 tab.dismissed_disk_change = None;
+                tab.deleted_on_disk = false;
                 tab.format = format;
                 let editor = tab.editor.clone();
                 let is_active = this.tabs.active().map(|tab| tab.editor.entity_id()) == Some(id);
@@ -1291,6 +1333,14 @@ impl TeakApp {
     }
 }
 
+/// Whether writing the buffer would clobber a change another program made.
+/// `disk_modified` is the version the buffer is based on, `current` what the
+/// disk holds now. A file that is gone counts: writing would bring it back
+/// silently.
+fn disk_moved_on(disk_modified: Option<SystemTime>, current: Option<SystemTime>) -> bool {
+    disk_modified.is_some() && current != disk_modified
+}
+
 /// What a changed file means for a tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DiskChange {
@@ -1331,10 +1381,11 @@ mod tests {
 
     use gpui_kit::{AppContext as _, ImageFormat, TestAppContext};
 
-    use super::{DiskChange, TextFormat, classify_disk_change, raster_format};
+    use super::{DiskChange, TextFormat, classify_disk_change, disk_moved_on, raster_format};
     use crate::app::TeakApp;
     use crate::app::tabs::TabSet;
     use crate::app::test_support::open_app;
+    use crate::watcher::Change;
 
     /// One tab is left in the background so the dirty case never opens a
     /// dialog: only the visible tab asks.
@@ -1384,8 +1435,30 @@ mod tests {
         }));
         assert_eq!(tab_text(&app, cx, &other).as_deref(), Some("other\n"));
 
+        // A file deleted on disk flags its tab instead of vanishing silently.
+        std::fs::remove_file(&other).unwrap();
+        handle_change(cx, handle, &app, &other, Change::Removed);
+        assert_eq!(tab_text(&app, cx, &other).as_deref(), Some("other\n"));
+        assert!(deleted_on_disk(&app, cx, &other));
+
+        // Brought back: the flag clears and the clean tab reloads it.
+        write_and_handle(cx, handle, &app, &other, "back\n");
+        assert_eq!(tab_text(&app, cx, &other).as_deref(), Some("back\n"));
+        assert!(!deleted_on_disk(&app, cx, &other));
+
         let _ = std::fs::remove_file(&edited);
         let _ = std::fs::remove_file(&other);
+    }
+
+    #[test]
+    fn writing_is_unsafe_only_when_the_disk_moved_from_the_buffer_base() {
+        let base = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10);
+        let newer = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20);
+
+        assert!(!disk_moved_on(None, None), "a brand-new file");
+        assert!(!disk_moved_on(Some(base), Some(base)), "our own write");
+        assert!(disk_moved_on(Some(base), Some(newer)), "someone else wrote");
+        assert!(disk_moved_on(Some(base), None), "deleted on disk");
     }
 
     #[test]
@@ -1447,11 +1520,38 @@ mod tests {
         text: &str,
     ) {
         std::fs::write(path, text).unwrap();
+        handle_change(cx, handle, app, path, Change::Changed);
+    }
+
+    fn handle_change(
+        cx: &mut TestAppContext,
+        handle: gpui_kit::AnyWindowHandle,
+        app: &gpui_kit::Entity<TeakApp>,
+        path: &Path,
+        change: Change,
+    ) {
         cx.update_window(handle, |_, window, cx| {
-            app.update(cx, |this, cx| this.handle_disk_change(path, window, cx));
+            app.update(cx, |this, cx| {
+                this.handle_disk_change(path, change, window, cx)
+            });
         })
         .unwrap();
         cx.run_until_parked();
+    }
+
+    fn deleted_on_disk(
+        app: &gpui_kit::Entity<TeakApp>,
+        cx: &mut TestAppContext,
+        path: &Path,
+    ) -> bool {
+        cx.update(|cx| {
+            app.read(cx)
+                .tabs
+                .iter()
+                .find(|tab| tab.path.as_deref() == Some(path))
+                .unwrap()
+                .deleted_on_disk
+        })
     }
 
     fn tab_text(

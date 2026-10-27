@@ -39,6 +39,9 @@ pub(super) struct OpenTab {
     /// only to stop the same change asking again; saving still warns, because
     /// [`Self::disk_modified`] stays behind.
     pub(super) dismissed_disk_change: Option<SystemTime>,
+    /// True when the file is gone from disk while the buffer still holds its
+    /// text. The tab marks itself and saving asks before writing it back.
+    pub(super) deleted_on_disk: bool,
     pub(super) format: TextFormat,
     pub(super) editor: Entity<EditorState>,
     /// The rendered view shown in place of the editor while preview is on.
@@ -372,6 +375,7 @@ impl TeakApp {
             dirty: false,
             disk_modified,
             dismissed_disk_change: None,
+            deleted_on_disk: false,
             format: TextFormat::default(),
             editor: editor.clone(),
             preview: None,
@@ -933,6 +937,7 @@ mod tests {
                 dirty: false,
                 disk_modified: None,
                 dismissed_disk_change: None,
+                deleted_on_disk: false,
                 format: TextFormat::default(),
                 editor,
                 preview: None,

@@ -249,7 +249,7 @@ impl TeakApp {
             .map(|(ix, tab)| {
                 let close_entity = entity.clone();
                 let selected = active == Some(ix);
-                let deleted = tab.path.as_deref().is_some_and(|path| !path.exists());
+                let deleted = tab.deleted_on_disk;
                 // Full path on hover, telling apart titles the ellipsis cuts alike.
                 let tooltip: SharedString = match &tab.path {
                     Some(path) => display_path(path).into(),
@@ -1137,6 +1137,7 @@ impl TeakApp {
         let entity = cx.entity();
         let language = self.active_language();
         let dirty = self.active_dirty();
+        let deleted = self.active().is_some_and(|tab| tab.deleted_on_disk);
         let divider = || div().h_3().w(px(1.)).flex_none().bg(cx.theme().border);
 
         let language_button = Button::new("language-mode")
@@ -1168,7 +1169,16 @@ impl TeakApp {
                 })
             });
 
-        let save_status = if dirty {
+        let save_status = if deleted {
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .text_color(cx.theme().danger)
+                .child(Icon::new(IconName::CircleAlert).with_size(Size::XSmall))
+                .child("Deleted on Disk")
+                .into_any_element()
+        } else if dirty {
             div()
                 .h_flex()
                 .items_center()
