@@ -7,7 +7,7 @@ mod editor;
 mod files;
 mod find_in_files;
 mod overlays;
-mod palette;
+mod picker;
 mod preferences;
 mod quick_open;
 mod tabs;
@@ -1466,16 +1466,7 @@ impl Render for TeakApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_window_title(window);
 
-        let palette = self
-            .overlays
-            .palette()
-            .cloned()
-            .map(|state| self.render_palette(&state, cx));
-        let quick_open = self
-            .overlays
-            .quick_open()
-            .cloned()
-            .map(|state| self.render_quick_open(&state, cx));
+        let picker = self.render_picker(cx);
         let find_panel = self.render_find_panel(cx);
         let settings_overlay = self.settings.is_open().then(|| self.render_settings(cx));
         // Only worth hinting while an editor is open; other panes have no carets.
@@ -1589,6 +1580,7 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_add_next_occurrence))
             .on_action(cx.listener(Self::on_command_palette))
             .on_action(cx.listener(Self::on_quick_open))
+            .on_action(cx.listener(Self::on_open_recent))
             .on_action(cx.listener(Self::on_find_in_files))
             .on_action(cx.listener(Self::on_find_in_editor))
             .on_action(cx.listener(Self::on_find_and_replace_in_editor))
@@ -1609,11 +1601,7 @@ impl Render for TeakApp {
             .children(find_panel)
             .child(self.render_status_bar(alt_held, cx));
 
-        let root = match palette {
-            Some(overlay) => root.child(overlay),
-            None => root,
-        };
-        let root = match quick_open {
+        let root = match picker {
             Some(overlay) => root.child(overlay),
             None => root,
         };

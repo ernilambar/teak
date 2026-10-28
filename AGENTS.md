@@ -63,7 +63,7 @@ in headless environments.
   go through methods, and each group needs a `new()` because `mod.rs` cannot initialize
   private fields. Leaf records (`OpenTab`, `TreeRow`, `Settings`) keep `pub(super)`
   fields so rendering can read them directly. `app/files.rs`, `editor.rs`, `find_in_files.rs`,
-  `palette.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
+  `picker.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
   orchestration blocks; GPUI-free helpers live in `cli.rs`, `git.rs`, `language.rs`,
   `paths.rs`, `search.rs`, `session.rs`, `settings.rs`, `update.rs`, `watcher.rs`, and the
   AppKit printing wrapper in `print.rs`. `windows.rs` holds app-level window coordination: the live-window
@@ -77,6 +77,10 @@ in headless environments.
   transitions on `Document`, not on the tab. A second view of the same path would share
   this document and its `EditorState` — and therefore its caret — because the engine has no
   buffer below that entity yet, so paths are deduplicated within a window instead.
+- There is one picker overlay (`app/picker.rs`), not one per list. The command
+  palette, quick open and Open Recent share its surface, focus handoff and
+  dismissal; they differ only in `PickerKind` and the rows they build. A new
+  list chooser is a kind plus a row builder, never a second overlay.
 - Performance budgets live in `app/bench.rs` as ignored tests (see `docs/performance.md`).
 - Every user-invokable command is declared once in `commands.rs`: label, action,
   chords, menu placement, palette placement and search keywords. The menu bar, the

@@ -38,13 +38,13 @@ use crate::{
     FindPreviousField, FindPreviousInEditor, GoToLine, Hide, HideOthers, InsertLineAbove,
     InsertLineBelow, InstallCli, JoinLines, JumpToTab, MinimizeWindow, MoveLineDown, MoveLineUp,
     MoveTabToNewWindow, NewFile, NewWindow, NextResult, NextTab, OpenDefaultSettings, OpenFile,
-    OpenFolderInNewWindow, OpenPath, OpenResult, OpenSettings, OpenThemesFolder, PreviousResult,
-    PreviousTab, Print, QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll, RevealInFinder,
-    RunFind, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll, SplitSelectionIntoLines,
-    THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleFullScreen, ToggleIndentGuides,
-    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
-    ToggleWhitespace, ToggleWordWrap, TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset,
-    ZoomWindow,
+    OpenFolderInNewWindow, OpenPath, OpenRecentPicker, OpenResult, OpenSettings, OpenThemesFolder,
+    PreviousResult, PreviousTab, Print, QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll,
+    RevealInFinder, RunFind, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll,
+    SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleFullScreen,
+    ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar,
+    ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap, TrimTrailingWhitespace, ZoomIn, ZoomOut,
+    ZoomReset, ZoomWindow,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -146,13 +146,22 @@ static COMMANDS: &[Command] = &[
         keywords: &[],
     },
     Command {
+        label: "Open Recent…",
+        make: || Box::new(OpenRecentPicker),
+        // `⌃R` is the customary Open Recent chord on macOS.
+        bindings: &[("ctrl-r", Scope::Global)],
+        menu: None,
+        palette: Some((PaletteGroup::File, 4)),
+        keywords: &["recent", "folder"],
+    },
+    Command {
         label: "Add Folder…",
         make: || Box::new(AddFolder),
         // `⇧⌘O` is the customary Go to Symbol chord, so keep it free and put
         // the folder action on `⌃⌘O`.
         bindings: &[("ctrl-secondary-o", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
-        palette: Some((PaletteGroup::File, 4)),
+        palette: Some((PaletteGroup::File, 5)),
         keywords: &[],
     },
     Command {
@@ -160,7 +169,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(OpenFolderInNewWindow),
         bindings: NO_KEYS,
         menu: Some((MenuKind::File, 0)),
-        palette: Some((PaletteGroup::File, 5)),
+        palette: Some((PaletteGroup::File, 6)),
         keywords: &["folder", "window"],
     },
     Command {
@@ -169,7 +178,7 @@ static COMMANDS: &[Command] = &[
         // `⌥⌘W` is Close All Windows on macOS, so this uses `⌃⌘W`.
         bindings: &[("ctrl-secondary-w", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
-        palette: Some((PaletteGroup::File, 6)),
+        palette: Some((PaletteGroup::File, 7)),
         keywords: &[],
     },
     Command {
@@ -177,7 +186,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(SaveFile),
         bindings: &[("secondary-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
-        palette: Some((PaletteGroup::File, 7)),
+        palette: Some((PaletteGroup::File, 8)),
         keywords: &[],
     },
     Command {
@@ -185,7 +194,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(SaveFileAs),
         bindings: &[("secondary-shift-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
-        palette: Some((PaletteGroup::File, 8)),
+        palette: Some((PaletteGroup::File, 9)),
         keywords: &[],
     },
     Command {
@@ -193,7 +202,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(SaveAll),
         bindings: &[("alt-secondary-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
-        palette: Some((PaletteGroup::File, 9)),
+        palette: Some((PaletteGroup::File, 10)),
         keywords: &[],
     },
     Command {
@@ -202,7 +211,7 @@ static COMMANDS: &[Command] = &[
         // `secondary-p` is Quick Open; macOS leaves print without a chord here.
         bindings: NO_KEYS,
         menu: Some((MenuKind::File, 1)),
-        palette: Some((PaletteGroup::File, 16)),
+        palette: Some((PaletteGroup::File, 17)),
         keywords: &["print", "paper", "pdf"],
     },
     Command {
@@ -210,7 +219,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(CloseTab),
         bindings: &[("secondary-w", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
-        palette: Some((PaletteGroup::File, 10)),
+        palette: Some((PaletteGroup::File, 11)),
         keywords: &[],
     },
     Command {
@@ -218,7 +227,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(CloseWindow),
         bindings: &[("secondary-shift-w", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
-        palette: Some((PaletteGroup::File, 11)),
+        palette: Some((PaletteGroup::File, 12)),
         keywords: &["window"],
     },
     Command {
@@ -226,7 +235,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(MoveTabToNewWindow),
         bindings: NO_KEYS,
         menu: Some((MenuKind::File, 2)),
-        palette: Some((PaletteGroup::File, 12)),
+        palette: Some((PaletteGroup::File, 13)),
         keywords: &["window", "tab"],
     },
     Command {
@@ -236,7 +245,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(ReopenClosedTab),
         bindings: &[("secondary-shift-t", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
-        palette: Some((PaletteGroup::File, 13)),
+        palette: Some((PaletteGroup::File, 14)),
         keywords: &[],
     },
     Command {
@@ -244,7 +253,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(RevealInFinder),
         bindings: &[("alt-secondary-r", Scope::Global)],
         menu: Some((MenuKind::File, 3)),
-        palette: Some((PaletteGroup::File, 14)),
+        palette: Some((PaletteGroup::File, 15)),
         keywords: &[],
     },
     Command {
@@ -253,7 +262,7 @@ static COMMANDS: &[Command] = &[
         make: || Box::new(ClearRecent),
         bindings: NO_KEYS,
         menu: None,
-        palette: Some((PaletteGroup::File, 15)),
+        palette: Some((PaletteGroup::File, 16)),
         keywords: &["recent", "history"],
     },
     // Edit
@@ -1375,7 +1384,7 @@ mod tests {
         });
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
-        assert_eq!(app, 52);
+        assert_eq!(app, 53);
         assert_eq!(editor, 21);
         assert_eq!(find, 6);
     }
@@ -1773,6 +1782,6 @@ mod tests {
     #[test]
     fn surface_sizes_are_pinned() {
         assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 77);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 74);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 75);
     }
 }

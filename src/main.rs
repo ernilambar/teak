@@ -41,6 +41,7 @@ gpui_kit::actions!(
         ToggleFullScreen,
         BringAllToFront,
         QuickOpen,
+        OpenRecentPicker,
         FindInEditor,
         FindAndReplaceInEditor,
         FindNextInEditor,

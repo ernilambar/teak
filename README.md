@@ -16,6 +16,7 @@ A fast, lightweight text editor.
 - Drag files and folders in from Finder; hold Option to open them in a new window
 - Command palette (`Cmd+Shift+P`)
 - Quick Open (`Cmd+P`) to fuzzy-find files
+- Open Recent (`Ctrl+R`) to jump back to a recent folder or file
 - Find and Replace in Files (`Cmd+Shift+F`), with regex and globs
 - Markdown preview (`Cmd+Shift+V`)
 - Restores your tabs and folders on relaunch

@@ -1,35 +1,26 @@
-//! Quick Open: a fuzzy search over the workspace files, opening on the
-//! quick-open chord.
+//! Quick Open's rows: the workspace file index and the ranking over it.
 //!
-//! Like the command palette (see `palette.rs`), this is an in-app overlay so
-//! the chosen file's action reaches the root's `on_action` handlers. The list
-//! reuses gpui-kit's `Command` widget, but ranks the files itself: the widget
-//! runs with local filtering off, and this module rebuilds the visible rows
-//! with fuzzy-scored results whenever the query changes.
+//! The overlay itself, including the widget and its dismissal, lives in
+//! `picker.rs`. This module keeps the part that is specific to files: the
+//! background walk that builds the index, the fuzzy ranking of each query, and
+//! the row presentation.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use globset::GlobSet;
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::{
-    ActiveTheme as _,
-    command::{Command, CommandItem, CommandState},
-};
+use gpui_kit::component::{ActiveTheme as _, command::CommandItem};
 use gpui_kit::*;
 
+use crate::OpenPath;
 use crate::file_icons::file_icon;
 use crate::fuzzy;
 use crate::paths::{collect_files, exclude_set, file_name, nearest_root, relative_display};
 use crate::settings::IconStyle;
-use crate::{OpenPath, QuickOpen};
 
 use super::{TeakApp, ui::file_type_icon};
 
-/// Width of the finder panel, shared with the command palette.
-const FINDER_WIDTH: Pixels = px(560.);
-/// Gap between the top of the window and the finder panel.
-const FINDER_TOP: Pixels = px(72.);
 /// Hard cap on indexed files, so a runaway root cannot freeze the walk.
 pub(super) const MAX_INDEX_FILES: usize = 20_000;
 /// Results rebuilt per keystroke; the list itself virtualizes.
@@ -52,40 +43,10 @@ fn best_score(query: &str, name: &str, rel: &str) -> Option<u32> {
 }
 
 impl TeakApp {
-    /// Opens the finder, or closes it when it is already open.
-    pub(super) fn on_quick_open(
-        &mut self,
-        _: &QuickOpen,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.overlays.is_quick_open_open() {
-            self.close_quick_open(window, cx);
-        } else {
-            self.open_quick_open(window, cx);
-        }
-    }
-
-    fn open_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Keep these overlays exclusive, they would stack otherwise.
-        if self.overlays.is_palette_open() {
-            self.close_palette(window, cx);
-        }
-
-        let state = cx.new(|cx| CommandState::new(window, cx));
-        // Remember what held focus so it can be restored once the finder closes.
-        self.overlays
-            .set_quick_open(state.clone(), window.focused(cx));
-        cx.notify();
-        // The query input only exists in the tree after the first render, so the
-        // focus request is deferred until the overlay has mounted.
-        window.defer(cx, move |window, cx| {
-            state.update(cx, |state, cx| state.focus(window, cx));
-        });
-
-        // The index is rebuilt for every open so late file creation and
-        // removals are picked up; the walk runs off the main thread. With no
-        // workspace roots the open tabs stand in for the project.
+    /// Walks the workspace roots for quick open's index, off the main thread.
+    /// Rebuilt on every open so files created or removed since the last one are
+    /// picked up. With no roots, the open tabs stand in for the project.
+    pub(super) fn start_file_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let roots = self.workspace.roots().to_vec();
         // Settings were validated on load, so a bad glob cannot reach here.
         let exclude = exclude_set(self.settings.values.search.exclude()).unwrap_or_default();
@@ -114,30 +75,20 @@ impl TeakApp {
         .detach();
     }
 
-    /// Closes the finder, restoring focus only while the query field still
-    /// holds it. An action that opened its own dialog has already moved focus
-    /// there, and stealing it back would break that dialog.
-    pub(super) fn close_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((state, return_focus)) = self.overlays.take_quick_open() else {
-            return;
-        };
-        let finder_handle = state.read(cx).focus_handle(cx);
-        if window.focused(cx).as_ref() == Some(&finder_handle)
-            && let Some(previous) = return_focus
-        {
-            window.focus(&previous, cx);
-        }
-        cx.notify();
-    }
-
-    /// Opens the confirmed file, sharing the open path with the sidebar.
+    /// Opens the path a picker confirmed: a folder becomes a root, a file a
+    /// tab. Shared by quick open and Open Recent, whose lists mix both.
     pub(super) fn on_open_path(
         &mut self,
         action: &OpenPath,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.request_open(action.0.clone(), window, cx);
+        let path = action.0.clone();
+        if path.is_dir() {
+            self.add_root(path, window, cx);
+        } else {
+            self.request_open(path, window, cx);
+        }
     }
 
     /// The rows for the current query: fuzzy matches ranked best first, or with
@@ -181,76 +132,6 @@ impl TeakApp {
             .into_iter()
             .map(|(_, _, rel, path)| quick_open_item(rel, path, icon_style))
             .collect()
-    }
-
-    pub(super) fn render_quick_open(
-        &self,
-        state: &Entity<CommandState>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let confirm = cx.entity();
-        let cancel = confirm.clone();
-        let backdrop = confirm.clone();
-
-        // Local filtering stays off: the rows already answer the query.
-        let query = state.read(cx).query(cx).trim().to_string();
-        let mut command = Command::new(state)
-            .placeholder("Go to file…")
-            .filterable(false)
-            .empty(|_, _, cx| {
-                div()
-                    .p_3()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("No matching files")
-            })
-            // Re-rank through the app so the next render supplies the new rows.
-            .on_query({
-                let confirm = confirm.clone();
-                move |_, _, cx| {
-                    confirm.update(cx, |_, cx| cx.notify());
-                }
-            })
-            .on_confirm(move |_, window, cx| {
-                confirm.update(cx, |this, cx| this.close_quick_open(window, cx));
-            })
-            .on_cancel({
-                let cancel = cancel.clone();
-                move |window, cx| {
-                    // The callback runs while the finder's Cancel dispatch is
-                    // still in progress, so closing here would read the finder
-                    // state while it is being updated. Hand the dismissal to
-                    // the next frame instead.
-                    let cancel = cancel.clone();
-                    window.defer(cx, move |window, cx| {
-                        cancel.update(cx, |this, cx| this.close_quick_open(window, cx));
-                    });
-                }
-            });
-        for item in self.quick_open_items(&query) {
-            command = command.item(item);
-        }
-
-        div()
-            .absolute()
-            .inset_0()
-            .occlude()
-            .flex()
-            .items_start()
-            .justify_center()
-            .pt(FINDER_TOP)
-            .bg(cx.theme().overlay)
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                backdrop.update(cx, |this, cx| this.close_quick_open(window, cx));
-            })
-            .child(
-                div()
-                    .w(FINDER_WIDTH)
-                    // Keep clicks on the panel from reaching the backdrop.
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(command),
-            )
-            .into_any_element()
     }
 }
 
