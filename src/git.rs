@@ -78,6 +78,19 @@ impl GitState {
         self.branches.get(root)
     }
 
+    /// The changed entries under `root`, sorted by path, for the Changes view.
+    /// An untracked folder is one entry, as `git status` reports it.
+    pub(crate) fn changes_under(&self, root: &Path) -> Vec<(PathBuf, Status)> {
+        let mut changes: Vec<(PathBuf, Status)> = self
+            .files
+            .iter()
+            .filter(|(path, _)| path.starts_with(root))
+            .map(|(path, status)| (path.clone(), *status))
+            .collect();
+        changes.sort();
+        changes
+    }
+
     /// The repositories' git directories, which the filesystem watcher follows
     /// so a commit or checkout refreshes the tree by itself.
     pub(crate) fn git_dirs(&self) -> impl Iterator<Item = &PathBuf> {
@@ -471,6 +484,109 @@ fn push_mark(lines: &mut Vec<(u32, LineKind)>, line: u32, kind: LineKind) {
 
 /// Distinguishes the temp files of overlapping reads in one process.
 static TEMP_STAMP: AtomicU64 = AtomicU64::new(0);
+
+/// What the diff tab shows for one changed path.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FileDiff {
+    /// The unified hunks, without the `diff --git` / `---` / `+++` headers.
+    /// Empty when only the mode or nothing visible changed.
+    Text(String),
+    Binary,
+    /// Nothing to compare: an untracked folder, or a read git refused.
+    Unavailable,
+}
+
+/// Reads the working-tree file at `path` against `HEAD`, from disk. An
+/// untracked file, or one in a repository with no commit yet, compares against
+/// an empty file, so it reads as all addition.
+pub(crate) fn file_diff(path: &Path, status: Option<Status>) -> FileDiff {
+    if path.is_dir() {
+        return FileDiff::Unavailable;
+    }
+    // A deleted file may have taken its folders with it, so git runs in the
+    // nearest folder that still exists and names the file relative to it.
+    let Some(dir) = path.ancestors().skip(1).find(|dir| dir.is_dir()) else {
+        return FileDiff::Unavailable;
+    };
+    let Ok(relative) = path.strip_prefix(dir) else {
+        return FileDiff::Unavailable;
+    };
+    let against_head = (status != Some(Status::Untracked))
+        .then(|| run_diff(dir, &[OsStr::new("HEAD"), OsStr::new("--")], relative))
+        .flatten();
+    let output = match against_head {
+        Some(output) => output,
+        None if path.is_file() => {
+            match run_diff(
+                dir,
+                &[
+                    OsStr::new("--no-index"),
+                    OsStr::new("--"),
+                    OsStr::new("/dev/null"),
+                ],
+                relative,
+            ) {
+                Some(output) => output,
+                None => return FileDiff::Unavailable,
+            }
+        }
+        None => return FileDiff::Unavailable,
+    };
+    diff_body(&String::from_utf8_lossy(&output))
+}
+
+/// Runs one `git diff` in `dir` over `relative`. Exit status 1 is how
+/// `--no-index` says the files differ, so only a real failure is `None`.
+fn run_diff(dir: &Path, args: &[&OsStr], relative: &Path) -> Option<Vec<u8>> {
+    let output = Command::new("git")
+        .current_dir(dir)
+        .args(["diff", "--no-color", "--no-ext-diff"])
+        .args(args)
+        .arg(Path::new(".").join(relative))
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .ok()?;
+    matches!(output.status.code(), Some(0 | 1)).then_some(output.stdout)
+}
+
+/// The hunks of one file's unified diff, from the first `@@` on.
+fn diff_body(raw: &str) -> FileDiff {
+    let Some(start) = raw
+        .match_indices("@@ ")
+        .map(|(ix, _)| ix)
+        .find(|&ix| ix == 0 || raw.as_bytes()[ix - 1] == b'\n')
+    else {
+        let binary = raw
+            .lines()
+            .any(|line| line.starts_with("Binary files ") || line == "GIT binary patch");
+        return if binary {
+            FileDiff::Binary
+        } else {
+            FileDiff::Text(String::new())
+        };
+    };
+    FileDiff::Text(raw[start..].trim_end_matches('\n').to_string())
+}
+
+/// The byte range of every added and removed line in a diff body, for the
+/// tab's line tints. Hunk headers and context lines carry no tint.
+pub(crate) fn diff_line_ranges(body: &str) -> Vec<(std::ops::Range<usize>, LineKind)> {
+    let mut ranges = Vec::new();
+    let mut offset = 0;
+    for line in body.split('\n') {
+        let kind = match line.as_bytes().first() {
+            Some(b'+') => Some(LineKind::Added),
+            Some(b'-') => Some(LineKind::Deleted),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            ranges.push((offset..offset + line.len(), kind));
+        }
+        offset += line.len() + 1;
+    }
+    ranges
+}
 
 #[cfg(test)]
 mod tests {
@@ -966,6 +1082,110 @@ index aaa..bbb 100644
 
         // A buffer the commit already holds has nothing to mark.
         assert!(line_changes(&path, "one\ntwo\nthree\n", Some(Status::Modified)).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn changes_under_lists_a_root_s_files_in_path_order() {
+        let state = parse(
+            "1 .M N... 100644 100644 100644 aaa bbb src/b.rs\0\
+             ? notes/\0\
+             1 .D N... 100644 100644 100644 aaa bbb a.rs\0",
+        );
+        assert_eq!(
+            state.changes_under(Path::new("/repo")),
+            vec![
+                (PathBuf::from("/repo/a.rs"), Status::Deleted),
+                (PathBuf::from("/repo/notes"), Status::Untracked),
+                (PathBuf::from("/repo/src/b.rs"), Status::Modified),
+            ]
+        );
+        assert!(state.changes_under(Path::new("/other")).is_empty());
+    }
+
+    #[test]
+    fn diff_body_drops_the_file_headers() {
+        let raw = "diff --git a/a.rs b/a.rs\nindex 1..2 100644\n--- a/a.rs\n+++ b/a.rs\n\
+                   @@ -1 +1 @@\n-old\n+new\n";
+        assert_eq!(
+            diff_body(raw),
+            FileDiff::Text("@@ -1 +1 @@\n-old\n+new".into())
+        );
+        let binary =
+            "diff --git a/a.png b/a.png\nindex 1..2\nBinary files a/a.png and b/a.png differ\n";
+        assert_eq!(diff_body(binary), FileDiff::Binary);
+        // A mode change alone carries no hunk.
+        let mode = "diff --git a/a.sh b/a.sh\nold mode 100644\nnew mode 100755\n";
+        assert_eq!(diff_body(mode), FileDiff::Text(String::new()));
+    }
+
+    #[test]
+    fn diff_line_ranges_cover_added_and_removed_lines() {
+        let body = "@@ -1,2 +1,2 @@\n same\n-old\n+new";
+        assert_eq!(
+            diff_line_ranges(body),
+            vec![(22..26, LineKind::Deleted), (27..31, LineKind::Added)]
+        );
+        assert_eq!(&body[22..26], "-old");
+        assert_eq!(&body[27..31], "+new");
+    }
+
+    #[test]
+    fn reads_file_diffs_from_a_real_working_tree() {
+        let dir = std::env::temp_dir().join(format!("app-git-diff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("gone")).unwrap();
+        std::fs::write(dir.join("a.rs"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.join("gone/b.rs"), "bye\n").unwrap();
+        std::fs::write(dir.join("c.bin"), [0u8, 1, 2]).unwrap();
+
+        let committed = git(&dir, &["init", "-q", "-b", "trunk"])
+            && git(&dir, &["add", "."])
+            && git(
+                &dir,
+                &[
+                    "-c",
+                    "user.email=a@b",
+                    "-c",
+                    "user.name=a",
+                    "commit",
+                    "-qm",
+                    "init",
+                ],
+            );
+        if !committed {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+
+        std::fs::write(dir.join("a.rs"), "one\nchanged\n").unwrap();
+        std::fs::remove_dir_all(dir.join("gone")).unwrap();
+        std::fs::write(dir.join("c.bin"), [0u8, 9, 9]).unwrap();
+        std::fs::write(dir.join("new.rs"), "fresh\n").unwrap();
+        std::fs::create_dir_all(dir.join("folder")).unwrap();
+
+        assert_eq!(
+            file_diff(&dir.join("a.rs"), Some(Status::Modified)),
+            FileDiff::Text("@@ -1,2 +1,2 @@\n one\n-two\n+changed".into())
+        );
+        // The file's folder is gone too; git still reads it from above.
+        assert_eq!(
+            file_diff(&dir.join("gone/b.rs"), Some(Status::Deleted)),
+            FileDiff::Text("@@ -1 +0,0 @@\n-bye".into())
+        );
+        assert_eq!(
+            file_diff(&dir.join("c.bin"), Some(Status::Modified)),
+            FileDiff::Binary
+        );
+        assert_eq!(
+            file_diff(&dir.join("new.rs"), Some(Status::Untracked)),
+            FileDiff::Text("@@ -0,0 +1 @@\n+fresh".into())
+        );
+        assert_eq!(
+            file_diff(&dir.join("folder"), Some(Status::Untracked)),
+            FileDiff::Unavailable
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

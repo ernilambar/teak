@@ -41,10 +41,11 @@ use crate::{
     OpenFolderInNewWindow, OpenKeybindings, OpenPath, OpenRecentPicker, OpenResult, OpenSettings,
     OpenThemesFolder, PreviousResult, PreviousTab, Print, QuickOpen, Quit, Refresh,
     ReopenClosedTab, ReplaceAll, RevealInFinder, RunFind, SaveAll, SaveFile, SaveFileAs,
-    SelectLine, SetTheme, ShowAll, SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose,
-    ToggleFolding, ToggleFullScreen, ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers,
-    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
-    TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset, ZoomWindow,
+    SelectLine, SetTheme, ShowAll, ShowChanges, ShowExplorer, SplitSelectionIntoLines,
+    THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleFullScreen, ToggleIndentGuides,
+    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
+    ToggleWhitespace, ToggleWordWrap, TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset,
+    ZoomWindow,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -634,6 +635,22 @@ static COMMANDS: &[Command] = &[
         menu: Some((MenuKind::View, 1)),
         palette: Some((PaletteGroup::View, 0)),
         keywords: &[],
+    },
+    Command {
+        label: "Show Explorer",
+        make: || Box::new(ShowExplorer),
+        bindings: &[("secondary-shift-e", Scope::Global)],
+        menu: Some((MenuKind::View, 1)),
+        palette: Some((PaletteGroup::View, 15)),
+        keywords: &["files", "tree", "sidebar"],
+    },
+    Command {
+        label: "Show Changes",
+        make: || Box::new(ShowChanges),
+        bindings: &[("ctrl-shift-g", Scope::Global)],
+        menu: Some((MenuKind::View, 1)),
+        palette: Some((PaletteGroup::View, 16)),
+        keywords: &["git", "diff", "source control", "scm"],
     },
     Command {
         label: "Refresh",
@@ -1451,7 +1468,7 @@ mod tests {
         });
         // Building the lists is itself the assertion that every chord in the
         // table is well-formed, since a chord that fails to parse panics.
-        assert_eq!(app, 53);
+        assert_eq!(app, 55);
         assert_eq!(editor, 21);
         assert_eq!(find, 6);
     }
@@ -1713,6 +1730,8 @@ mod tests {
                 &[
                     "Command Palette…",
                     "Toggle Sidebar",
+                    "Show Explorer",
+                    "Show Changes",
                     "Refresh",
                     "Zoom In",
                     "Zoom Out",
@@ -1880,7 +1899,7 @@ mod tests {
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 78);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 76);
+        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 80);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 78);
     }
 }

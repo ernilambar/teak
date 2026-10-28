@@ -68,6 +68,8 @@ gpui_kit::actions!(
         HideOthers,
         ShowAll,
         ToggleSidebar,
+        ShowExplorer,
+        ShowChanges,
         CommandPalette,
         InstallCli,
         CheckForUpdates,

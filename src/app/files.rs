@@ -547,8 +547,8 @@ impl TeakApp {
         let Some(tab) = self.tabs.get(ix) else {
             return;
         };
-        // The results tab is generated; there is nothing to save.
-        if tab.find_results.is_some() {
+        // Find Results and diffs are generated; there is nothing to save.
+        if tab.generated() {
             return;
         }
         let id = tab.document.editor_id();
@@ -589,7 +589,7 @@ impl TeakApp {
         let Some(tab) = self.tabs.get(ix) else {
             return;
         };
-        if tab.raster || tab.find_results.is_some() {
+        if tab.raster || tab.generated() {
             return;
         }
         let id = tab.document.editor_id();
