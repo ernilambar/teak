@@ -171,6 +171,26 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+/// The status bar's one line for an image: format, pixel size and bytes.
+fn image_summary(image: &Image) -> String {
+    let format = image.format.extension().to_ascii_uppercase();
+    match image_dimensions(image) {
+        Some((width, height)) => format!(
+            "{format} · {width} × {height} · {}",
+            format_size(image.bytes.len())
+        ),
+        None => format!("{format} · {}", format_size(image.bytes.len())),
+    }
+}
+
+/// The image's pixel size, read from its header only. `None` for a format the
+/// header reader does not know, which leaves the viewer in fit mode.
+fn image_dimensions(image: &Image) -> Option<(usize, usize)> {
+    imagesize::blob_size(&image.bytes)
+        .ok()
+        .map(|size| (size.width, size.height))
+}
+
 /// A file-type icon for the sidebar and tabs. GPUI's `svg` element — and the
 /// `Icon` component built on it — flattens an SVG to a single tinted color, so
 /// the colorful style draws the vendored SVG through the image pipeline
@@ -249,16 +269,16 @@ impl TeakApp {
             .map(|(ix, tab)| {
                 let close_entity = entity.clone();
                 let selected = active == Some(ix);
-                let deleted = tab.deleted_on_disk;
+                let deleted = tab.document.deleted_on_disk;
                 // Full path on hover, telling apart titles the ellipsis cuts alike.
-                let tooltip: SharedString = match &tab.path {
+                let tooltip: SharedString = match &tab.document.path {
                     Some(path) => display_path(path).into(),
-                    None => tab.title.clone(),
+                    None => tab.document.title.clone(),
                 };
                 let (dot, dot_color) = if deleted {
                     (true, deleted_color)
                 } else {
-                    (tab.dirty, dirty_color)
+                    (tab.document.dirty, dirty_color)
                 };
                 div()
                     .id(("tab", ix))
@@ -292,7 +312,7 @@ impl TeakApp {
                             );
                         }
                         // Untitled tabs have no path and fall back to the default file icon.
-                        let path = tab.path.as_deref().unwrap_or(Path::new(""));
+                        let path = tab.document.path.as_deref().unwrap_or(Path::new(""));
                         this.child(file_type_icon(file_icon(path), icon_style, None, cx))
                     })
                     .child(
@@ -301,7 +321,9 @@ impl TeakApp {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .child(tab.title.clone()),
+                            // A preview tab is italic until it is kept.
+                            .when(tab.transient, |this| this.italic())
+                            .child(tab.document.title.clone()),
                     )
                     .child(
                         div()
@@ -330,8 +352,8 @@ impl TeakApp {
                     .tooltip_show_delay(TAB_TOOLTIP_DELAY)
                     .on_drag(
                         DragTab {
-                            id: tab.editor.entity_id(),
-                            title: tab.title.clone(),
+                            id: tab.document.editor_id(),
+                            title: tab.document.title.clone(),
                         },
                         move |drag: &DragTab, _offset, _window, cx| {
                             cx.new(|_| TabDragPreview {
@@ -347,8 +369,15 @@ impl TeakApp {
                     .on_drop::<DragTab>(cx.listener(move |this, drag: &DragTab, window, cx| {
                         this.move_tab(drag.id, ix, window, cx);
                     }))
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         this.activate_tab(ix, window, cx);
+                        // A double click keeps a preview tab.
+                        if event.click_count() >= 2
+                            && this.tabs.get(ix).is_some_and(|tab| tab.transient)
+                        {
+                            this.tabs.promote(ix);
+                            cx.notify();
+                        }
                     }))
                     .on_mouse_down(
                         MouseButton::Right,
@@ -359,7 +388,11 @@ impl TeakApp {
             })
             .collect();
 
-        let titles: Vec<SharedString> = self.tabs.iter().map(|tab| tab.title.clone()).collect();
+        let titles: Vec<SharedString> = self
+            .tabs
+            .iter()
+            .map(|tab| tab.document.title.clone())
+            .collect();
         let overflow_entity = entity.clone();
         let menu_entity = entity.clone();
         div()
@@ -381,9 +414,12 @@ impl TeakApp {
                     let app = menu_entity.read(cx);
                     (
                         app.tabs.len(),
-                        app.tabs
-                            .iter()
-                            .any(|tab| tab.path.as_deref().is_some_and(|path| !path.exists())),
+                        app.tabs.iter().any(|tab| {
+                            tab.document
+                                .path
+                                .as_deref()
+                                .is_some_and(|path| !path.exists())
+                        }),
                     )
                 };
                 if ix >= tab_count {
@@ -397,11 +433,11 @@ impl TeakApp {
                 let deleted_entity = menu_entity.clone();
                 let move_entity = menu_entity.clone();
                 let movable = menu_entity.read(cx).tabs.get(ix).is_some_and(|tab| {
-                    !tab.dirty
+                    !tab.document.dirty
                         && !tab.raster
                         && tab.find_results.is_none()
                         && tab.previewing().is_none()
-                        && tab.path.as_deref().is_some_and(Path::is_file)
+                        && tab.document.path.as_deref().is_some_and(Path::is_file)
                 });
 
                 menu.item(
@@ -842,6 +878,9 @@ impl TeakApp {
                 if is_dir {
                     this.workspace.toggle_expanded(&click_path);
                 } else if event.click_count() == 1 {
+                    // A browsing click previews; a double click keeps the tab.
+                    this.request_open_transient(click_path.clone(), window, cx);
+                } else {
                     this.request_open(click_path.clone(), window, cx);
                 }
                 this.save_session(cx);
@@ -1039,32 +1078,95 @@ impl TeakApp {
             }
             Some(Preview::Image(image)) => {
                 let muted = cx.theme().muted_foreground;
+                let view = tab.map(|tab| tab.image).unwrap_or_default();
+                // The image's own pixels, expressed in the window's logical
+                // units so `zoom` 1 is actual size on a Retina display too.
+                let dimensions = image_dimensions(image);
+                let factor = window.scale_factor();
+                let source = |image: &Arc<Image>| ImageSource::Image(image.clone());
+
+                let body = if view.fit || dimensions.is_none() {
+                    div()
+                        .size_full()
+                        .p_6()
+                        .child(
+                            img(source(image))
+                                .size_full()
+                                .object_fit(ObjectFit::ScaleDown)
+                                .with_fallback(move || {
+                                    div()
+                                        .size_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(muted)
+                                        .child("Cannot display image")
+                                        .into_any_element()
+                                }),
+                        )
+                        .into_any_element()
+                } else {
+                    let (width, height) = dimensions.unwrap_or_default();
+                    div()
+                        .min_w_full()
+                        .min_h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            img(source(image))
+                                .w(px(width as f32 / factor * view.zoom))
+                                .h(px(height as f32 / factor * view.zoom))
+                                .with_fallback(move || {
+                                    div()
+                                        .size_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(muted)
+                                        .child("Cannot display image")
+                                        .into_any_element()
+                                }),
+                        )
+                        .into_any_element()
+                };
+
                 return div()
+                    .id("image-view")
                     .size_full()
-                    .p_6()
                     .bg(cx.theme().background)
-                    .child(
-                        img(ImageSource::Image(image.clone()))
-                            .size_full()
-                            .object_fit(ObjectFit::ScaleDown)
-                            .with_fallback(move || {
-                                div()
-                                    .size_full()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_color(muted)
-                                    .child("Cannot display image")
-                                    .into_any_element()
-                            }),
-                    )
+                    .overflow_scroll()
+                    // ⌘-scroll zooms; a plain scroll pans the zoomed image.
+                    .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
+                        if !(event.modifiers.platform || event.modifiers.control) {
+                            return;
+                        }
+                        let direction = match event.delta {
+                            ScrollDelta::Lines(point) => point.y,
+                            ScrollDelta::Pixels(point) => point.y.as_f32() / 40.,
+                        };
+                        if direction == 0. {
+                            return;
+                        }
+                        this.step_image_zoom(direction.signum());
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                    // Double-click toggles fit and actual size.
+                    .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
+                        if event.click_count() >= 2 {
+                            this.toggle_image_fit();
+                            cx.notify();
+                        }
+                    }))
+                    .child(body)
                     .into_any_element();
             }
             None => {}
         }
         match tab {
             Some(tab) => {
-                let has_path = tab.path.is_some();
+                let has_path = tab.document.path.is_some();
                 div()
                     .size_full()
                     .bg(cx.theme().background)
@@ -1087,7 +1189,7 @@ impl TeakApp {
                             ))
                     })
                     .child(
-                        Editor::new(&tab.editor)
+                        Editor::new(&tab.document.editor)
                             .appearance(false)
                             .bordered(false)
                             // The element sets this on the state every render.
@@ -1181,7 +1283,9 @@ impl TeakApp {
         let entity = cx.entity();
         let language = self.active_language();
         let dirty = self.active_dirty();
-        let deleted = self.active().is_some_and(|tab| tab.deleted_on_disk);
+        let deleted = self
+            .active()
+            .is_some_and(|tab| tab.document.deleted_on_disk);
         let divider = || div().h_3().w(px(1.)).flex_none().bg(cx.theme().border);
 
         let language_button = Button::new("language-mode")
@@ -1200,9 +1304,9 @@ impl TeakApp {
                                 .active_index()
                                 .and_then(|ix| this.tabs.get_mut(ix))
                             {
-                                tab.language = value.clone();
-                                tab.language_override = true;
-                                tab.editor.update(cx, |state, cx| {
+                                tab.document.language = value.clone();
+                                tab.document.language_override = true;
+                                tab.document.editor.update(cx, |state, cx| {
                                     state.set_highlighter(editor_language_id(&value), cx);
                                 });
                                 cx.notify();
@@ -1246,11 +1350,7 @@ impl TeakApp {
 
         let mut status = StatusBar::new();
         if let Some(image) = self.active_raster() {
-            return status.left(div().child(format!(
-                "{} · {}",
-                image.format.extension().to_ascii_uppercase(),
-                format_size(image.bytes.len())
-            )));
+            return status.left(div().child(image_summary(image)));
         }
         if let Some(label) = self.chrome.busy().cloned() {
             status = status.left(
@@ -1278,7 +1378,10 @@ impl TeakApp {
             0 => format!("Ln {cursor_line}, Col {cursor_col}"),
             selected => format!("Ln {cursor_line}, Col {cursor_col} ({selected} selected)"),
         };
-        let format = self.active().map(|tab| tab.format).unwrap_or_default();
+        let format = self
+            .active()
+            .map(|tab| tab.document.format)
+            .unwrap_or_default();
 
         status = status
             .left(div().child(caret))
@@ -1295,7 +1398,7 @@ impl TeakApp {
         // workspace folder when the tab has no path yet.
         let branch = self
             .workspace
-            .branch_for(self.active().and_then(|tab| tab.path.as_deref()));
+            .branch_for(self.active().and_then(|tab| tab.document.path.as_deref()));
         if let Some(branch) = branch {
             status = status
                 .right(
@@ -1334,13 +1437,152 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use gpui_kit::{DevicePixels, RenderImage, SvgRenderer, SvgSize, hsla};
+    use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
+    use gpui_kit::{
+        AppContext as _, DevicePixels, RenderImage, SvgRenderer, SvgSize, TestAppContext, hsla, px,
+    };
 
+    use crate::app::test_support::open_app_in;
     use crate::file_icons::file_icon;
     use crate::git::Branch;
 
     use super::COLOR_ICON_PIXELS;
     use super::{GIT_BRANCH_ICON, branch_label, change_tint, count_label, grouped};
+
+    /// A workspace with one source file, for the scenes that need an editor.
+    fn workspace_with_a_file(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("teak-smoke-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("main.rs");
+        std::fs::write(&path, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+        (root, path)
+    }
+
+    /// The editor scene paints its three fixed surfaces, and each one lands
+    /// with a non-zero size. gpui-kit 0.8 has no pixel capture, so this is the
+    /// closest a headless run gets to a screenshot: an empty pane, a collapsed
+    /// tab strip or a sidebar that failed to lay out all show up here.
+    #[gpui_kit::test]
+    async fn the_editor_scene_paints_its_surfaces(cx: &mut TestAppContext) {
+        let (root, path) = workspace_with_a_file("editor");
+        let (handle, app) = open_app_in(cx, vec![root.clone()]);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let content = crate::app::files::read_file(&path).unwrap();
+                this.add_file_tab(path.clone(), content, false, window, cx);
+            });
+            // The first frame mounts the tab, the second paints its editor.
+            window.render_frame(cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+        cx.update_window(handle, |_, window, _| {
+            let painted: Vec<_> = window
+                .elements()
+                .into_iter()
+                .filter(|element| element.visible() && element.bounds().size.height > px(0.))
+                .collect();
+            // Surfaces are checked by id path: a container that wraps children
+            // is not itself registered, so `find` cannot reach the tab strip.
+            let laid_out = |needle: &str| {
+                painted.iter().any(|element| {
+                    format!("{:?}", element.path()).contains(needle)
+                        && element.bounds().size.width > px(0.)
+                })
+            };
+            for surface in ["workspace-tab-bar", "explorer-scroll", "sidebar-header"] {
+                assert!(laid_out(surface), "{surface} must paint with a size");
+            }
+            // The editor surface: the kit registers the text area under its
+            // input path, so a painted editor proves the content pane is not
+            // blank even though teak gives it no id of its own.
+            assert!(
+                laid_out("input::editor::Editor"),
+                "the editor's text area must paint with a size",
+            );
+            assert!(painted.len() >= 5, "the window painted almost nothing");
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The command palette paints its search field over the editor.
+    #[gpui_kit::test]
+    async fn the_palette_scene_paints_its_search_field(cx: &mut TestAppContext) {
+        let (root, path) = workspace_with_a_file("palette");
+        let (handle, app) = open_app_in(cx, vec![root.clone()]);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let content = crate::app::files::read_file(&path).unwrap();
+                this.add_file_tab(path.clone(), content, false, window, cx);
+            });
+            window.render_frame(cx);
+            window.press("secondary-shift-p", cx);
+            window.render_frame(cx);
+            if let Some(palette) = app.read(cx).overlays.palette().cloned() {
+                palette.update(cx, |state, cx| state.focus(window, cx));
+            }
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+        cx.update_window(handle, |_, window, cx| {
+            assert!(app.read(cx).overlays.is_palette_open());
+            let field = window
+                .elements()
+                .into_iter()
+                .find(|element| element.placeholder() == Some("Type a command…"))
+                .expect("the palette's search field must be painted");
+            assert!(field.visible());
+            assert!(field.bounds().size.width > px(100.));
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The find-in-files panel paints its controls below the editor.
+    #[gpui_kit::test]
+    async fn the_find_in_files_scene_paints_its_controls(cx: &mut TestAppContext) {
+        let (root, path) = workspace_with_a_file("find");
+        let (handle, app) = open_app_in(cx, vec![root.clone()]);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let content = crate::app::files::read_file(&path).unwrap();
+                this.add_file_tab(path.clone(), content, false, window, cx);
+            });
+            window.render_frame(cx);
+            window.press("secondary-shift-f", cx);
+            window.render_frame(cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+        cx.update_window(handle, |_, window, cx| {
+            assert!(
+                app.read(cx).overlays.find().is_some(),
+                "Cmd+Shift+F must open the find panel",
+            );
+            let run = window.find("find-run");
+            assert!(run.visible());
+            assert!(run.bounds().size.height > px(0.));
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_image_summary_names_its_format_and_pixels() {
+        let image = gpui_kit::Image::from_bytes(
+            gpui_kit::ImageFormat::Png,
+            super::super::files::ONE_PIXEL_PNG.to_vec(),
+        );
+        assert_eq!(super::image_summary(&image), "PNG · 1 × 1 · 70 B");
+    }
 
     #[test]
     fn the_status_bar_git_glyph_is_a_valid_svg() {

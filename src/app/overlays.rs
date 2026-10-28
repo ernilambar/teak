@@ -1,5 +1,6 @@
-//! State for the transient surfaces: the mutually exclusive command palette and
-//! quick-open finder, the file index the finder searches, and the Find panel.
+//! State for the transient surfaces: the one open picker (command palette,
+//! quick open or Open Recent), the file index quick open searches, and the Find
+//! panel.
 //!
 //! Opening and closing stays on the app type: mounting an overlay needs a
 //! `Window` (`window.defer` for the focus request, `cx.spawn_in` for the index
@@ -42,17 +43,29 @@ pub(super) enum FindStatus {
     Invalid(String),
 }
 
-/// The palette's and the finder's state, plus the focus each returns to.
+/// What a picker is asking the user to choose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PickerKind {
+    /// Every command, by name.
+    Palette,
+    /// Every indexed file, fuzzy-matched.
+    Files,
+    /// The folders and files opened lately.
+    Recent,
+}
+
+/// The one list overlay that is open, if any, and the focus to restore.
+pub(super) struct PickerState {
+    pub(super) kind: PickerKind,
+    pub(super) state: Entity<CommandState>,
+    pub(super) return_focus: Option<FocusHandle>,
+}
+
+/// The picker's state, plus the finder's file index and the Find panel.
 #[derive(Default)]
 pub(super) struct Overlays {
-    /// The command palette's interaction state while the overlay is open.
-    palette: Option<Entity<CommandState>>,
-    /// The focus that was active when the palette opened, restored on close.
-    palette_return_focus: Option<FocusHandle>,
-    /// The quick-open finder's interaction state while the overlay is open.
-    quick_open: Option<Entity<CommandState>>,
-    /// The focus that was active when the finder opened, restored on close.
-    quick_open_return_focus: Option<FocusHandle>,
+    /// The open picker: palette, quick open or recent. One at a time.
+    picker: Option<PickerState>,
     /// The quick-open file index: every file under the workspace roots, walked
     /// on the last finder open. Cached until it is rebuilt on the next open.
     open_paths: Vec<PathBuf>,
@@ -74,55 +87,76 @@ impl Overlays {
         Self::default()
     }
 
+    pub(super) fn picker(&self) -> Option<&PickerState> {
+        self.picker.as_ref()
+    }
+
+    /// The palette's interaction state, when the palette is the open picker.
+    #[cfg(test)]
     pub(super) fn palette(&self) -> Option<&Entity<CommandState>> {
-        self.palette.as_ref()
+        self.picker_of(PickerKind::Palette)
     }
 
+    /// The finder's interaction state, when the finder is the open picker.
+    #[cfg(test)]
     pub(super) fn quick_open(&self) -> Option<&Entity<CommandState>> {
-        self.quick_open.as_ref()
+        self.picker_of(PickerKind::Files)
     }
 
+    #[cfg(test)]
+    fn picker_of(&self, kind: PickerKind) -> Option<&Entity<CommandState>> {
+        self.picker
+            .as_ref()
+            .filter(|picker| picker.kind == kind)
+            .map(|picker| &picker.state)
+    }
+
+    #[cfg(test)]
     pub(super) fn is_palette_open(&self) -> bool {
-        self.palette.is_some()
+        self.is_picker_open(PickerKind::Palette)
     }
 
+    #[cfg(test)]
     pub(super) fn is_quick_open_open(&self) -> bool {
-        self.quick_open.is_some()
+        self.is_picker_open(PickerKind::Files)
     }
 
-    /// Mounts the palette, remembering `return_focus` for the close.
-    pub(super) fn set_palette(
+    pub(super) fn is_picker_open(&self, kind: PickerKind) -> bool {
+        self.picker
+            .as_ref()
+            .is_some_and(|picker| picker.kind == kind)
+    }
+
+    pub(super) fn any_picker_open(&self) -> bool {
+        self.picker.is_some()
+    }
+
+    /// Mounts a picker, remembering `return_focus` for the close.
+    pub(super) fn set_picker(
         &mut self,
+        kind: PickerKind,
         state: Entity<CommandState>,
         return_focus: Option<FocusHandle>,
     ) {
-        self.palette = Some(state);
-        self.palette_return_focus = return_focus;
+        self.picker = Some(PickerState {
+            kind,
+            state,
+            return_focus,
+        });
     }
 
-    /// Mounts the finder, remembering `return_focus` for the close.
-    pub(super) fn set_quick_open(
+    /// Unmounts `kind`'s picker, handing back the focus to restore. `None` when
+    /// a different picker is open by now, which is what keeps an action that
+    /// opened one from being closed by the one it came from.
+    pub(super) fn take_picker(
         &mut self,
-        state: Entity<CommandState>,
-        return_focus: Option<FocusHandle>,
-    ) {
-        self.quick_open = Some(state);
-        self.quick_open_return_focus = return_focus;
-    }
-
-    /// Unmounts the palette, handing back the focus to restore. Both are taken
-    /// together so the caller cannot restore a focus left from an earlier open.
-    pub(super) fn take_palette(&mut self) -> Option<(Entity<CommandState>, Option<FocusHandle>)> {
-        let state = self.palette.take()?;
-        Some((state, self.palette_return_focus.take()))
-    }
-
-    /// Unmounts the finder, handing back the focus to restore.
-    pub(super) fn take_quick_open(
-        &mut self,
+        kind: PickerKind,
     ) -> Option<(Entity<CommandState>, Option<FocusHandle>)> {
-        let state = self.quick_open.take()?;
-        Some((state, self.quick_open_return_focus.take()))
+        if self.picker.as_ref()?.kind != kind {
+            return None;
+        }
+        let picker = self.picker.take()?;
+        Some((picker.state, picker.return_focus))
     }
 
     pub(super) fn open_paths(&self) -> &[PathBuf] {

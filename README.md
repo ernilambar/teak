@@ -16,8 +16,12 @@ A fast, lightweight text editor.
 - Drag files and folders in from Finder; hold Option to open them in a new window
 - Command palette (`Cmd+Shift+P`)
 - Quick Open (`Cmd+P`) to fuzzy-find files
+- Open Recent (`Ctrl+R`) to jump back to a recent folder or file
+- Custom keybindings in `keybindings.json`, in VS Code's format
 - Find and Replace in Files (`Cmd+Shift+F`), with regex and globs
 - Markdown preview (`Cmd+Shift+V`)
+- Image viewer for PNG, JPEG, GIF, WebP, BMP, TIFF and ICO — fitted to the pane,
+  `Cmd`-scroll to zoom, double-click to toggle fit and actual size
 - Restores your tabs and folders on relaunch
 - `teak` command to open files from the terminal
 - Light, dark, and system themes
@@ -41,6 +45,7 @@ This installs the app into `/Applications`.
 ## Docs
 
 - [Keyboard shortcuts](docs/keymaps.md)
+- [Custom keybindings](docs/keybindings.md)
 - [Install options](docs/install.md)
 - [Color schemes](docs/themes.md)
 

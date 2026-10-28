@@ -11,37 +11,40 @@
 /// query matches anything.
 pub(crate) fn score(query: &str, candidate: &str) -> Option<u32> {
     let query: Vec<char> = query.chars().map(|c| c.to_ascii_lowercase()).collect();
-    let candidate: Vec<char> = candidate.chars().map(|c| c.to_ascii_lowercase()).collect();
     if query.is_empty() {
         return Some(0);
     }
 
+    // The candidate is walked in place: quick open scores every indexed path
+    // on each keystroke, so allocating a character vector per candidate (and
+    // per path view) dominates the filter at 20,000 files.
     let mut total: u32 = 0;
     let mut first: Option<usize> = None;
     let mut previous: Option<usize> = None;
     let mut matched = 0usize;
+    let mut preceding: Option<char> = None;
 
-    for (position, ch) in candidate.iter().copied().enumerate() {
+    for (position, raw) in candidate.chars().enumerate() {
         if matched == query.len() {
             break;
         }
-        if ch != query[matched] {
-            continue;
+        let ch = raw.to_ascii_lowercase();
+        if ch == query[matched] {
+            let mut points = 10;
+            if previous == Some(position.wrapping_sub(1)) {
+                points += 13;
+            }
+            if position == 0 {
+                points += 6;
+            } else if preceding.is_some_and(is_boundary) {
+                points += 14;
+            }
+            first = first.or(Some(position));
+            previous = Some(position);
+            matched += 1;
+            total += points;
         }
-
-        let mut points = 10;
-        if previous == Some(position.wrapping_sub(1)) {
-            points += 13;
-        }
-        if position == 0 {
-            points += 6;
-        } else if is_boundary(candidate[position - 1]) {
-            points += 14;
-        }
-        first = first.or(Some(position));
-        previous = Some(position);
-        matched += 1;
-        total += points;
+        preceding = Some(ch);
     }
 
     if matched < query.len() {

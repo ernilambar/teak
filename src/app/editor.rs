@@ -41,15 +41,15 @@ struct Commit {
 /// The document viewed as lines. Line contents keep a trailing `\r` so CRLF
 /// files round-trip, but drop the `\n`. `starts[i]` is the byte offset where
 /// line `i` begins.
-struct LineBuffer<'a> {
+pub(super) struct LineBuffer<'a> {
     text: &'a str,
     starts: Vec<usize>,
-    lines: Vec<&'a str>,
-    trailing_newline: bool,
+    pub(super) lines: Vec<&'a str>,
+    pub(super) trailing_newline: bool,
 }
 
 impl<'a> LineBuffer<'a> {
-    fn new(text: &'a str) -> Self {
+    pub(super) fn new(text: &'a str) -> Self {
         let mut starts = vec![0];
         for (i, byte) in text.bytes().enumerate() {
             if byte == b'\n' {
@@ -135,7 +135,7 @@ impl<'a> LineBuffer<'a> {
 }
 
 /// Joins line contents back into text, adding a final line break when asked.
-fn render(lines: &[&str], ends_with_newline: bool) -> String {
+pub(super) fn render(lines: &[&str], ends_with_newline: bool) -> String {
     let mut out = lines.join("\n");
     if ends_with_newline && !lines.is_empty() {
         out.push('\n');
@@ -750,7 +750,7 @@ impl TeakApp {
         let Some(tab) = self.active() else {
             return;
         };
-        let editor = tab.editor.clone();
+        let editor = tab.document.editor.clone();
 
         editor.update(cx, |state, cx| {
             let text = state.text().to_string();
@@ -791,7 +791,7 @@ impl TeakApp {
         cx: &mut Context<Self>,
     ) {
         if let Some(tab) = self.active() {
-            tidy(&tab.editor.clone(), true, false, window, cx);
+            tidy(&tab.document.editor.clone(), true, false, window, cx);
         }
     }
 
@@ -801,7 +801,7 @@ impl TeakApp {
         let Some(tab) = self.active() else {
             return;
         };
-        let editor = tab.editor.clone();
+        let editor = tab.document.editor.clone();
         editor.update(cx, |state, cx| {
             let text = state.text().to_string();
             let targets: Vec<Range<usize>> = state
@@ -1019,7 +1019,7 @@ impl TeakApp {
         let Some(tab) = self.active() else {
             return;
         };
-        let editor = tab.editor.clone();
+        let editor = tab.document.editor.clone();
         editor.update(cx, |state, cx| {
             let text = state.text().to_string();
             let range = select_line_range(&LineBuffer::new(&text), &state.selected_range());
@@ -1037,7 +1037,7 @@ impl TeakApp {
         let Some(tab) = self.active() else {
             return;
         };
-        let editor = tab.editor.clone();
+        let editor = tab.document.editor.clone();
         editor.update(cx, |state, cx| {
             let text = state.text().to_string();
             let Some(ranges) = select(&text, &state.selected_ranges()) else {
@@ -1092,7 +1092,7 @@ impl TeakApp {
         if tab.previewing().is_some() {
             return;
         }
-        let editor = tab.editor.clone();
+        let editor = tab.document.editor.clone();
         editor.update(cx, |state, cx| state.focus(window, cx));
         window.dispatch_action(action, cx);
     }
@@ -1135,7 +1135,7 @@ impl TeakApp {
         {
             preview.release(cx);
         }
-        let editor = tab.editor.clone();
+        let editor = tab.document.editor.clone();
         self.focus_tab(ix, window, cx);
         cx.notify();
         Some(editor)
@@ -1217,7 +1217,7 @@ impl TeakApp {
         let Some(tab) = self.active() else {
             return;
         };
-        let editor = tab.editor.clone();
+        let editor = tab.document.editor.clone();
 
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Line number"));
         let value_input = input.clone();
@@ -1808,7 +1808,7 @@ mod tests {
         cx.run_until_parked();
 
         cx.update_window(handle, |_, window, cx| {
-            let editor = app.read(cx).tabs.active().unwrap().editor.clone();
+            let editor = app.read(cx).tabs.active().unwrap().document.editor.clone();
             let session = editor.read(cx).search_session().clone();
             assert!(session.open, "Find opens the panel");
             assert!(!session.replace_mode, "Find is not replace mode");
@@ -1835,7 +1835,7 @@ mod tests {
         cx.update_window(handle, |_, window, cx| {
             app.update(cx, |this, cx| {
                 this.add_tab(None, "one two one".into(), window, cx);
-                let editor = this.tabs.active().unwrap().editor.clone();
+                let editor = this.tabs.active().unwrap().document.editor.clone();
                 editor.update(cx, |state, cx| state.set_search_query("one", true, cx));
             });
             window.render_frame(cx);
@@ -1846,7 +1846,7 @@ mod tests {
         cx.run_until_parked();
 
         cx.update_window(handle, |_, window, cx| {
-            let editor = app.read(cx).tabs.active().unwrap().editor.clone();
+            let editor = app.read(cx).tabs.active().unwrap().document.editor.clone();
             assert_eq!(editor.read(cx).search_session().matcher.label(), "2/2");
 
             window.press("shift-f3", cx);
@@ -1889,7 +1889,7 @@ mod tests {
             let tab = this.tabs.active().unwrap();
             assert!(tab.previewing().is_none(), "preview is turned off");
             assert!(
-                tab.editor.read(cx).search_session().open,
+                tab.document.editor.read(cx).search_session().open,
                 "search opens on the source"
             );
         })

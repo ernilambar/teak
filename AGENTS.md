@@ -35,6 +35,7 @@ Run every command from the repository root.
 - Format check: `cargo fmt --check`
 - Typecheck: `cargo check`
 - Run the app: `cargo run`
+- Perf budgets: `cargo test --release bench_ -- --ignored --nocapture`
 - Run and restart on save: `bacon run`
 - Install bundle to `/Applications` and relaunch: `./scripts/dev.sh [--release]`
 
@@ -62,13 +63,30 @@ in headless environments.
   go through methods, and each group needs a `new()` because `mod.rs` cannot initialize
   private fields. Leaf records (`OpenTab`, `TreeRow`, `Settings`) keep `pub(super)`
   fields so rendering can read them directly. `app/files.rs`, `editor.rs`, `find_in_files.rs`,
-  `palette.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
+  `picker.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
   orchestration blocks; GPUI-free helpers live in `cli.rs`, `git.rs`, `language.rs`,
   `paths.rs`, `search.rs`, `session.rs`, `settings.rs`, `update.rs`, `watcher.rs`, and the
   AppKit printing wrapper in `print.rs`. `windows.rs` holds app-level window coordination: the live-window
   registry, the shared recent list, the one `session.json` writer, and the bootstrap every
   new or restored window goes through. Add a new module only once a feature is large enough
   to justify the boundary.
+- A file and the tab showing it are separate types. `Document` (`app/document.rs`) owns
+  the buffer (`Entity<EditorState>`), path, title, language, on-disk format, dirty flag and
+  the disk-conflict bookkeeping; `OpenTab` (`app/tabs.rs`) is a view that owns only the
+  preview, the Find Results rows and its subscriptions. Put file state and disk-state
+  transitions on `Document`, not on the tab. A second view of the same path would share
+  this document and its `EditorState` — and therefore its caret — because the engine has no
+  buffer below that entity yet, so paths are deduplicated within a window instead.
+- There is one picker overlay (`app/picker.rs`), not one per list. The command
+  palette, quick open and Open Recent share its surface, focus handoff and
+  dismissal; they differ only in `PickerKind` and the rows they build. A new
+  list chooser is a kind plus a row builder, never a second overlay.
+- `keybindings.json` is VS Code-shaped (`[{ "key": "cmd+shift+p", "command": "…" }]`,
+  comments and trailing commas allowed) and is applied at startup by
+  `keymap::bind_keys_with`. A command is named by its palette label or its bare
+  action name (`ToggleSidebar`); a leading `-` removes its chords. The tests bind
+  with no overrides, so results never depend on the machine's file.
+- Performance budgets live in `app/bench.rs` as ignored tests (see `docs/performance.md`).
 - Every user-invokable command is declared once in `commands.rs`: label, action,
   chords, menu placement, palette placement and search keywords. The menu bar, the
   command palette and the keymap are all derived from that table, so a new command
@@ -98,6 +116,13 @@ in headless environments.
   `./scripts/vendor-gpui-base.sh <version>` with the gpui-base version from `Cargo.lock`;
   a version mismatch makes Cargo ignore the patch. If the patch no longer applies, re-add the
   change by hand in the fresh copy and run `--diff`.
+- Performance is a contract. Budgets live in `src/app/bench.rs` as ignored tests and
+  are documented in `docs/performance.md`. A change that regresses a ceiling does not
+  land; if a ceiling must move, update the doc in the same change.
+- Raster images open as view-only tabs (`OpenTab::raster`), never as text: `read_file`
+  detects them by extension, the tab shows `Preview::Image`, and save/move/duplicate
+  paths refuse them. View state (zoom/fit) lives on the tab, not the document.
+  `imagesize` reads only the header for the pixel dimensions shown in the status bar.
 - The app targets macOS. Do not add per-OS `cfg` branches.
 
 ## Releasing

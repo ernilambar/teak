@@ -129,6 +129,16 @@ fn raster_format(path: &Path) -> Option<ImageFormat> {
     }
 }
 
+/// A 1×1 transparent PNG, used by the image-viewer tests.
+#[cfg(test)]
+pub(super) const ONE_PIXEL_PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x64, 0x60, 0xF8, 0x5F,
+    0x0F, 0x00, 0x02, 0x87, 0x01, 0x80, 0xEB, 0x47, 0xBA, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
 /// Reads `path` for a new tab. Raster images load as raw bytes; everything
 /// else is decoded as text.
 pub(super) fn read_file(path: &Path) -> std::io::Result<FileContent> {
@@ -195,6 +205,17 @@ impl TeakApp {
         self.request_open_many(vec![path], window, cx);
     }
 
+    /// Opens one path in the preview slot: a browsing click reuses one tab
+    /// until the user edits the file or opens it explicitly.
+    pub(crate) fn request_open_transient(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_many(vec![path], true, window, cx);
+    }
+
     /// Opens several paths as one request. The tabs land in the order given,
     /// not in read-completion order, and the last path that resolves to a tab
     /// ends up active. Folders join the workspace; files already open are only
@@ -202,6 +223,16 @@ impl TeakApp {
     pub(crate) fn request_open_many(
         &mut self,
         paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_many(paths, false, window, cx);
+    }
+
+    fn open_many(
+        &mut self,
+        paths: Vec<PathBuf>,
+        transient: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -219,6 +250,11 @@ impl TeakApp {
         }
 
         if to_read.is_empty() {
+            // An explicit open of a preview keeps the tab; a browsing click
+            // leaves it in the slot.
+            if !transient {
+                self.promote_open_paths(&order);
+            }
             self.finish_open_many(&order, window, cx);
             return;
         }
@@ -249,18 +285,30 @@ impl TeakApp {
                             // Another request may have opened it while the read
                             // was in flight; never add a second tab for it.
                             if !this.tabs.is_open(&path) {
-                                this.add_file_tab(path, content, window, cx);
+                                this.add_file_tab(path, content, transient, window, cx);
                             }
                         }
                         Err(error) => window
                             .push_notification(Notification::error(open_error(&path, &error)), cx),
                     }
                 }
+                if !transient {
+                    this.promote_open_paths(&order);
+                }
                 this.finish_open_many(&order, window, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Ends the preview lifetime of every path in an explicit open.
+    fn promote_open_paths(&mut self, order: &[PathBuf]) {
+        for path in order {
+            if let Some(ix) = self.tabs.index_of_path(path) {
+                self.tabs.promote(ix);
+            }
+        }
     }
 
     /// Records each opened path, in the order given, and activates the last one
@@ -503,9 +551,9 @@ impl TeakApp {
         if tab.find_results.is_some() {
             return;
         }
-        let id = tab.editor.entity_id();
+        let id = tab.document.editor_id();
 
-        if let Some(path) = tab.path.clone() {
+        if let Some(path) = tab.document.path.clone() {
             self.save_editor(id, path, window, cx);
             return;
         }
@@ -544,13 +592,15 @@ impl TeakApp {
         if tab.raster || tab.find_results.is_some() {
             return;
         }
-        let id = tab.editor.entity_id();
+        let id = tab.document.editor_id();
         let suggested = tab
+            .document
             .path
             .as_deref()
             .map(file_name)
             .unwrap_or_else(|| "untitled.txt".to_string());
         let directory = tab
+            .document
             .path
             .as_deref()
             .and_then(Path::parent)
@@ -578,8 +628,13 @@ impl TeakApp {
         let targets: Vec<(EntityId, PathBuf)> = self
             .tabs
             .iter()
-            .filter(|tab| tab.dirty)
-            .filter_map(|tab| tab.path.clone().map(|path| (tab.editor.entity_id(), path)))
+            .filter(|tab| tab.document.dirty)
+            .filter_map(|tab| {
+                tab.document
+                    .path
+                    .clone()
+                    .map(|path| (tab.document.editor_id(), path))
+            })
             .filter(|(_, path)| path.exists())
             .collect();
 
@@ -605,7 +660,7 @@ impl TeakApp {
 
         // Writing back a file that was not valid UTF-8 replaces its bad bytes
         // for good, so ask first. Saving a copy elsewhere loses nothing.
-        if !(tab.format.lossy && tab.path.as_deref() == Some(path.as_path())) {
+        if !tab.document.would_lose_bytes_to(&path) {
             self.save_over_changes(id, path, window, cx);
             return;
         }
@@ -649,8 +704,8 @@ impl TeakApp {
         // would silently discard that change, and a file deleted on disk would
         // be silently recreated, so ask first.
         let current = modified_time(&path);
-        let changed_on_disk = tab.path.as_deref() == Some(path.as_path())
-            && disk_moved_on(tab.disk_modified, current);
+        let changed_on_disk =
+            tab.document.path() == Some(path.as_path()) && tab.document.moved_on_disk(current);
         if !changed_on_disk {
             self.write_editor(id, path, window, cx);
             return;
@@ -699,14 +754,17 @@ impl TeakApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(editor) = self.tabs.find(id).map(|tab| tab.editor.clone()) else {
+        let Some(editor) = self.tabs.find(id).map(|tab| tab.document.editor.clone()) else {
             return;
         };
         self.tidy_for_save(&editor, window, cx);
         let Some(tab) = self.tabs.find(id) else {
             return;
         };
-        let text = tab.format.encode(&tab.editor.read(cx).text().to_string());
+        let text = tab
+            .document
+            .format
+            .encode(&tab.document.editor.read(cx).text().to_string());
         let filename = file_name(&path);
 
         cx.spawn_in(window, async move |this, cx| {
@@ -737,23 +795,24 @@ impl TeakApp {
         if let Some(tab) = self
             .tabs
             .iter_mut()
-            .find(|tab| tab.editor.entity_id() == id)
+            .find(|tab| tab.document.editor_id() == id)
         {
-            tab.title = file_name(&path).into();
-            if !tab.language_override {
-                let language = language_for(&path, &first_line(&tab.editor, cx));
-                tab.editor.update(cx, |state, cx| {
+            let before = tab.document.language.clone();
+            tab.document
+                .moved_to(path.clone(), &first_line(&tab.document.editor, cx));
+            if tab.document.language != before {
+                let language = tab.document.language.clone();
+                tab.document.editor.update(cx, |state, cx| {
                     state.set_highlighter(editor_language_id(&language), cx);
                 });
-                tab.language = language;
             }
-            tab.disk_modified = modified_time(&path);
-            tab.dismissed_disk_change = None;
-            tab.deleted_on_disk = false;
             // The bad bytes were replaced on disk, so the file is clean UTF-8.
-            tab.format.lossy = false;
-            tab.path = Some(path.clone());
-            tab.dirty = false;
+            let format = TextFormat {
+                lossy: false,
+                ..tab.document.format
+            };
+            tab.document.synced_with_disk(modified_time(&path), format);
+            tab.document.dirty = false;
         }
         self.note_recent(path, cx);
         self.reload_tree(cx);
@@ -775,17 +834,17 @@ impl TeakApp {
         let Some(tab) = self
             .tabs
             .iter()
-            .find(|tab| tab.path.as_deref() == Some(path))
+            .find(|tab| tab.document.path.as_deref() == Some(path))
         else {
             return;
         };
         if tab.raster {
             return;
         }
-        let id = tab.editor.entity_id();
-        let dirty = tab.dirty;
-        let disk_modified = tab.disk_modified;
-        let dismissed = tab.dismissed_disk_change;
+        let id = tab.document.editor_id();
+        let dirty = tab.document.dirty;
+        let disk_modified = tab.document.disk_modified;
+        let dismissed = tab.document.dismissed_disk_change;
         // A removal flags the tab: there is nothing to reload, and the buffer
         // keeps its text so the user can write the file back deliberately.
         let modified = if change == Change::Changed {
@@ -801,7 +860,7 @@ impl TeakApp {
         self.set_deleted_on_disk(id, false, cx);
 
         let decision = classify_disk_change(dirty, disk_modified, dismissed, modified);
-        let active = self.tabs.active().map(|tab| tab.editor.entity_id()) == Some(id);
+        let active = self.tabs.active().map(|tab| tab.document.editor_id()) == Some(id);
 
         match decision {
             DiskChange::Ignored => {}
@@ -819,10 +878,10 @@ impl TeakApp {
         if let Some(tab) = self
             .tabs
             .iter_mut()
-            .find(|tab| tab.editor.entity_id() == id)
-            && tab.deleted_on_disk != deleted
+            .find(|tab| tab.document.editor_id() == id)
+            && tab.document.deleted_on_disk != deleted
         {
-            tab.deleted_on_disk = deleted;
+            tab.document.deleted_on_disk = deleted;
             cx.notify();
         }
     }
@@ -835,14 +894,15 @@ impl TeakApp {
     /// focused — and even on a file outside the watched folders, which raises
     /// no event at all.
     pub(crate) fn check_outside_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let active = self.active().and_then(|tab| tab.path.clone());
+        let active = self.active().and_then(|tab| tab.document.path.clone());
         let others: Vec<(EntityId, PathBuf)> = self
             .tabs
             .iter()
             .filter(|tab| !tab.raster)
             .filter_map(|tab| {
-                let path = tab.path.clone()?;
-                (active.as_deref() != Some(path.as_path())).then(|| (tab.editor.entity_id(), path))
+                let path = tab.document.path.clone()?;
+                (active.as_deref() != Some(path.as_path()))
+                    .then(|| (tab.document.editor_id(), path))
             })
             .collect();
         for (id, path) in others {
@@ -869,9 +929,9 @@ impl TeakApp {
         if let Some(tab) = self
             .tabs
             .iter_mut()
-            .find(|tab| tab.editor.entity_id() == id)
+            .find(|tab| tab.document.editor_id() == id)
         {
-            tab.dismissed_disk_change = modified;
+            tab.document.dismissed_disk_change = modified;
         }
         let name = file_name(&path);
         let entity = cx.entity();
@@ -905,7 +965,7 @@ impl TeakApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let started_dirty = self.tabs.find(id).is_some_and(|tab| tab.dirty);
+        let started_dirty = self.tabs.find(id).is_some_and(|tab| tab.document.dirty);
         cx.spawn_in(window, async move |this, cx| {
             let read_path = path.clone();
             let read = cx
@@ -929,21 +989,20 @@ impl TeakApp {
                 let Some(tab) = this
                     .tabs
                     .iter_mut()
-                    .find(|tab| tab.editor.entity_id() == id)
+                    .find(|tab| tab.document.editor_id() == id)
                 else {
                     return;
                 };
                 // Typing during the read made the tab dirty; leave it alone and
                 // let the next activation ask instead.
-                if tab.path.as_deref() != Some(path.as_path()) || (tab.dirty && !started_dirty) {
+                if tab.document.path() != Some(path.as_path())
+                    || (tab.document.dirty && !started_dirty)
+                {
                     return;
                 }
-                tab.disk_modified = modified;
-                tab.dismissed_disk_change = None;
-                tab.deleted_on_disk = false;
-                tab.format = format;
-                let editor = tab.editor.clone();
-                let is_active = this.tabs.active().map(|tab| tab.editor.entity_id()) == Some(id);
+                tab.document.synced_with_disk(modified, format);
+                let editor = tab.document.editor.clone();
+                let is_active = this.tabs.active().map(|tab| tab.document.editor_id()) == Some(id);
                 editor.update(cx, |state, cx| {
                     let position = state.cursor_position();
                     // `set_value` emits no change event, so the tab stays clean.
@@ -1324,21 +1383,21 @@ impl TeakApp {
     /// old path prefix to the new one after a rename or move.
     fn after_rename(&mut self, old: &Path, new: &Path, cx: &mut Context<Self>) {
         for tab in self.tabs.iter_mut() {
-            let Some(current) = tab.path.clone() else {
+            let Some(current) = tab.document.path.clone() else {
                 continue;
             };
             let Some(mapped) = remap_prefix(&current, old, new) else {
                 continue;
             };
-            tab.title = file_name(&mapped).into();
-            if !tab.language_override {
-                let language = language_for(&mapped, &first_line(&tab.editor, cx));
-                tab.editor.update(cx, |state, cx| {
+            tab.document.title = file_name(&mapped).into();
+            if !tab.document.language_override {
+                let language = language_for(&mapped, &first_line(&tab.document.editor, cx));
+                tab.document.editor.update(cx, |state, cx| {
                     state.set_highlighter(editor_language_id(&language), cx);
                 });
-                tab.language = language;
+                tab.document.language = language;
             }
-            tab.path = Some(mapped);
+            tab.document.path = Some(mapped);
         }
 
         self.workspace.remap(old, new);
@@ -1380,11 +1439,12 @@ impl TeakApp {
             .tabs
             .iter()
             .filter(|tab| {
-                tab.path
+                tab.document
+                    .path
                     .as_deref()
                     .is_some_and(|candidate| candidate == path || candidate.starts_with(path))
             })
-            .map(|tab| tab.editor.entity_id())
+            .map(|tab| tab.document.editor_id())
             .collect();
         for id in ids {
             self.remove_tab(id, window, cx);
@@ -1475,7 +1535,10 @@ impl TeakApp {
 /// `disk_modified` is the version the buffer is based on, `current` what the
 /// disk holds now. A file that is gone counts: writing would bring it back
 /// silently.
-fn disk_moved_on(disk_modified: Option<SystemTime>, current: Option<SystemTime>) -> bool {
+pub(super) fn disk_moved_on(
+    disk_modified: Option<SystemTime>,
+    current: Option<SystemTime>,
+) -> bool {
     disk_modified.is_some() && current != disk_modified
 }
 
@@ -1517,6 +1580,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::SystemTime;
 
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, ImageFormat, TestAppContext};
 
     use super::{DiskChange, TextFormat, classify_disk_change, disk_moved_on, raster_format};
@@ -1524,6 +1588,36 @@ mod tests {
     use crate::app::tabs::TabSet;
     use crate::app::test_support::open_app;
     use crate::watcher::Change;
+
+    /// A raster file opens as a view-only tab with its preview already built,
+    /// so typing and saving never touch the bytes on disk.
+    #[gpui_kit::test]
+    async fn a_png_opens_as_a_view_only_image_tab(cx: &mut TestAppContext) {
+        let path = std::env::temp_dir().join(format!("teak-image-{}.png", std::process::id()));
+        std::fs::write(&path, super::ONE_PIXEL_PNG).unwrap();
+
+        let (handle, app) = open_app(cx);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let content = super::read_file(&path).unwrap();
+                this.add_file_tab(path.clone(), content, false, window, cx);
+            });
+            window.render_frame(cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+        cx.update(|cx| {
+            let app = app.read(cx);
+            let tab = app.tabs.active().expect("the image tab opens");
+            assert!(tab.raster, "it is view-only");
+            assert!(tab.previewing().is_some(), "the image is what is shown");
+            assert!(!tab.document.dirty, "opening does not edit it");
+            assert!(tab.image.fit, "a freshly opened image is fitted");
+        });
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// One tab is left in the background so the dirty case never opens a
     /// dialog: only the visible tab asks.
@@ -1541,7 +1635,7 @@ mod tests {
             cx.update_window(handle, |_, window, cx| {
                 app.update(cx, |this, cx| {
                     let content = super::read_file(path).unwrap();
-                    this.add_file_tab(path.clone(), content, window, cx);
+                    this.add_file_tab(path.clone(), content, false, window, cx);
                 });
             })
             .unwrap();
@@ -1567,8 +1661,9 @@ mod tests {
             let app = app.read(cx);
             app.tabs
                 .iter()
-                .find(|tab| tab.path.as_deref() == Some(edited.as_path()))
+                .find(|tab| tab.document.path.as_deref() == Some(edited.as_path()))
                 .unwrap()
+                .document
                 .dirty
         }));
         assert_eq!(tab_text(&app, cx, &other).as_deref(), Some("other\n"));
@@ -1604,7 +1699,7 @@ mod tests {
             cx.update_window(handle, |_, window, cx| {
                 app.update(cx, |this, cx| {
                     let content = super::read_file(path).unwrap();
-                    this.add_file_tab(path.clone(), content, window, cx);
+                    this.add_file_tab(path.clone(), content, false, window, cx);
                 });
             })
             .unwrap();
@@ -1666,7 +1761,11 @@ mod tests {
 
         let (titles, active) = cx.update(|cx| {
             let app = app.read(cx);
-            let titles: Vec<String> = app.tabs.iter().map(|tab| tab.title.to_string()).collect();
+            let titles: Vec<String> = app
+                .tabs
+                .iter()
+                .map(|tab| tab.document.title.to_string())
+                .collect();
             (titles, app.tabs.active_index())
         });
         assert_eq!(titles, names);
@@ -1682,7 +1781,11 @@ mod tests {
         .unwrap();
         let (titles, active) = cx.update(|cx| {
             let app = app.read(cx);
-            let titles: Vec<String> = app.tabs.iter().map(|tab| tab.title.to_string()).collect();
+            let titles: Vec<String> = app
+                .tabs
+                .iter()
+                .map(|tab| tab.document.title.to_string())
+                .collect();
             (titles, app.tabs.active_index())
         });
         assert_eq!(titles, names);
@@ -1783,8 +1886,9 @@ mod tests {
 
     fn tab_id(tabs: &TabSet, path: &Path) -> gpui_kit::EntityId {
         tabs.iter()
-            .find(|tab| tab.path.as_deref() == Some(path))
+            .find(|tab| tab.document.path.as_deref() == Some(path))
             .unwrap()
+            .document
             .editor
             .entity_id()
     }
@@ -1825,8 +1929,9 @@ mod tests {
             app.read(cx)
                 .tabs
                 .iter()
-                .find(|tab| tab.path.as_deref() == Some(path))
+                .find(|tab| tab.document.path.as_deref() == Some(path))
                 .unwrap()
+                .document
                 .deleted_on_disk
         })
     }
@@ -1841,8 +1946,8 @@ mod tests {
             let tab = app
                 .tabs
                 .iter()
-                .find(|tab| tab.path.as_deref() == Some(path))?;
-            Some(tab.editor.read(cx).text().to_string())
+                .find(|tab| tab.document.path.as_deref() == Some(path))?;
+            Some(tab.document.editor.read(cx).text().to_string())
         })
     }
 

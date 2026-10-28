@@ -8,6 +8,7 @@
 | `⌘⇧N` | `Cmd + Shift + N` | New Window |
 | `⌘O` | `Cmd + O` | Open… |
 | `⌘P` | `Cmd + P` | Quick Open… |
+| `⌃R` | `Ctrl + R` | Open Recent… |
 | `⌃⌘O` | `Ctrl + Cmd + O` | Add Folder… |
 | `⌃⌘W` | `Ctrl + Cmd + W` | Close All Folders |
 | `⌘S` | `Cmd + S` | Save |
