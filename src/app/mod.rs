@@ -1,3 +1,6 @@
+// Performance budgets as ignored tests. See `docs/performance.md`.
+#[cfg(test)]
+mod bench;
 mod chrome;
 mod editor;
 mod files;

@@ -35,6 +35,7 @@ Run every command from the repository root.
 - Format check: `cargo fmt --check`
 - Typecheck: `cargo check`
 - Run the app: `cargo run`
+- Perf budgets: `cargo test --release bench_ -- --ignored --nocapture`
 - Run and restart on save: `bacon run`
 - Install bundle to `/Applications` and relaunch: `./scripts/dev.sh [--release]`
 
@@ -98,6 +99,9 @@ in headless environments.
   `./scripts/vendor-gpui-base.sh <version>` with the gpui-base version from `Cargo.lock`;
   a version mismatch makes Cargo ignore the patch. If the patch no longer applies, re-add the
   change by hand in the fresh copy and run `--diff`.
+- Performance is a contract. Budgets live in `src/app/bench.rs` as ignored tests and
+  are documented in `docs/performance.md`. A change that regresses a ceiling does not
+  land; if a ceiling must move, update the doc in the same change.
 - The app targets macOS. Do not add per-OS `cfg` branches.
 
 ## Releasing

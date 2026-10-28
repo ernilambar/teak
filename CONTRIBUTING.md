@@ -89,6 +89,17 @@ cargo build
 A future-incompatibility warning from a transitive dependency (`block`) is expected and
 is not caused by application code.
 
+Performance budgets are separate, because they need a release build and a quiet
+machine:
+
+```sh
+cargo test --release bench_ -- --ignored --nocapture
+```
+
+See [docs/performance.md](docs/performance.md) for the budgets, the fixtures, and
+what they do not cover. A change that regresses a ceiling should be discussed
+before it lands.
+
 ## Open a pull request
 
 - Branch off `main`, push your branch, and open a pull request against `main`.

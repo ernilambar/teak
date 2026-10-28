@@ -1334,13 +1334,143 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use gpui_kit::{DevicePixels, RenderImage, SvgRenderer, SvgSize, hsla};
+    use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
+    use gpui_kit::{
+        AppContext as _, DevicePixels, RenderImage, SvgRenderer, SvgSize, TestAppContext, hsla, px,
+    };
 
+    use crate::app::test_support::open_app_in;
     use crate::file_icons::file_icon;
     use crate::git::Branch;
 
     use super::COLOR_ICON_PIXELS;
     use super::{GIT_BRANCH_ICON, branch_label, change_tint, count_label, grouped};
+
+    /// A workspace with one source file, for the scenes that need an editor.
+    fn workspace_with_a_file(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("teak-smoke-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("main.rs");
+        std::fs::write(&path, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+        (root, path)
+    }
+
+    /// The editor scene paints its three fixed surfaces, and each one lands
+    /// with a non-zero size. gpui-kit 0.8 has no pixel capture, so this is the
+    /// closest a headless run gets to a screenshot: an empty pane, a collapsed
+    /// tab strip or a sidebar that failed to lay out all show up here.
+    #[gpui_kit::test]
+    async fn the_editor_scene_paints_its_surfaces(cx: &mut TestAppContext) {
+        let (root, path) = workspace_with_a_file("editor");
+        let (handle, app) = open_app_in(cx, vec![root.clone()]);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let content = crate::app::files::read_file(&path).unwrap();
+                this.add_file_tab(path.clone(), content, window, cx);
+            });
+            // The first frame mounts the tab, the second paints its editor.
+            window.render_frame(cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+        cx.update_window(handle, |_, window, _| {
+            let painted: Vec<_> = window
+                .elements()
+                .into_iter()
+                .filter(|element| element.visible() && element.bounds().size.height > px(0.))
+                .collect();
+            // Surfaces are checked by id path: a container that wraps children
+            // is not itself registered, so `find` cannot reach the tab strip.
+            let laid_out = |needle: &str| {
+                painted.iter().any(|element| {
+                    format!("{:?}", element.path()).contains(needle)
+                        && element.bounds().size.width > px(0.)
+                })
+            };
+            for surface in ["workspace-tab-bar", "explorer-scroll", "sidebar-header"] {
+                assert!(laid_out(surface), "{surface} must paint with a size");
+            }
+            // The editor surface: the kit registers the text area under its
+            // input path, so a painted editor proves the content pane is not
+            // blank even though teak gives it no id of its own.
+            assert!(
+                laid_out("input::editor::Editor"),
+                "the editor's text area must paint with a size",
+            );
+            assert!(painted.len() >= 5, "the window painted almost nothing");
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The command palette paints its search field over the editor.
+    #[gpui_kit::test]
+    async fn the_palette_scene_paints_its_search_field(cx: &mut TestAppContext) {
+        let (root, path) = workspace_with_a_file("palette");
+        let (handle, app) = open_app_in(cx, vec![root.clone()]);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let content = crate::app::files::read_file(&path).unwrap();
+                this.add_file_tab(path.clone(), content, window, cx);
+            });
+            window.render_frame(cx);
+            window.press("secondary-shift-p", cx);
+            window.render_frame(cx);
+            if let Some(palette) = app.read(cx).overlays.palette().cloned() {
+                palette.update(cx, |state, cx| state.focus(window, cx));
+            }
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+        cx.update_window(handle, |_, window, cx| {
+            assert!(app.read(cx).overlays.is_palette_open());
+            let field = window
+                .elements()
+                .into_iter()
+                .find(|element| element.placeholder() == Some("Type a command…"))
+                .expect("the palette's search field must be painted");
+            assert!(field.visible());
+            assert!(field.bounds().size.width > px(100.));
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The find-in-files panel paints its controls below the editor.
+    #[gpui_kit::test]
+    async fn the_find_in_files_scene_paints_its_controls(cx: &mut TestAppContext) {
+        let (root, path) = workspace_with_a_file("find");
+        let (handle, app) = open_app_in(cx, vec![root.clone()]);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let content = crate::app::files::read_file(&path).unwrap();
+                this.add_file_tab(path.clone(), content, window, cx);
+            });
+            window.render_frame(cx);
+            window.press("secondary-shift-f", cx);
+            window.render_frame(cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+        cx.update_window(handle, |_, window, cx| {
+            assert!(
+                app.read(cx).overlays.find().is_some(),
+                "Cmd+Shift+F must open the find panel",
+            );
+            let run = window.find("find-run");
+            assert!(run.visible());
+            assert!(run.bounds().size.height > px(0.));
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn the_status_bar_git_glyph_is_a_valid_svg() {

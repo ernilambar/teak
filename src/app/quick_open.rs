@@ -31,7 +31,7 @@ const FINDER_WIDTH: Pixels = px(560.);
 /// Gap between the top of the window and the finder panel.
 const FINDER_TOP: Pixels = px(72.);
 /// Hard cap on indexed files, so a runaway root cannot freeze the walk.
-const MAX_INDEX_FILES: usize = 20_000;
+pub(super) const MAX_INDEX_FILES: usize = 20_000;
 /// Results rebuilt per keystroke; the list itself virtualizes.
 const MAX_RESULTS: usize = 100;
 /// Extra credit for a query fully matching inside the file name.

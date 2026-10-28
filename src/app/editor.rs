@@ -41,15 +41,15 @@ struct Commit {
 /// The document viewed as lines. Line contents keep a trailing `\r` so CRLF
 /// files round-trip, but drop the `\n`. `starts[i]` is the byte offset where
 /// line `i` begins.
-struct LineBuffer<'a> {
+pub(super) struct LineBuffer<'a> {
     text: &'a str,
     starts: Vec<usize>,
-    lines: Vec<&'a str>,
-    trailing_newline: bool,
+    pub(super) lines: Vec<&'a str>,
+    pub(super) trailing_newline: bool,
 }
 
 impl<'a> LineBuffer<'a> {
-    fn new(text: &'a str) -> Self {
+    pub(super) fn new(text: &'a str) -> Self {
         let mut starts = vec![0];
         for (i, byte) in text.bytes().enumerate() {
             if byte == b'\n' {
@@ -135,7 +135,7 @@ impl<'a> LineBuffer<'a> {
 }
 
 /// Joins line contents back into text, adding a final line break when asked.
-fn render(lines: &[&str], ends_with_newline: bool) -> String {
+pub(super) fn render(lines: &[&str], ends_with_newline: bool) -> String {
     let mut out = lines.join("\n");
     if ends_with_newline && !lines.is_empty() {
         out.push('\n');
