@@ -14,7 +14,7 @@ use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::*;
 
 use crate::git::{Branch, GitState};
-use crate::paths::{DirEntry, RootConflict, read_dir, remap_prefix, root_conflict};
+use crate::paths::{DirEntry, RootConflict, nearest_root, read_dir, remap_prefix, root_conflict};
 use crate::session::WindowSession;
 use crate::watcher::Watcher;
 
@@ -41,8 +41,9 @@ pub(super) struct FileClipboard {
     pub(super) cut: bool,
 }
 
-/// The outcome of [`Workspace::add_root`], so the caller can report why a folder
-/// was refused without re-running the conflict check.
+/// The outcome of [`Workspace::add_root`]. A refused folder still has an open
+/// counterpart in the tree: `Duplicate` is already a root, `Overlap` lives
+/// inside one, and both are revealed rather than reported as errors.
 pub(super) enum AddRoot {
     Added,
     Duplicate,
@@ -54,6 +55,9 @@ pub(super) struct Workspace {
     roots: Vec<PathBuf>,
     expanded: HashSet<PathBuf>,
     selected: Option<PathBuf>,
+    /// A row that was just revealed, tinted briefly so a drop or Add Folder
+    /// visibly lands somewhere even when the row was already selected.
+    flash: Option<PathBuf>,
     /// Directory listings for every root and expanded folder, so rendering
     /// the tree never touches the disk. Invalidated on filesystem changes.
     dir_cache: HashMap<PathBuf, Vec<DirEntry>>,
@@ -105,6 +109,7 @@ impl Workspace {
             roots,
             expanded,
             selected: None,
+            flash: None,
             dir_cache: HashMap::new(),
             rows: Vec::new(),
             git: GitState::default(),
@@ -133,6 +138,15 @@ impl Workspace {
 
     pub(super) fn set_selected(&mut self, selected: Option<PathBuf>) {
         self.selected = selected;
+    }
+
+    /// The row drawn with the short-lived reveal tint, if any.
+    pub(super) fn flash(&self) -> Option<&Path> {
+        self.flash.as_deref()
+    }
+
+    pub(super) fn set_flash(&mut self, flash: Option<PathBuf>) {
+        self.flash = flash;
     }
 
     pub(super) fn rows(&self) -> &[TreeRow] {
@@ -331,10 +345,18 @@ impl Workspace {
         {
             self.selected = None;
         }
+        if self
+            .flash
+            .as_deref()
+            .is_some_and(|flash| flash == path || flash.starts_with(path))
+        {
+            self.flash = None;
+        }
     }
 
     /// Adds `path` as a workspace root, refusing duplicates and a folder that
-    /// overlaps one already open.
+    /// overlaps one already open. Callers reveal the open counterpart after a
+    /// refusal instead of reporting it.
     pub(super) fn add_root(&mut self, path: PathBuf) -> AddRoot {
         match root_conflict(&self.roots, &path) {
             Some(RootConflict::Duplicate) => return AddRoot::Duplicate,
@@ -347,6 +369,38 @@ impl Workspace {
         self.sidebar_visible = true;
         self.reload();
         AddRoot::Added
+    }
+
+    /// Brings `path` into view: expands it, every folder between it and its
+    /// root, and selects the row. A folder already in the tree is revealed
+    /// this way rather than refused or added a second time. Returns false when
+    /// `path` is not under any open root.
+    pub(super) fn reveal(&mut self, path: &Path) -> bool {
+        let Some(root) = nearest_root(&self.roots, path).map(Path::to_path_buf) else {
+            return false;
+        };
+
+        self.expanded.insert(root.clone());
+        let mut ancestor = path.parent();
+        while let Some(dir) = ancestor {
+            if !dir.starts_with(&root) {
+                break;
+            }
+            self.expanded.insert(dir.to_path_buf());
+            ancestor = dir.parent();
+        }
+        if path.is_dir() {
+            self.expanded.insert(path.to_path_buf());
+        }
+
+        self.selected = Some(path.to_path_buf());
+        self.sidebar_visible = true;
+        self.reload();
+
+        if let Some(ix) = self.rows.iter().position(|row| row.path.as_path() == path) {
+            self.scroll.scroll_to_item(ix, ScrollStrategy::Center);
+        }
+        true
     }
 
     /// Removes one workspace root and its subtree expansion state. Open tabs
@@ -527,6 +581,37 @@ mod tests {
 
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(&other).unwrap();
+    }
+
+    #[gpui_kit::test]
+    async fn revealing_a_nested_folder_expands_ancestors_and_selects_it(cx: &mut TestAppContext) {
+        let root = fixture("reveal");
+        let nested = root.join("one").join("two");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("file.txt"), "").unwrap();
+
+        let mut workspace = workspace(cx, vec![root.clone()]);
+        workspace.reload();
+        workspace.toggle_expanded(&root);
+        assert!(!workspace.is_expanded(&root), "the tree starts collapsed");
+
+        assert!(workspace.reveal(&nested));
+        assert!(workspace.is_expanded(&root));
+        assert!(workspace.is_expanded(&root.join("one")));
+        assert!(workspace.is_expanded(&nested));
+        assert_eq!(
+            workspace.selected(),
+            Some(nested.as_path()),
+            "the revealed folder is selected"
+        );
+        assert!(
+            shape(&workspace)
+                .iter()
+                .any(|(name, depth, _)| name == "two" && *depth == 2),
+            "the revealed folder is visible at its depth"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[gpui_kit::test]

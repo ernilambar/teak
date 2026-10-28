@@ -654,6 +654,47 @@ impl TeakApp {
             )
     }
 
+    /// The accent frame shown while paths from the file manager hover the
+    /// window. `folders_only` and the live Option key decide the promise it
+    /// makes, so the hint matches what the drop will actually do.
+    pub(super) fn render_drop_overlay(
+        &self,
+        folders_only: bool,
+        alt: bool,
+        cx: &App,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let accent = theme.drag_border;
+        let label = match (folders_only, alt) {
+            (true, false) => "Drop to add folder",
+            (true, true) => "Drop to add folder in a new window",
+            (false, false) => "Drop to open",
+            (false, true) => "Drop to open in a new window",
+        };
+
+        div()
+            .absolute()
+            .inset_0()
+            .border_2()
+            .border_dashed()
+            .border_color(accent.opacity(0.65))
+            .bg(accent.opacity(0.05))
+            .v_flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .px_4()
+                    .py_2()
+                    .rounded_lg()
+                    .bg(theme.primary)
+                    .text_color(theme.primary_foreground)
+                    .text_sm()
+                    .font_semibold()
+                    .child(label),
+            )
+    }
+
     /// The virtualized list of the flattened workspace tree. Roots are the
     /// first rows at depth 0, each followed by its expanded subtree.
     fn render_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -693,6 +734,8 @@ impl TeakApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let selected = self.workspace.selected() == Some(path);
+        let flashed = self.workspace.flash() == Some(path);
+        let flash_bg = cx.theme().drag_border.opacity(0.22);
         let expanded = self.workspace.is_expanded(path);
         let muted = cx.theme().muted_foreground;
         let git = self.workspace.git();
@@ -763,6 +806,7 @@ impl TeakApp {
                     .w_full()
                     .items_center()
                     .gap_1()
+                    .when(flashed, |row| row.bg(flash_bg).rounded_sm())
                     .child(leading)
                     .child(type_icon)
                     .child(

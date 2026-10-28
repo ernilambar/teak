@@ -13,6 +13,7 @@ A fast, lightweight text editor.
 - Changed lines marked in the editor gutter while you type, before saving
 - Git branch, with ahead/behind counts, in the status bar
 - Watches open folders, so changes made by other programs show up on their own
+- Drag files and folders in from Finder; hold Option to open them in a new window
 - Command palette (`Cmd+Shift+P`)
 - Quick Open (`Cmd+P`) to fuzzy-find files
 - Find and Replace in Files (`Cmd+Shift+F`), with regex and globs
