@@ -48,6 +48,10 @@ pub(super) struct Chrome {
     selected: usize,
     /// `(words, chars)` for the active text tab. `None` for no tab or an image.
     counts: Option<(usize, usize)>,
+    /// Set while paths from the file manager are dragged over the window.
+    /// `Some(true)` means every dragged path is a folder, so the drop hint can
+    /// say what will happen; `None` means no external drag is running.
+    external_drag: Option<bool>,
 }
 
 impl Chrome {
@@ -60,6 +64,7 @@ impl Chrome {
             cursor_col: 1,
             selected: 0,
             counts: None,
+            external_drag: None,
         }
     }
 
@@ -106,6 +111,17 @@ impl Chrome {
 
     pub(super) fn set_counts(&mut self, counts: Option<(usize, usize)>) {
         self.counts = counts;
+    }
+
+    /// `None` when no external drag is running, `Some(folders_only)` while one
+    /// is. `folders_only` decides whether the hint promises to add folders or
+    /// merely to open what was dropped.
+    pub(super) fn external_drag(&self) -> Option<bool> {
+        self.external_drag
+    }
+
+    pub(super) fn set_external_drag(&mut self, drag: Option<bool>) {
+        self.external_drag = drag;
     }
 
     /// Reads the caret position and selection size from `state`.

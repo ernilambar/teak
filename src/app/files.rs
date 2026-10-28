@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use gpui_kit::component::{
     WindowExt as _,
@@ -33,6 +33,19 @@ pub(super) enum FileContent {
 /// Text files above this size open as Plain Text, since syntax highlighting
 /// a huge file can stall the editor.
 pub(super) const LARGE_FILE_BYTES: usize = 10 * 1024 * 1024;
+
+/// How long a folder revealed by a drop or Add Folder keeps its accent tint.
+const REVEAL_FLASH: Duration = Duration::from_millis(800);
+
+/// Whether Option is held right now.
+///
+/// A platform file-drop event carries no modifier state, and the synthesized
+/// drag events do not update it, so ask AppKit directly at the moment of the
+/// drop instead of trusting `window.modifiers()`.
+pub(super) fn option_held() -> bool {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags};
+    NSEvent::modifierFlags_class().contains(NSEventModifierFlags::Option)
+}
 
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
@@ -364,28 +377,99 @@ impl TeakApp {
         .detach();
     }
 
-    /// Adds a folder to the sidebar. Exact duplicates are ignored silently;
-    /// folders that overlap an open root are rejected with a message.
-    pub(super) fn add_root(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        match self.workspace.add_root(path.clone()) {
-            AddRoot::Duplicate => return,
-            AddRoot::Overlap => {
-                window.push_notification(
-                    Notification::error(format!(
-                        "Cannot add \"{}\": it overlaps an open folder",
-                        file_name(&path)
-                    )),
-                    cx,
-                );
-                return;
-            }
-            AddRoot::Added => {}
+    /// Handles paths dropped from the file manager. A plain drop adds folders
+    /// to this workspace and opens files as tabs; holding Option opens
+    /// everything in a new window instead.
+    pub(super) fn on_external_drop(
+        &mut self,
+        paths: &ExternalPaths,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.chrome.set_external_drag(None);
+        let paths = paths.paths().to_vec();
+        if paths.is_empty() {
+            cx.notify();
+            return;
         }
-        self.note_recent(path, cx);
 
-        self.refresh_git_status(cx);
-        self.save_session(cx);
+        if option_held() {
+            self.open_paths_in_new_window(paths, window, cx);
+        } else {
+            for path in paths {
+                self.request_open(path, window, cx);
+            }
+        }
         cx.notify();
+    }
+
+    /// Opens `paths` in a new window: folders become workspace roots there and
+    /// files become tabs, in the order given.
+    fn open_paths_in_new_window(
+        &mut self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut seed = WindowSeed::for_paths(self.settings.values.clone(), paths);
+        seed.frame = Some(cascaded_frame(window));
+        if self.services.open_window(cx, seed).is_none() {
+            window.push_notification(Notification::error("Could not open a new window"), cx);
+        }
+    }
+
+    /// Adds a folder to the sidebar. A folder that is already open, or that
+    /// lives inside an open root, is revealed in the tree instead of being
+    /// added twice; only a folder that *contains* an open root is refused,
+    /// because it cannot be shown without nesting one root inside another.
+    pub(super) fn add_root(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let outcome = self.workspace.add_root(path.clone());
+        let inside_open_root = self
+            .workspace
+            .roots()
+            .iter()
+            .any(|root| path.starts_with(root));
+        if matches!(outcome, AddRoot::Overlap) && !inside_open_root {
+            window.push_notification(
+                Notification::error(format!(
+                    "Cannot add \"{}\": it contains an open folder",
+                    file_name(&path)
+                )),
+                cx,
+            );
+            return;
+        }
+
+        self.workspace.reveal(&path);
+        if matches!(outcome, AddRoot::Added) {
+            self.note_recent(path.clone(), cx);
+            self.refresh_git_status(cx);
+        }
+        self.save_session(cx);
+        self.flash_revealed(path, window, cx);
+    }
+
+    /// Tints a freshly revealed folder for a moment, so a drop that lands on an
+    /// already-visible row still gives feedback.
+    fn flash_revealed(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.workspace.set_flash(Some(path.clone()));
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(REVEAL_FLASH).await;
+            this.update_in(cx, |this, _window, cx| {
+                if this
+                    .workspace
+                    .flash()
+                    .is_some_and(|flash| flash == path.as_path())
+                {
+                    this.workspace.set_flash(None);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(super) fn on_close_all_folders(
@@ -1552,6 +1636,42 @@ mod tests {
         assert_eq!(active, Some(1));
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Adding a folder that already lives under an open root reveals it there
+    /// instead of adding a second, overlapping root or reporting an error.
+    #[gpui_kit::test]
+    async fn adding_a_nested_folder_reveals_it_in_the_open_root(cx: &mut TestAppContext) {
+        let root = std::env::temp_dir().join(format!("app-add-nested-{}", std::process::id()));
+        let nested = root.join("one").join("two");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let (handle, app) = open_app(cx);
+        for path in [root.clone(), nested.clone()] {
+            cx.update_window(handle, |_, window, cx| {
+                app.update(cx, |this, cx| this.add_root(path.clone(), window, cx));
+            })
+            .unwrap();
+        }
+
+        let (roots, selected, expanded) = cx.update(|cx| {
+            let app = app.read(cx);
+            (
+                app.workspace.roots().to_vec(),
+                app.workspace.selected().map(Path::to_path_buf),
+                app.workspace.is_expanded(&root.join("one")),
+            )
+        });
+        assert_eq!(roots, vec![root.clone()], "the nested folder is not a root");
+        assert_eq!(
+            selected.as_deref(),
+            Some(nested.as_path()),
+            "the nested folder is selected in the existing tree"
+        );
+        assert!(expanded, "its parent is expanded so the row is visible");
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

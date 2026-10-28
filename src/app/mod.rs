@@ -11,7 +11,7 @@ mod ui;
 mod workspace;
 
 use self::chrome::Chrome;
-use self::files::LARGE_FILE_BYTES;
+use self::files::{LARGE_FILE_BYTES, option_held};
 use self::overlays::{FindText, Overlays};
 use self::preferences::SettingsState;
 use self::tabs::{OpenTab, Preview, TabSet};
@@ -1444,10 +1444,29 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_close_all_folders))
             .on_action(cx.listener(Self::on_clear_recent))
             // Files and folders dragged in from the file manager open like Open… does.
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                for path in paths.paths() {
-                    this.request_open(path.clone(), window, cx);
+            // Tracking the drag first keeps the window-wide hint in step with
+            // what the drop will do; Option sends it to a new window instead.
+            .on_drag_move::<ExternalPaths>(cx.listener(
+                |this, drag: &DragMoveEvent<ExternalPaths>, _, cx| {
+                    let folders_only = drag
+                        .dragged_item()
+                        .downcast_ref::<ExternalPaths>()
+                        .is_some_and(|paths| paths.paths().iter().all(|path| path.is_dir()));
+                    if this.chrome.external_drag() != Some(folders_only) {
+                        this.chrome.set_external_drag(Some(folders_only));
+                        cx.notify();
+                    }
+                },
+            ))
+            // A drag that leaves the window without dropping clears the hint.
+            .on_file_drop_exit(cx.listener(|this, _: &FileDropEvent, _, cx| {
+                if this.chrome.external_drag().is_some() {
+                    this.chrome.set_external_drag(None);
+                    cx.notify();
                 }
+            }))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.on_external_drop(paths, window, cx);
             }))
             .on_action(cx.listener(Self::on_save_file))
             .on_action(cx.listener(Self::on_save_file_as))
@@ -1543,8 +1562,17 @@ impl Render for TeakApp {
             None => root,
         };
 
-        match settings_overlay {
-            Some(overlay) => root.child(overlay).into_any_element(),
+        let root = match settings_overlay {
+            Some(overlay) => root.child(overlay),
+            None => root,
+        };
+
+        // Drawn last and without a hitbox, so it covers everything visually
+        // while the drop still reaches the root handler underneath.
+        match self.chrome.external_drag() {
+            Some(folders_only) => root
+                .child(self.render_drop_overlay(folders_only, option_held(), cx))
+                .into_any_element(),
             None => root.into_any_element(),
         }
     }
