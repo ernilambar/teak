@@ -62,8 +62,8 @@ in headless environments.
   plain field has no `Context`. A group's fields are private to its own module: callers
   go through methods, and each group needs a `new()` because `mod.rs` cannot initialize
   private fields. Leaf records (`OpenTab`, `TreeRow`, `Settings`) keep `pub(super)`
-  fields so rendering can read them directly. `app/files.rs`, `editor.rs`, `find_in_files.rs`,
-  `picker.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
+  fields so rendering can read them directly. `app/changes.rs`, `files.rs`, `editor.rs`,
+  `find_in_files.rs`, `picker.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
   orchestration blocks; GPUI-free helpers live in `cli.rs`, `git.rs`, `language.rs`,
   `paths.rs`, `search.rs`, `session.rs`, `settings.rs`, `update.rs`, `watcher.rs`, and the
   AppKit printing wrapper in `print.rs`. `windows.rs` holds app-level window coordination: the live-window
@@ -119,6 +119,11 @@ in headless environments.
 - Performance is a contract. Budgets live in `src/app/bench.rs` as ignored tests and
   are documented in `docs/performance.md`. A change that regresses a ceiling does not
   land; if a ceiling must move, update the doc in the same change.
+- Source control is read-only. The sidebar shows one `SidebarView` at a time (Explorer or
+  Changes), picked from the status-bar switch; `app/changes.rs` lists what `git status`
+  reported and opens a generated diff tab (`OpenTab::diff`) per path. Generated tabs
+  (`OpenTab::generated()`: Find Results and diffs) are read-only and never saved, moved or
+  restored. `git.rs` never writes to a repository.
 - Raster images open as view-only tabs (`OpenTab::raster`), never as text: `read_file`
   detects them by extension, the tab shows `Preview::Image`, and save/move/duplicate
   paths refuse them. View state (zoom/fit) lives on the tab, not the document.

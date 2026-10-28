@@ -1,6 +1,7 @@
 // Performance budgets as ignored tests. See `docs/performance.md`.
 #[cfg(test)]
 mod bench;
+mod changes;
 mod chrome;
 mod document;
 mod editor;
@@ -328,6 +329,7 @@ impl TeakApp {
             selected_path: self.workspace.selected().map(Path::to_path_buf),
             sidebar_visible: self.workspace.sidebar_visible(),
             sidebar_width: Some(self.workspace.width()),
+            sidebar_view: self.workspace.view(),
             find_query: self.overlays.find_text().query.clone(),
             find_where: self.overlays.find_text().scope.clone(),
             find_replace: self.overlays.find_text().replace.clone(),
@@ -1559,6 +1561,8 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_toggle_full_screen))
             .on_action(cx.listener(Self::on_bring_all_to_front))
             .on_action(cx.listener(Self::on_toggle_sidebar))
+            .on_action(cx.listener(Self::on_show_explorer))
+            .on_action(cx.listener(Self::on_show_changes))
             .on_action(cx.listener(Self::on_refresh))
             .on_action(cx.listener(Self::on_install_cli))
             .on_action(cx.listener(Self::on_check_for_updates))

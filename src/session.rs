@@ -28,6 +28,8 @@ pub(crate) struct WindowSession {
     pub(crate) sidebar_visible: bool,
     /// Sidebar width in pixels, as last dragged by the user.
     pub(crate) sidebar_width: Option<u32>,
+    /// Which view the sidebar showed.
+    pub(crate) sidebar_view: SidebarView,
     /// The Find panel's last query, Where field and toggles.
     pub(crate) find_query: String,
     pub(crate) find_where: String,
@@ -36,6 +38,15 @@ pub(crate) struct WindowSession {
     /// The window's frame at the last save, so a relaunch can reopen it where
     /// the user left it.
     pub(crate) frame: Option<WindowFrame>,
+}
+
+/// What the sidebar shows: the folder tree, or the files git reports changed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SidebarView {
+    #[default]
+    Explorer,
+    Changes,
 }
 
 /// A serializable window frame. GPUI's `WindowBounds` is not serde-friendly, so
@@ -101,6 +112,7 @@ impl LegacySession {
                 selected_path: self.selected_path,
                 sidebar_visible: self.sidebar_visible,
                 sidebar_width: self.sidebar_width,
+                sidebar_view: SidebarView::Explorer,
                 find_query: self.find_query,
                 find_where: self.find_where,
                 find_replace: self.find_replace,
@@ -158,6 +170,7 @@ mod tests {
             selected_path: None,
             sidebar_visible: true,
             sidebar_width: Some(260),
+            sidebar_view: SidebarView::Changes,
             find_query: "needle".into(),
             find_where: "-vendor/**".into(),
             find_replace: "pin".into(),
@@ -192,6 +205,7 @@ mod tests {
         assert_eq!(restored.windows[0].selected_path, None);
         assert!(restored.windows[0].sidebar_visible);
         assert_eq!(restored.windows[0].sidebar_width, Some(260));
+        assert_eq!(restored.windows[0].sidebar_view, SidebarView::Changes);
         assert_eq!(restored.windows[0].find_query, "needle");
         assert_eq!(restored.windows[0].find_where, "-vendor/**");
         assert_eq!(restored.windows[0].find_replace, "pin");

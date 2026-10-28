@@ -5,7 +5,9 @@
 //! `rows` is derived from `roots` + `expanded`. Most methods rebuild it, but
 //! `expand`, `forget` and `remap` do not: their callers batch several changes
 //! and then call [`Workspace::reload`] once, which also re-reads the disk.
-//! `TreeRow` and `FileClipboard` are leaf records and keep `pub(super)` fields.
+//! `changes` is derived from `roots` + `git` and rebuilt on every status read.
+//! `TreeRow`, `ChangeRow` and `FileClipboard` are leaf records and keep
+//! `pub(super)` fields.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -13,9 +15,9 @@ use std::path::{Path, PathBuf};
 use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::*;
 
-use crate::git::{Branch, GitState};
+use crate::git::{Branch, GitState, Status};
 use crate::paths::{DirEntry, RootConflict, nearest_root, read_dir, remap_prefix, root_conflict};
-use crate::session::WindowSession;
+use crate::session::{SidebarView, WindowSession};
 use crate::watcher::Watcher;
 
 /// Sidebar width used when the session does not carry one.
@@ -32,6 +34,20 @@ pub(super) struct TreeRow {
     pub(super) depth: usize,
     pub(super) is_dir: bool,
     pub(super) is_root: bool,
+}
+
+/// One row of the Changes view: a workspace folder that holds changes, then
+/// each changed path under it, named relative to that folder.
+pub(super) enum ChangeRow {
+    Root {
+        path: PathBuf,
+        count: usize,
+    },
+    File {
+        path: PathBuf,
+        label: String,
+        status: Status,
+    },
 }
 
 /// A pending Cut/Copy of a single tree entry, applied on the next Paste.
@@ -67,6 +83,9 @@ pub(super) struct Workspace {
     /// Git status and branch of the entries under every root, plus the folders
     /// holding a change. Read in the background by the app, never by the tree.
     git: GitState,
+    /// The Changes view's rows, derived from `git`.
+    changes: Vec<ChangeRow>,
+    changes_scroll: UniformListScrollHandle,
     /// Follows the roots and their git directories, so the app hears about
     /// changes made outside it. `None` until the window starts it.
     watcher: Option<Watcher>,
@@ -77,6 +96,7 @@ pub(super) struct Workspace {
     /// Scroll position and extent of the virtualized sidebar list.
     scroll: UniformListScrollHandle,
     sidebar_visible: bool,
+    view: SidebarView,
     /// Sidebar width in pixels, persisted to the session and applied to the
     /// workspace layout on each render.
     width: u32,
@@ -113,11 +133,14 @@ impl Workspace {
             dir_cache: HashMap::new(),
             rows: Vec::new(),
             git: GitState::default(),
+            changes: Vec::new(),
+            changes_scroll: UniformListScrollHandle::default(),
             watcher: None,
             status_running: false,
             status_pending: false,
             scroll: UniformListScrollHandle::default(),
             sidebar_visible,
+            view: SidebarView::default(),
             width: DEFAULT_SIDEBAR_WIDTH,
             panels,
             clipboard: None,
@@ -224,7 +247,54 @@ impl Workspace {
     pub(super) fn finish_status_read(&mut self, git: GitState) -> bool {
         self.status_running = false;
         self.git = git;
+        self.changes = self
+            .roots
+            .iter()
+            .flat_map(|root| {
+                let files = self.git.changes_under(root);
+                let header = (!files.is_empty()).then(|| ChangeRow::Root {
+                    path: root.clone(),
+                    count: files.len(),
+                });
+                header
+                    .into_iter()
+                    .chain(files.into_iter().map(move |(path, status)| {
+                        ChangeRow::File {
+                            label: path
+                                .strip_prefix(root)
+                                .unwrap_or(&path)
+                                .display()
+                                .to_string(),
+                            path,
+                            status,
+                        }
+                    }))
+            })
+            .collect();
         std::mem::take(&mut self.status_pending)
+    }
+
+    pub(super) fn changes(&self) -> &[ChangeRow] {
+        &self.changes
+    }
+
+    /// How many changed paths the Changes view lists, across every folder.
+    pub(super) fn change_count(&self) -> usize {
+        self.changes
+            .iter()
+            .filter(|row| matches!(row, ChangeRow::File { .. }))
+            .count()
+    }
+
+    /// True when some workspace folder sits inside a git repository.
+    pub(super) fn has_repository(&self) -> bool {
+        self.roots
+            .iter()
+            .any(|root| self.git.branch(root).is_some())
+    }
+
+    pub(super) fn changes_scroll(&self) -> &UniformListScrollHandle {
+        &self.changes_scroll
     }
 
     pub(super) fn scroll(&self) -> &UniformListScrollHandle {
@@ -253,6 +323,21 @@ impl Workspace {
 
     pub(super) fn toggle_sidebar_visible(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
+    }
+
+    pub(super) fn view(&self) -> SidebarView {
+        self.view
+    }
+
+    /// Switches the sidebar to `view`. Asking for the view already showing
+    /// hides the sidebar instead, so the status-bar switch toggles it.
+    pub(super) fn show_view(&mut self, view: SidebarView) {
+        if self.sidebar_visible && self.view == view {
+            self.sidebar_visible = false;
+        } else {
+            self.view = view;
+            self.sidebar_visible = true;
+        }
     }
 
     pub(super) fn width(&self) -> u32 {
@@ -454,6 +539,7 @@ impl Workspace {
 
         self.selected = session.selected_path.clone().filter(|path| path.exists());
         self.sidebar_visible = session.sidebar_visible;
+        self.view = session.sidebar_view;
         if let Some(width) = session.sidebar_width {
             self.set_width(width);
         }
@@ -473,6 +559,7 @@ mod tests {
     use super::{AddRoot, Workspace};
     use crate::git::GitState;
     use crate::paths::file_name;
+    use crate::session::SidebarView;
 
     /// An empty directory named uniquely per test.
     fn fixture(name: &str) -> PathBuf {
@@ -547,6 +634,27 @@ mod tests {
         assert_eq!(shape(&workspace), collapsed);
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[gpui_kit::test]
+    async fn showing_the_shown_view_hides_the_sidebar(cx: &mut TestAppContext) {
+        let root = fixture("view");
+        let mut workspace = workspace(cx, vec![root.clone()]);
+        assert!(workspace.sidebar_visible());
+        assert_eq!(workspace.view(), SidebarView::Explorer);
+
+        workspace.show_view(SidebarView::Changes);
+        assert!(workspace.sidebar_visible());
+        assert_eq!(workspace.view(), SidebarView::Changes);
+
+        workspace.show_view(SidebarView::Changes);
+        assert!(!workspace.sidebar_visible(), "the shown view toggles off");
+
+        workspace.show_view(SidebarView::Explorer);
+        assert!(workspace.sidebar_visible());
+        assert_eq!(workspace.view(), SidebarView::Explorer);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[gpui_kit::test]

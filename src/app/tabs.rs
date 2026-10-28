@@ -87,12 +87,22 @@ pub(super) struct OpenTab {
     pub(super) raster: bool,
     /// Set on the read-only Find Results tab, which is never saved or restored.
     pub(super) find_results: Option<FindResultsTab>,
+    /// Set on a read-only diff tab, which is never saved or restored either.
+    pub(super) diff: Option<DiffTab>,
     /// True for the preview tab: the one slot a browsing click reuses until the
     /// user edits it or opens the file explicitly.
     pub(super) transient: bool,
     /// Zoom and fit for an image view. Ignored by text tabs.
     pub(super) image: ImageView,
     pub(super) _subscriptions: Vec<Subscription>,
+}
+
+/// What a diff tab knows beyond its text.
+pub(super) struct DiffTab {
+    /// The changed file the diff describes; one diff tab per path.
+    pub(super) source: PathBuf,
+    /// The added and removed line tints, replaced on every refresh.
+    pub(super) tints: RangeDecorationCollection,
 }
 
 /// What the Find Results tab knows beyond its text.
@@ -136,6 +146,12 @@ impl Preview {
 }
 
 impl OpenTab {
+    /// True for a tab the app wrote, Find Results or a diff: read-only, with
+    /// nothing to save, move or reopen.
+    pub(super) fn generated(&self) -> bool {
+        self.find_results.is_some() || self.diff.is_some()
+    }
+
     /// The preview to show instead of the editor. A tab whose language was
     /// switched away from the previewed one falls back to the editor.
     pub(super) fn previewing(&self) -> Option<&Preview> {
@@ -481,6 +497,7 @@ impl TeakApp {
             preview: None,
             raster: false,
             find_results: None,
+            diff: None,
             transient,
             image: ImageView::default(),
             _subscriptions: vec![change_subscription, cursor_subscription],
@@ -630,7 +647,7 @@ impl TeakApp {
             );
             return;
         }
-        if tab.raster || tab.find_results.is_some() || tab.previewing().is_some() {
+        if tab.raster || tab.generated() || tab.previewing().is_some() {
             window.push_notification(
                 Notification::info("This tab cannot be moved to a new window"),
                 cx,
@@ -926,9 +943,9 @@ impl TeakApp {
             return;
         };
 
-        // Reopening the results tab would bring it back as a plain Untitled copy.
+        // Reopening a generated tab would bring it back as a plain Untitled copy.
         if let Some(tab) = self.tabs.get(ix)
-            && tab.find_results.is_none()
+            && !tab.generated()
         {
             self.tabs.push_closed(ClosedTab {
                 path: tab.document.path.clone(),
@@ -1112,6 +1129,7 @@ mod tests {
                 preview: None,
                 raster: false,
                 find_results: None,
+                diff: None,
                 transient: false,
                 image: ImageView::default(),
                 _subscriptions: Vec::new(),

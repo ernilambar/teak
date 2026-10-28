@@ -28,6 +28,7 @@ use crate::file_icons::{file_icon, folder_icon};
 use crate::git::{Branch, Status};
 use crate::language::{LANGUAGES, editor_language_id};
 use crate::paths::{display_path, file_name, format_size};
+use crate::session::SidebarView;
 use crate::settings::IconStyle;
 use crate::{
     AddCursorAbove, AddCursorBelow, AddFolder, CopyFilePath, CopyRelativePath, NewFile, OpenFile,
@@ -98,6 +99,9 @@ fn status_dot(visible: bool, color: Hsla) -> Div {
 /// set the app registers is the small default subset, which has no git icons;
 /// embedding the full catalogue for one glyph would cost megabytes.
 const GIT_BRANCH_ICON: &[u8] = include_bytes!("../../assets/icons/git-branch.svg");
+/// The Changes view's glyph, on its status-bar switch and on diff tabs.
+/// Vendored from Lucide for the same reason.
+pub(super) const GIT_COMPARE_ICON: &[u8] = include_bytes!("../../assets/icons/git-compare.svg");
 
 /// The status-bar text for a branch: its name, and how far it has diverged
 /// from its upstream when it tracks one.
@@ -311,6 +315,14 @@ impl TeakApp {
                                     .flex_none(),
                             );
                         }
+                        if tab.diff.is_some() {
+                            return this.child(
+                                Icon::empty()
+                                    .data(GIT_COMPARE_ICON)
+                                    .with_size(Size::Small)
+                                    .flex_none(),
+                            );
+                        }
                         // Untitled tabs have no path and fall back to the default file icon.
                         let path = tab.document.path.as_deref().unwrap_or(Path::new(""));
                         this.child(file_type_icon(file_icon(path), icon_style, None, cx))
@@ -435,7 +447,7 @@ impl TeakApp {
                 let movable = menu_entity.read(cx).tabs.get(ix).is_some_and(|tab| {
                     !tab.document.dirty
                         && !tab.raster
-                        && tab.find_results.is_none()
+                        && !tab.generated()
                         && tab.previewing().is_none()
                         && tab.document.path.as_deref().is_some_and(Path::is_file)
                 });
@@ -628,6 +640,7 @@ impl TeakApp {
     }
 
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let explorer = self.workspace.view() == SidebarView::Explorer;
         div()
             .v_flex()
             .size_full()
@@ -643,19 +656,27 @@ impl TeakApp {
                     .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(div().flex_1().text_sm().font_semibold().child("Explorer"))
-                    .child(
-                        Button::new("sidebar-add-folder")
-                            .xsmall()
-                            .ghost()
-                            .icon(IconName::Plus)
-                            .tooltip("Add Folder…")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.on_add_folder(&AddFolder, window, cx)
-                            })),
-                    ),
+                    .child(div().flex_1().text_sm().font_semibold().child(if explorer {
+                        "Explorer"
+                    } else {
+                        "Changes"
+                    }))
+                    .when(explorer, |header| {
+                        header.child(
+                            Button::new("sidebar-add-folder")
+                                .xsmall()
+                                .ghost()
+                                .icon(IconName::Plus)
+                                .tooltip("Add Folder…")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.on_add_folder(&AddFolder, window, cx)
+                                })),
+                        )
+                    }),
             )
-            .child(if self.workspace.roots().is_empty() {
+            .child(if !explorer {
+                self.render_changes(cx)
+            } else if self.workspace.roots().is_empty() {
                 self.render_sidebar_empty(cx).into_any_element()
             } else {
                 self.render_tree(cx).into_any_element()
@@ -1193,7 +1214,7 @@ impl TeakApp {
                             .appearance(false)
                             .bordered(false)
                             // The element sets this on the state every render.
-                            .readonly(tab.find_results.is_some())
+                            .readonly(tab.generated())
                             .when_some(
                                 self.settings.values.editor.font_family.clone(),
                                 |editor, family| editor.font_family(family),
@@ -1286,6 +1307,7 @@ impl TeakApp {
         let deleted = self
             .active()
             .is_some_and(|tab| tab.document.deleted_on_disk);
+        let view_switch = self.render_view_switch(cx);
         let divider = || div().h_3().w(px(1.)).flex_none().bg(cx.theme().border);
 
         let language_button = Button::new("language-mode")
@@ -1348,7 +1370,7 @@ impl TeakApp {
                 .into_any_element()
         };
 
-        let mut status = StatusBar::new();
+        let mut status = StatusBar::new().left(view_switch);
         if let Some(image) = self.active_raster() {
             return status.left(div().child(image_summary(image)));
         }
@@ -1403,9 +1425,14 @@ impl TeakApp {
             status = status
                 .right(
                     div()
+                        .id("status-branch")
                         .h_flex()
                         .items_center()
                         .gap_1()
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_sidebar_view(SidebarView::Changes, cx);
+                        }))
                         // A line-art branch glyph, monochrome: the Git logo is
                         // a solid shape that turns into a blob at this size.
                         .child(
