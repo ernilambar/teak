@@ -51,10 +51,10 @@ use crate::windows::{AppServices, WindowSeed, cascaded_frame};
 use crate::{
     About, BringAllToFront, CheckForUpdates, ClearRecent, CloseWindow, CopyFileName, CopyFilePath,
     CopyRelativePath, InstallCli, JumpToTab, MinimizeWindow, NewWindow, NextTab,
-    OpenDefaultSettings, OpenSettings, OpenThemesFolder, PreviousTab, Print, Quit, Refresh,
-    ReopenClosedTab, RevealInFinder, SetTheme, ToggleAutoClose, ToggleFolding, ToggleFullScreen,
-    ToggleIndentGuides, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
-    ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset, ZoomWindow,
+    OpenDefaultSettings, OpenKeybindings, OpenSettings, OpenThemesFolder, PreviousTab, Print, Quit,
+    Refresh, ReopenClosedTab, RevealInFinder, SetTheme, ToggleAutoClose, ToggleFolding,
+    ToggleFullScreen, ToggleIndentGuides, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar,
+    ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap, ZoomIn, ZoomOut, ZoomReset, ZoomWindow,
 };
 
 /// Maps `editor.indent_wrapped_lines` onto the engine's wrapping indent.
@@ -263,7 +263,7 @@ impl TeakApp {
                             if this.tabs.is_open(&path) {
                                 return;
                             }
-                            this.add_file_tab(path.clone(), content, window, cx);
+                            this.add_file_tab(path.clone(), content, false, window, cx);
                         })
                         .ok();
                     }
@@ -1286,6 +1286,38 @@ impl TeakApp {
 
     /// Opens `settings.json` as a text tab, creating a starter file on first
     /// use. Reached from the Settings overlay for direct edits.
+    /// Opens `keybindings.json`, writing a commented starter the first time.
+    /// The file is read at startup, so edits apply on the next launch.
+    fn on_open_keybindings(
+        &mut self,
+        _: &OpenKeybindings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = crate::keymap::path() else {
+            return;
+        };
+        if !path.exists() {
+            if let Some(directory) = path.parent()
+                && std::fs::create_dir_all(directory).is_err()
+            {
+                window.push_notification(
+                    Notification::error("Could not create the settings folder"),
+                    cx,
+                );
+                return;
+            }
+            if let Err(error) = std::fs::write(&path, crate::keymap::STARTER) {
+                window.push_notification(
+                    Notification::error(format!("Could not write keybindings.json: {error}")),
+                    cx,
+                );
+                return;
+            }
+        }
+        self.request_open(path, window, cx);
+    }
+
     pub(super) fn open_settings_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = settings_path() else {
             return;
@@ -1581,6 +1613,7 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_command_palette))
             .on_action(cx.listener(Self::on_quick_open))
             .on_action(cx.listener(Self::on_open_recent))
+            .on_action(cx.listener(Self::on_open_keybindings))
             .on_action(cx.listener(Self::on_find_in_files))
             .on_action(cx.listener(Self::on_find_in_editor))
             .on_action(cx.listener(Self::on_find_and_replace_in_editor))
@@ -1716,7 +1749,7 @@ mod tests {
         cx.update_window(handle, |_, window, cx| {
             app.update(cx, |this, cx| {
                 let content = super::files::read_file(&path).unwrap();
-                this.add_file_tab(path.clone(), content, window, cx);
+                this.add_file_tab(path.clone(), content, false, window, cx);
             });
         })
         .unwrap();

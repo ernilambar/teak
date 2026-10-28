@@ -17,6 +17,7 @@ A fast, lightweight text editor.
 - Command palette (`Cmd+Shift+P`)
 - Quick Open (`Cmd+P`) to fuzzy-find files
 - Open Recent (`Ctrl+R`) to jump back to a recent folder or file
+- Custom keybindings in `keybindings.json`, in VS Code's format
 - Find and Replace in Files (`Cmd+Shift+F`), with regex and globs
 - Markdown preview (`Cmd+Shift+V`)
 - Restores your tabs and folders on relaunch
@@ -42,6 +43,7 @@ This installs the app into `/Applications`.
 ## Docs
 
 - [Keyboard shortcuts](docs/keymaps.md)
+- [Custom keybindings](docs/keybindings.md)
 - [Install options](docs/install.md)
 - [Color schemes](docs/themes.md)
 

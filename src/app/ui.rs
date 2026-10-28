@@ -301,6 +301,8 @@ impl TeakApp {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
+                            // A preview tab is italic until it is kept.
+                            .when(tab.transient, |this| this.italic())
                             .child(tab.document.title.clone()),
                     )
                     .child(
@@ -347,8 +349,15 @@ impl TeakApp {
                     .on_drop::<DragTab>(cx.listener(move |this, drag: &DragTab, window, cx| {
                         this.move_tab(drag.id, ix, window, cx);
                     }))
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         this.activate_tab(ix, window, cx);
+                        // A double click keeps a preview tab.
+                        if event.click_count() >= 2
+                            && this.tabs.get(ix).is_some_and(|tab| tab.transient)
+                        {
+                            this.tabs.promote(ix);
+                            cx.notify();
+                        }
                     }))
                     .on_mouse_down(
                         MouseButton::Right,
@@ -849,6 +858,9 @@ impl TeakApp {
                 if is_dir {
                     this.workspace.toggle_expanded(&click_path);
                 } else if event.click_count() == 1 {
+                    // A browsing click previews; a double click keeps the tab.
+                    this.request_open_transient(click_path.clone(), window, cx);
+                } else {
                     this.request_open(click_path.clone(), window, cx);
                 }
                 this.save_session(cx);
@@ -1379,7 +1391,7 @@ mod tests {
         cx.update_window(handle, |_, window, cx| {
             app.update(cx, |this, cx| {
                 let content = crate::app::files::read_file(&path).unwrap();
-                this.add_file_tab(path.clone(), content, window, cx);
+                this.add_file_tab(path.clone(), content, false, window, cx);
             });
             // The first frame mounts the tab, the second paints its editor.
             window.render_frame(cx);
@@ -1426,7 +1438,7 @@ mod tests {
         cx.update_window(handle, |_, window, cx| {
             app.update(cx, |this, cx| {
                 let content = crate::app::files::read_file(&path).unwrap();
-                this.add_file_tab(path.clone(), content, window, cx);
+                this.add_file_tab(path.clone(), content, false, window, cx);
             });
             window.render_frame(cx);
             window.press("secondary-shift-p", cx);
@@ -1461,7 +1473,7 @@ mod tests {
         cx.update_window(handle, |_, window, cx| {
             app.update(cx, |this, cx| {
                 let content = crate::app::files::read_file(&path).unwrap();
-                this.add_file_tab(path.clone(), content, window, cx);
+                this.add_file_tab(path.clone(), content, false, window, cx);
             });
             window.render_frame(cx);
             window.press("secondary-shift-f", cx);

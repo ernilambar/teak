@@ -81,6 +81,11 @@ in headless environments.
   palette, quick open and Open Recent share its surface, focus handoff and
   dismissal; they differ only in `PickerKind` and the rows they build. A new
   list chooser is a kind plus a row builder, never a second overlay.
+- `keybindings.json` is VS Code-shaped (`[{ "key": "cmd+shift+p", "command": "…" }]`,
+  comments and trailing commas allowed) and is applied at startup by
+  `keymap::bind_keys_with`. A command is named by its palette label or its bare
+  action name (`ToggleSidebar`); a leading `-` removes its chords. The tests bind
+  with no overrides, so results never depend on the machine's file.
 - Performance budgets live in `app/bench.rs` as ignored tests (see `docs/performance.md`).
 - Every user-invokable command is declared once in `commands.rs`: label, action,
   chords, menu placement, palette placement and search keywords. The menu bar, the

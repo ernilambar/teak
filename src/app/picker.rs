@@ -243,7 +243,7 @@ impl TeakApp {
             .map(|path| {
                 CommandItem::new()
                     .label(display_path(&path))
-                    .action(Box::new(OpenPath(path)))
+                    .action(Box::new(OpenPath(path, false)))
             })
             .collect()
     }

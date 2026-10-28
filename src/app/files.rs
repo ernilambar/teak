@@ -195,6 +195,17 @@ impl TeakApp {
         self.request_open_many(vec![path], window, cx);
     }
 
+    /// Opens one path in the preview slot: a browsing click reuses one tab
+    /// until the user edits the file or opens it explicitly.
+    pub(crate) fn request_open_transient(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_many(vec![path], true, window, cx);
+    }
+
     /// Opens several paths as one request. The tabs land in the order given,
     /// not in read-completion order, and the last path that resolves to a tab
     /// ends up active. Folders join the workspace; files already open are only
@@ -202,6 +213,16 @@ impl TeakApp {
     pub(crate) fn request_open_many(
         &mut self,
         paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_many(paths, false, window, cx);
+    }
+
+    fn open_many(
+        &mut self,
+        paths: Vec<PathBuf>,
+        transient: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -219,6 +240,11 @@ impl TeakApp {
         }
 
         if to_read.is_empty() {
+            // An explicit open of a preview keeps the tab; a browsing click
+            // leaves it in the slot.
+            if !transient {
+                self.promote_open_paths(&order);
+            }
             self.finish_open_many(&order, window, cx);
             return;
         }
@@ -249,18 +275,30 @@ impl TeakApp {
                             // Another request may have opened it while the read
                             // was in flight; never add a second tab for it.
                             if !this.tabs.is_open(&path) {
-                                this.add_file_tab(path, content, window, cx);
+                                this.add_file_tab(path, content, transient, window, cx);
                             }
                         }
                         Err(error) => window
                             .push_notification(Notification::error(open_error(&path, &error)), cx),
                     }
                 }
+                if !transient {
+                    this.promote_open_paths(&order);
+                }
                 this.finish_open_many(&order, window, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Ends the preview lifetime of every path in an explicit open.
+    fn promote_open_paths(&mut self, order: &[PathBuf]) {
+        for path in order {
+            if let Some(ix) = self.tabs.index_of_path(path) {
+                self.tabs.promote(ix);
+            }
+        }
     }
 
     /// Records each opened path, in the order given, and activates the last one
@@ -1556,7 +1594,7 @@ mod tests {
             cx.update_window(handle, |_, window, cx| {
                 app.update(cx, |this, cx| {
                     let content = super::read_file(path).unwrap();
-                    this.add_file_tab(path.clone(), content, window, cx);
+                    this.add_file_tab(path.clone(), content, false, window, cx);
                 });
             })
             .unwrap();
@@ -1620,7 +1658,7 @@ mod tests {
             cx.update_window(handle, |_, window, cx| {
                 app.update(cx, |this, cx| {
                     let content = super::read_file(path).unwrap();
-                    this.add_file_tab(path.clone(), content, window, cx);
+                    this.add_file_tab(path.clone(), content, false, window, cx);
                 });
             })
             .unwrap();

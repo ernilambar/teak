@@ -24,6 +24,15 @@ use crate::search::ResultTarget;
 /// How many recently closed tabs to remember for `ReopenClosedTab`.
 const MAX_CLOSED_TABS: usize = 10;
 
+/// What [`TeakApp::push_tab`] is given to build one view.
+struct TabSeed {
+    path: Option<PathBuf>,
+    title: SharedString,
+    language: SharedString,
+    content: String,
+    transient: bool,
+}
+
 pub(super) struct OpenTab {
     /// The file this view shows: its buffer, history, path and disk state.
     pub(super) document: Document,
@@ -35,6 +44,9 @@ pub(super) struct OpenTab {
     pub(super) raster: bool,
     /// Set on the read-only Find Results tab, which is never saved or restored.
     pub(super) find_results: Option<FindResultsTab>,
+    /// True for the preview tab: the one slot a browsing click reuses until the
+    /// user edits it or opens the file explicitly.
+    pub(super) transient: bool,
     pub(super) _subscriptions: Vec<Subscription>,
 }
 
@@ -269,6 +281,29 @@ impl TabSet {
         preview
     }
 
+    /// The index of the preview tab, if it is clean. A dirty preview has been
+    /// promoted already, so this normally only sees a tab nobody edited.
+    pub(super) fn transient_slot(&self) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.transient && !tab.document.dirty)
+    }
+
+    /// Keeps the tab at `ix`: an edit or an explicit open ends its preview
+    /// lifetime.
+    pub(super) fn promote(&mut self, ix: usize) {
+        if let Some(tab) = self.tabs.get_mut(ix) {
+            tab.transient = false;
+        }
+    }
+
+    /// Keeps the tab showing `editor`, which is what an edit does.
+    pub(super) fn promote_editor(&mut self, editor: EntityId) {
+        if let Some(ix) = self.position_of(editor) {
+            self.promote(ix);
+        }
+    }
+
     /// Records `tab` for `ReopenClosedTab`, dropping the oldest past the cap.
     pub(super) fn push_closed(&mut self, tab: ClosedTab) {
         self.closed.push(tab);
@@ -299,7 +334,17 @@ impl TeakApp {
             .as_deref()
             .map(|path| file_name(path).into())
             .unwrap_or_else(|| "Untitled".into());
-        self.push_tab(path, title, language, content, window, cx);
+        self.push_tab(
+            TabSeed {
+                path,
+                title,
+                language,
+                content,
+                transient: false,
+            },
+            window,
+            cx,
+        );
     }
 
     /// Opens a pathless document under an explicit title and language, for
@@ -314,19 +359,32 @@ impl TeakApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.push_tab(None, title.into(), language.into(), content, window, cx);
+        self.push_tab(
+            TabSeed {
+                path: None,
+                title: title.into(),
+                language: language.into(),
+                content,
+                transient: false,
+            },
+            window,
+            cx,
+        );
     }
 
     /// Shared body of [`Self::add_tab`] and [`Self::add_document_tab`].
-    fn push_tab(
-        &mut self,
-        path: Option<PathBuf>,
-        title: SharedString,
-        language: SharedString,
-        content: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    ///
+    /// A transient tab takes the one preview slot: if a clean preview is open,
+    /// it is replaced in place, so browsing does not pile up tabs. Editing or
+    /// opening the file explicitly promotes the tab out of the slot.
+    fn push_tab(&mut self, seed: TabSeed, window: &mut Window, cx: &mut Context<Self>) {
+        let TabSeed {
+            path,
+            title,
+            language,
+            content,
+            transient,
+        } = seed;
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(editor_language_id(&language))
@@ -353,6 +411,8 @@ impl TeakApp {
 
         let change_subscription = cx.subscribe(&editor, |this, editor, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
+                // Typing is the point of the file, so the preview is kept.
+                this.tabs.promote_editor(editor.entity_id());
                 this.set_dirty(editor.entity_id(), true, cx);
                 this.sync_preview(&editor, cx);
                 this.sync_counts(cx);
@@ -363,14 +423,29 @@ impl TeakApp {
             this.sync_cursor(editor.entity_id(), cx);
         });
 
+        let slot = transient.then(|| self.tabs.transient_slot()).flatten();
+        if let Some(ix) = slot
+            && let Some(preview) = self.tabs.drop_at(ix)
+        {
+            preview.release(cx);
+        }
+
         let document = Document::new(path, title, language, TextFormat::default(), editor.clone());
         let ix = self.tabs.push(OpenTab {
             document,
             preview: None,
             raster: false,
             find_results: None,
+            transient,
             _subscriptions: vec![change_subscription, cursor_subscription],
         });
+        let ix = match slot {
+            Some(slot) => {
+                self.tabs.reorder(ix, slot);
+                slot
+            }
+            None => ix,
+        };
         self.tabs.set_active(Some(ix));
         self.reveal_active_tab();
 
@@ -390,6 +465,7 @@ impl TeakApp {
         &mut self,
         path: PathBuf,
         content: FileContent,
+        transient: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -403,10 +479,13 @@ impl TeakApp {
                     language_for(&path, text.lines().next().unwrap_or_default())
                 };
                 self.push_tab(
-                    Some(path.clone()),
-                    name.clone().into(),
-                    language,
-                    text,
+                    TabSeed {
+                        path: Some(path.clone()),
+                        title: name.clone().into(),
+                        language,
+                        content: text,
+                        transient,
+                    },
                     window,
                     cx,
                 );
@@ -441,13 +520,25 @@ impl TeakApp {
                 }
             }
             FileContent::Image(image) => {
-                self.add_tab(Some(path), String::new(), window, cx);
-                let ix = self.tabs.len() - 1;
-                if let Some(tab) = self.tabs.get_mut(ix) {
-                    tab.raster = true;
-                    tab.preview = Some(Preview::Image(image));
+                let name = file_name(&path);
+                self.push_tab(
+                    TabSeed {
+                        path: Some(path),
+                        title: name.into(),
+                        language: "Plain Text".into(),
+                        content: String::new(),
+                        transient,
+                    },
+                    window,
+                    cx,
+                );
+                if let Some(ix) = self.tabs.active_index() {
+                    if let Some(tab) = self.tabs.get_mut(ix) {
+                        tab.raster = true;
+                        tab.preview = Some(Preview::Image(image));
+                    }
+                    self.focus_tab(ix, window, cx);
                 }
-                self.focus_tab(ix, window, cx);
             }
         }
     }
@@ -915,7 +1006,7 @@ mod tests {
     use gpui_kit::component::input::EditorState;
     use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
 
-    use crate::app::test_support::open_app;
+    use crate::app::test_support::{open_app, open_app_in};
 
     use super::Document;
     use super::{OpenTab, TabSet, TextFormat, remap_moved_index};
@@ -941,6 +1032,7 @@ mod tests {
                 preview: None,
                 raster: false,
                 find_results: None,
+                transient: false,
                 _subscriptions: Vec::new(),
             });
         }
@@ -1072,6 +1164,70 @@ mod tests {
         assert!(moved.document.dirty);
         assert!(moved.preview.is_some(), "the view state moved with it too");
         assert!(!set.get(0).unwrap().document.dirty);
+    }
+
+    /// Browsing reuses one preview tab; typing in it keeps it, so the next
+    /// browse opens a second tab instead of replacing the edited one.
+    #[gpui_kit::test]
+    async fn a_preview_tab_is_reused_until_it_is_kept(cx: &mut TestAppContext) {
+        let root = std::env::temp_dir().join(format!("teak-preview-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let first = root.join("first.txt");
+        let second = root.join("second.txt");
+        std::fs::write(&first, "first\n").unwrap();
+        std::fs::write(&second, "second\n").unwrap();
+
+        let (handle, app) = open_app_in(cx, vec![root.clone()]);
+        let open_preview = |cx: &mut TestAppContext, path: std::path::PathBuf| {
+            cx.update_window(handle, |_, window, cx| {
+                app.update(cx, |this, cx| this.request_open_transient(path, window, cx));
+            })
+            .unwrap();
+            cx.run_until_parked();
+        };
+
+        open_preview(cx, first.clone());
+        assert_eq!(app.read_with(cx, |app, _| app.tabs.len()), 1);
+
+        open_preview(cx, second.clone());
+        let (len, path, transient) = cx.read(|cx| {
+            let app = app.read(cx);
+            let tab = app.tabs.active().unwrap();
+            (app.tabs.len(), tab.document.path.clone(), tab.transient)
+        });
+        assert_eq!(len, 1, "the preview slot is reused");
+        assert_eq!(path.as_deref(), Some(second.as_path()));
+        assert!(transient);
+
+        // Typing promotes the tab out of the slot.
+        cx.update_window(handle, |_, window, cx| {
+            let editor = app.read(cx).tabs.active().unwrap().document.editor.clone();
+            editor.update(cx, |state, cx| {
+                state.set_selected_range(0..0, cx);
+                state.replace("x", window, cx);
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(!cx.read(|cx| app.read(cx).tabs.active().unwrap().transient));
+
+        open_preview(cx, first.clone());
+        let (len, paths) = cx.read(|cx| {
+            let app = app.read(cx);
+            (
+                app.tabs.len(),
+                app.tabs
+                    .iter()
+                    .filter_map(|tab| tab.document.path.clone())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        assert_eq!(len, 2, "the kept tab no longer takes the preview slot");
+        assert!(paths.contains(&second));
+        assert!(paths.contains(&first));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The status bar's totals come from the active buffer and follow an edit.

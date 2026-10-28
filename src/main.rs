@@ -74,6 +74,7 @@ gpui_kit::actions!(
         About,
         OpenSettings,
         OpenDefaultSettings,
+        OpenKeybindings,
         OpenThemesFolder,
         RevealInFinder,
         CopyFilePath,
@@ -132,7 +133,7 @@ pub struct JumpToTab(usize);
 /// instead.
 #[derive(Clone, PartialEq, gpui_kit::Action)]
 #[action(namespace = teak, no_json)]
-pub struct OpenPath(pub(crate) PathBuf);
+pub struct OpenPath(pub(crate) PathBuf, pub(crate) bool);
 
 /// Picks the appearance from the Appearance menu or the command palette. The
 /// payload is the `ui.theme` value: `light`, `dark`, or `system`.
@@ -236,7 +237,7 @@ fn main() {
             .unwrap_or_default();
         let services = AppServices::new(cx, recent.clone());
 
-        keymap::bind_keys(cx);
+        keymap::bind_keys_with(cx, &keymap::Overrides::load());
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());

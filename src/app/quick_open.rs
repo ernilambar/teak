@@ -86,6 +86,9 @@ impl TeakApp {
         let path = action.0.clone();
         if path.is_dir() {
             self.add_root(path, window, cx);
+        } else if action.1 {
+            // Quick open previews; Explorer double-click and Open Recent keep.
+            self.request_open_transient(path, window, cx);
         } else {
             self.request_open(path, window, cx);
         }
@@ -146,7 +149,7 @@ fn quick_open_item(rel: String, path: PathBuf, icon_style: IconStyle) -> Command
     };
 
     CommandItem::new()
-        .action(Box::new(OpenPath(path.clone())))
+        .action(Box::new(OpenPath(path.clone(), true)))
         .child(move |_window, cx| {
             let mut row = div()
                 .h_flex()

@@ -38,13 +38,13 @@ use crate::{
     FindPreviousField, FindPreviousInEditor, GoToLine, Hide, HideOthers, InsertLineAbove,
     InsertLineBelow, InstallCli, JoinLines, JumpToTab, MinimizeWindow, MoveLineDown, MoveLineUp,
     MoveTabToNewWindow, NewFile, NewWindow, NextResult, NextTab, OpenDefaultSettings, OpenFile,
-    OpenFolderInNewWindow, OpenPath, OpenRecentPicker, OpenResult, OpenSettings, OpenThemesFolder,
-    PreviousResult, PreviousTab, Print, QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll,
-    RevealInFinder, RunFind, SaveAll, SaveFile, SaveFileAs, SelectLine, SetTheme, ShowAll,
-    SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleFullScreen,
-    ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar,
-    ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap, TrimTrailingWhitespace, ZoomIn, ZoomOut,
-    ZoomReset, ZoomWindow,
+    OpenFolderInNewWindow, OpenKeybindings, OpenPath, OpenRecentPicker, OpenResult, OpenSettings,
+    OpenThemesFolder, PreviousResult, PreviousTab, Print, QuickOpen, Quit, Refresh,
+    ReopenClosedTab, ReplaceAll, RevealInFinder, RunFind, SaveAll, SaveFile, SaveFileAs,
+    SelectLine, SetTheme, ShowAll, SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose,
+    ToggleFolding, ToggleFullScreen, ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers,
+    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
+    TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset, ZoomWindow,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -800,6 +800,14 @@ static COMMANDS: &[Command] = &[
         keywords: &["preferences", "config"],
     },
     Command {
+        label: "Open Keybindings…",
+        make: || Box::new(OpenKeybindings),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::Teak, 1)),
+        palette: Some((PaletteGroup::Teak, 4)),
+        keywords: &["keyboard", "shortcuts", "keys"],
+    },
+    Command {
         label: "Default Settings",
         make: || Box::new(OpenDefaultSettings),
         bindings: NO_KEYS,
@@ -1144,8 +1152,14 @@ fn outdent() -> MenuItem {
 }
 
 /// Bindings that are active regardless of which element has focus.
+#[cfg(test)]
 pub(crate) fn app_bindings(cx: &App) -> Vec<KeyBinding> {
-    bindings(Scope::Global, cx)
+    app_bindings_with(cx, &crate::keymap::Overrides::default())
+}
+
+/// The global chords with the user's `keybindings.json` applied.
+pub(crate) fn app_bindings_with(cx: &App, overrides: &crate::keymap::Overrides) -> Vec<KeyBinding> {
+    bindings(Scope::Global, cx, overrides)
 }
 
 /// The editing chords, scoped to the focused editor.
@@ -1162,23 +1176,66 @@ pub(crate) fn app_bindings(cx: &App) -> Vec<KeyBinding> {
 ///   re-dispatches the engine action at the editor).
 /// - `secondary-enter` — the customary insert-line-below chord; the engine maps
 ///   `secondary-enter` to a plain newline on macOS, so this is the useful one.
+#[cfg(test)]
 pub(crate) fn editor_bindings(cx: &App) -> Vec<KeyBinding> {
-    bindings(Scope::Editor, cx)
+    editor_bindings_with(cx, &crate::keymap::Overrides::default())
+}
+
+/// The editor chords with the user's `keybindings.json` applied.
+pub(crate) fn editor_bindings_with(
+    cx: &App,
+    overrides: &crate::keymap::Overrides,
+) -> Vec<KeyBinding> {
+    bindings(Scope::Editor, cx, overrides)
 }
 
 /// Enter, Escape and Tab in the Find panel's fields, and Enter in the Find
 /// Results tab. Their contexts nest the engine's `"Input"`, and they are
 /// registered after the engine's own bindings, so they win over its Enter
 /// (newline / submit), Escape and Tab (indent).
+#[cfg(test)]
 pub(crate) fn find_bindings(cx: &App) -> Vec<KeyBinding> {
-    let mut list = bindings(Scope::FindPanel, cx);
-    list.extend(bindings(Scope::FindResults, cx));
+    find_bindings_with(cx, &crate::keymap::Overrides::default())
+}
+
+/// The Find panel's chords with the user's `keybindings.json` applied.
+pub(crate) fn find_bindings_with(
+    cx: &App,
+    overrides: &crate::keymap::Overrides,
+) -> Vec<KeyBinding> {
+    let mut list = bindings(Scope::FindPanel, cx, overrides);
+    list.extend(bindings(Scope::FindResults, cx, overrides));
     list
 }
 
-fn bindings(context: Scope, cx: &App) -> Vec<KeyBinding> {
+/// The table's chords for one scope, with the user's overrides applied.
+///
+/// An override replaces every default chord of its command and keeps the scope
+/// the command was first declared in — a global command stays global, an
+/// editor command stays scoped to the editor. A command with no default binding
+/// is bound globally, so a user can bind any palette command.
+fn bindings(context: Scope, cx: &App, overrides: &crate::keymap::Overrides) -> Vec<KeyBinding> {
+    use crate::keymap::Change;
+
     let mut bindings = Vec::new();
     for command in COMMANDS {
+        let name = (command.make)().name();
+        match overrides.change(name, command.label) {
+            Some(Change::Removed) => continue,
+            Some(Change::Key(chord)) => {
+                let scope = command
+                    .bindings
+                    .first()
+                    .map_or(Scope::Global, |(_, scope)| *scope);
+                if scope == context
+                    && let Some(binding) = try_binding(chord, (command.make)(), scope, cx)
+                {
+                    bindings.push(binding);
+                }
+                continue;
+            }
+            None => {}
+        }
         for (chord, scope) in command.bindings {
             if *scope != context {
                 continue;
@@ -1195,6 +1252,17 @@ fn bindings(context: Scope, cx: &App) -> Vec<KeyBinding> {
 /// same arguments (`new` passes `false` and `None`). `load` also takes `cx`,
 /// which is what resolves a chord's `secondary-` prefix against the host OS.
 fn binding(chord: &str, action: Box<dyn Action>, context: Scope, cx: &App) -> KeyBinding {
+    try_binding(chord, action, context, cx).unwrap_or_else(|| panic!("`{chord}` is a valid chord"))
+}
+
+/// Like [`binding`], but a chord from the user's file that does not parse is
+/// skipped instead of stopping startup.
+fn try_binding(
+    chord: &str,
+    action: Box<dyn Action>,
+    context: Scope,
+    cx: &App,
+) -> Option<KeyBinding> {
     let parse = |source: &str| {
         Some(Rc::new(
             KeyBindingContextPredicate::parse(source).expect("the key context parses"),
@@ -1206,8 +1274,7 @@ fn binding(chord: &str, action: Box<dyn Action>, context: Scope, cx: &App) -> Ke
         Scope::FindPanel => parse(&format!("FindPanel > {EDITOR}")),
         Scope::FindResults => parse(&format!("FindResults > {EDITOR}")),
     };
-    KeyBinding::load(chord, action, predicate, false, None, cx)
-        .unwrap_or_else(|_| panic!("`{chord}` is a valid chord"))
+    KeyBinding::load(chord, action, predicate, false, None, cx).ok()
 }
 
 /// The whole menu bar, derived from [`COMMANDS`] plus each menu's skeleton.
@@ -1305,7 +1372,7 @@ fn ranked(keep: impl Fn(&Command) -> bool, rank: impl Fn(&Command) -> u8) -> Vec
 fn recent_menu(recent: &[PathBuf]) -> Menu {
     let mut items: Vec<MenuItem> = recent
         .iter()
-        .map(|path| MenuItem::action(display_path(path), OpenPath(path.clone())))
+        .map(|path| MenuItem::action(display_path(path), OpenPath(path.clone(), false)))
         .collect();
     if !items.is_empty() {
         items.push(MenuItem::separator());
@@ -1334,7 +1401,7 @@ mod tests {
 
     use super::{
         COMMANDS, Entry, MenuKind, PALETTE, PaletteGroup, PaletteSlot, Scope, app_bindings,
-        binding, editor_bindings, find_bindings,
+        app_bindings_with, binding, editor_bindings, find_bindings,
     };
 
     /// The palette groups in display order, skipping the hand-written Appearance
@@ -1565,6 +1632,7 @@ mod tests {
             "About Teak",
             "Check for Updates…",
             "Settings…",
+            "Open Keybindings…",
             "Open Themes Folder",
             "Install Command Line Tool…",
             "Hide Teak",
@@ -1777,11 +1845,42 @@ mod tests {
         assert_eq!(names.len(), visible, "two visible rows dispatch one action");
     }
 
+    /// A user entry replaces its command's default chord; a `-` entry removes
+    /// it. Without a file, the table's own chords are registered.
+    #[gpui_kit::test]
+    async fn user_overrides_replace_and_remove_bindings(cx: &mut TestAppContext) {
+        let overrides = crate::keymap::Overrides::parse(
+            r#"[
+                { "key": "ctrl+alt+up", "command": "Toggle Sidebar" },
+                { "key": "", "command": "-New File" }
+            ]"#,
+        )
+        .unwrap();
+
+        let (sidebar, new_file, default_new_file) = cx.read(|cx| {
+            let with_overrides = app_bindings_with(cx, &overrides);
+            let count = |bindings: &[gpui_kit::KeyBinding], suffix: &str| {
+                bindings
+                    .iter()
+                    .filter(|binding| binding.action().name().ends_with(suffix))
+                    .count()
+            };
+            (
+                count(&with_overrides, "ToggleSidebar"),
+                count(&with_overrides, "NewFile"),
+                count(&app_bindings(cx), "NewFile"),
+            )
+        });
+        assert_eq!(sidebar, 1, "the override is the command's only chord");
+        assert_eq!(new_file, 0, "a leading minus removes every chord");
+        assert_eq!(default_new_file, 1, "the default survives without the file");
+    }
+
     /// Pins how much of the table each surface shows, so a row dropped while
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 77);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 75);
+        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 78);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 76);
     }
 }
