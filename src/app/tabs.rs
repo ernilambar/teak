@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use gpui_kit::component::{
     WindowExt as _,
@@ -18,32 +17,16 @@ use crate::{CloseTab, MoveTabToNewWindow};
 
 use super::TeakApp;
 use super::chrome::count_text;
-use super::files::{FileContent, LARGE_FILE_BYTES, TextFormat, modified_time};
+use super::document::Document;
+use super::files::{FileContent, LARGE_FILE_BYTES, TextFormat};
 use crate::search::ResultTarget;
 
 /// How many recently closed tabs to remember for `ReopenClosedTab`.
 const MAX_CLOSED_TABS: usize = 10;
 
 pub(super) struct OpenTab {
-    pub(super) path: Option<PathBuf>,
-    pub(super) title: SharedString,
-    pub(super) language: SharedString,
-    /// True when the language was picked in the status bar, so saving or
-    /// renaming must not re-derive it from the file extension.
-    pub(super) language_override: bool,
-    pub(super) dirty: bool,
-    /// The file's modification time when last read or written, compared on
-    /// activation and before saving to spot edits made by other programs.
-    pub(super) disk_modified: Option<SystemTime>,
-    /// A later on-disk version the user chose to keep the buffer over. Compared
-    /// only to stop the same change asking again; saving still warns, because
-    /// [`Self::disk_modified`] stays behind.
-    pub(super) dismissed_disk_change: Option<SystemTime>,
-    /// True when the file is gone from disk while the buffer still holds its
-    /// text. The tab marks itself and saving asks before writing it back.
-    pub(super) deleted_on_disk: bool,
-    pub(super) format: TextFormat,
-    pub(super) editor: Entity<EditorState>,
+    /// The file this view shows: its buffer, history, path and disk state.
+    pub(super) document: Document,
     /// The rendered view shown in place of the editor while preview is on.
     /// Kept in sync with the buffer by the change subscription.
     pub(super) preview: Option<Preview>,
@@ -100,8 +83,8 @@ impl OpenTab {
     /// switched away from the previewed one falls back to the editor.
     pub(super) fn previewing(&self) -> Option<&Preview> {
         self.preview.as_ref().filter(|preview| match preview {
-            Preview::Markdown(_) => self.language.as_ref() == "Markdown",
-            Preview::Image(_) => self.raster || self.language.as_ref() == "SVG",
+            Preview::Markdown(_) => self.document.language.as_ref() == "Markdown",
+            Preview::Image(_) => self.raster || self.document.language.as_ref() == "SVG",
         })
     }
 }
@@ -213,24 +196,24 @@ impl TabSet {
 
     /// True when any open tab has unsaved edits.
     pub(super) fn any_dirty(&self) -> bool {
-        self.tabs.iter().any(|tab| tab.dirty)
+        self.tabs.iter().any(|tab| tab.document.dirty)
     }
 
     pub(super) fn position_of(&self, id: EntityId) -> Option<usize> {
         self.tabs
             .iter()
-            .position(|tab| tab.editor.entity_id() == id)
+            .position(|tab| tab.document.editor_id() == id)
     }
 
     pub(super) fn find(&self, id: EntityId) -> Option<&OpenTab> {
-        self.tabs.iter().find(|tab| tab.editor.entity_id() == id)
+        self.tabs.iter().find(|tab| tab.document.editor_id() == id)
     }
 
     /// The index of the tab showing `path`, if any.
     pub(super) fn index_of_path(&self, path: &Path) -> Option<usize> {
         self.tabs
             .iter()
-            .position(|tab| tab.path.as_deref() == Some(path))
+            .position(|tab| tab.document.path.as_deref() == Some(path))
     }
 
     /// True when `path` already has a tab, so opening it again must only
@@ -380,18 +363,9 @@ impl TeakApp {
             this.sync_cursor(editor.entity_id(), cx);
         });
 
-        let disk_modified = path.as_deref().and_then(modified_time);
+        let document = Document::new(path, title, language, TextFormat::default(), editor.clone());
         let ix = self.tabs.push(OpenTab {
-            path,
-            title,
-            language,
-            language_override: false,
-            dirty: false,
-            disk_modified,
-            dismissed_disk_change: None,
-            deleted_on_disk: false,
-            format: TextFormat::default(),
-            editor: editor.clone(),
+            document,
             preview: None,
             raster: false,
             find_results: None,
@@ -439,9 +413,9 @@ impl TeakApp {
                 if let Some(ix) = self.tabs.active_index()
                     && let Some(tab) = self.tabs.get_mut(ix)
                 {
-                    tab.format = format;
+                    tab.document.format = format;
                     // Keeps a save from turning highlighting back on.
-                    tab.language_override = large;
+                    tab.document.language_override = large;
                 }
                 if format.lossy {
                     window.push_notification(
@@ -512,7 +486,7 @@ impl TeakApp {
         let Some(tab) = self.tabs.get(ix) else {
             return;
         };
-        if tab.dirty {
+        if tab.document.dirty {
             window.push_notification(
                 Notification::info("Save the tab before moving it to a new window"),
                 cx,
@@ -526,7 +500,7 @@ impl TeakApp {
             );
             return;
         }
-        let Some(path) = tab.path.clone().filter(|path| path.is_file()) else {
+        let Some(path) = tab.document.path.clone().filter(|path| path.is_file()) else {
             window.push_notification(
                 Notification::info("Only saved files can be moved to a new window"),
                 cx,
@@ -558,7 +532,7 @@ impl TeakApp {
         self.tabs.set_active(Some(ix));
         self.reveal_active_tab();
         if let Some(tab) = self.tabs.get(ix) {
-            let editor = tab.editor.clone();
+            let editor = tab.document.editor.clone();
             self.focus_tab(ix, window, cx);
             self.chrome.sync_cursor(editor.read(cx));
             self.sync_counts(cx);
@@ -600,11 +574,13 @@ impl TeakApp {
     }
 
     pub(super) fn close_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((id, dirty, title)) = self
-            .tabs
-            .get(ix)
-            .map(|tab| (tab.editor.entity_id(), tab.dirty, tab.title.clone()))
-        else {
+        let Some((id, dirty, title)) = self.tabs.get(ix).map(|tab| {
+            (
+                tab.document.editor_id(),
+                tab.document.dirty,
+                tab.document.title.clone(),
+            )
+        }) else {
             return;
         };
 
@@ -666,7 +642,12 @@ impl TeakApp {
             .tabs
             .iter()
             .enumerate()
-            .filter(|(_, tab)| tab.path.as_deref().is_some_and(|path| !path.exists()))
+            .filter(|(_, tab)| {
+                tab.document
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| !path.exists())
+            })
             .map(|(ix, _)| ix)
             .collect();
         self.close_tabs(indices, window, cx);
@@ -682,8 +663,8 @@ impl TeakApp {
         let mut dirty = false;
         for ix in indices {
             if let Some(tab) = self.tabs.get(ix) {
-                ids.push(tab.editor.entity_id());
-                dirty |= tab.dirty;
+                ids.push(tab.document.editor_id());
+                dirty |= tab.document.dirty;
             }
         }
         if ids.is_empty() {
@@ -813,8 +794,8 @@ impl TeakApp {
             && tab.find_results.is_none()
         {
             self.tabs.push_closed(ClosedTab {
-                path: tab.path.clone(),
-                content: tab.editor.read(cx).text().to_string(),
+                path: tab.document.path.clone(),
+                content: tab.document.editor.read(cx).text().to_string(),
             });
         }
 
@@ -846,7 +827,9 @@ impl TeakApp {
         if tab.previewing().is_some() {
             self.focus_handle.focus(window, cx);
         } else {
-            tab.editor.update(cx, |state, cx| state.focus(window, cx));
+            tab.document
+                .editor
+                .update(cx, |state, cx| state.focus(window, cx));
         }
     }
 
@@ -855,7 +838,7 @@ impl TeakApp {
         let Some(tab) = self
             .tabs
             .iter_mut()
-            .find(|tab| tab.editor.entity_id() == editor.entity_id())
+            .find(|tab| tab.document.editor_id() == editor.entity_id())
         else {
             return;
         };
@@ -879,10 +862,10 @@ impl TeakApp {
         if let Some(tab) = self
             .tabs
             .iter_mut()
-            .find(|tab| tab.editor.entity_id() == id)
-            && tab.dirty != dirty
+            .find(|tab| tab.document.editor_id() == id)
+            && tab.document.dirty != dirty
         {
-            tab.dirty = dirty;
+            tab.document.dirty = dirty;
             cx.notify();
         }
     }
@@ -894,11 +877,11 @@ impl TeakApp {
         let Some(tab) = self.tabs.get(ix) else {
             return;
         };
-        if tab.editor.entity_id() != id {
+        if tab.document.editor_id() != id {
             return;
         }
 
-        self.chrome.sync_cursor(tab.editor.read(cx));
+        self.chrome.sync_cursor(tab.document.editor.read(cx));
         cx.notify();
     }
 
@@ -907,7 +890,7 @@ impl TeakApp {
     /// follow Replace All and external reloads too.
     pub(super) fn sync_counts(&mut self, cx: &mut Context<Self>) {
         let counts = match self.tabs.active() {
-            Some(tab) if !tab.raster => Some(count_text(tab.editor.read(cx).text())),
+            Some(tab) if !tab.raster => Some(count_text(tab.document.editor.read(cx).text())),
             _ => None,
         };
         self.chrome.set_counts(counts);
@@ -934,6 +917,7 @@ mod tests {
 
     use crate::app::test_support::open_app;
 
+    use super::Document;
     use super::{OpenTab, TabSet, TextFormat, remap_moved_index};
 
     /// `n` tabs whose editors are real (empty) editor entities, so the entity
@@ -947,16 +931,13 @@ mod tests {
                 })
                 .unwrap();
             set.push(OpenTab {
-                path: Some(PathBuf::from(format!("/tmp/app-tab-{ix}.txt"))),
-                title: format!("tab-{ix}").into(),
-                language: "Plain Text".into(),
-                language_override: false,
-                dirty: false,
-                disk_modified: None,
-                dismissed_disk_change: None,
-                deleted_on_disk: false,
-                format: TextFormat::default(),
-                editor,
+                document: Document::new(
+                    Some(PathBuf::from(format!("/tmp/app-tab-{ix}.txt"))),
+                    format!("tab-{ix}").into(),
+                    "Plain Text".into(),
+                    TextFormat::default(),
+                    editor,
+                ),
                 preview: None,
                 raster: false,
                 find_results: None,
@@ -967,7 +948,9 @@ mod tests {
     }
 
     fn titles(set: &TabSet) -> Vec<String> {
-        set.iter().map(|tab| tab.title.to_string()).collect()
+        set.iter()
+            .map(|tab| tab.document.title.to_string())
+            .collect()
     }
 
     #[test]
@@ -1068,6 +1051,29 @@ mod tests {
         assert_eq!(set.active_index(), Some(2), "active follows its tab");
     }
 
+    /// A tab is only a view: its file's state (here, the dirty flag and title)
+    /// moves with the document when the tab is reordered, and the preview is
+    /// untouched by that state.
+    #[gpui_kit::test]
+    async fn document_state_travels_with_its_tab(cx: &mut TestAppContext) {
+        let (handle, _app) = open_app(cx);
+        let mut set = tab_set(cx, handle, 2);
+        set.get_mut(0).unwrap().document.dirty = true;
+        set.get_mut(0).unwrap().preview =
+            Some(super::Preview::Markdown(cx.new(|cx| {
+                gpui_kit::component::text::TextViewState::markdown("# notes", cx)
+            })));
+
+        assert!(set.any_dirty(), "the document carries the unsaved edit");
+        assert!(set.reorder(0, 2), "move the dirty tab to the end");
+
+        let moved = set.get(1).unwrap();
+        assert_eq!(moved.document.title.as_ref(), "tab-0");
+        assert!(moved.document.dirty);
+        assert!(moved.preview.is_some(), "the view state moved with it too");
+        assert!(!set.get(0).unwrap().document.dirty);
+    }
+
     /// The status bar's totals come from the active buffer and follow an edit.
     #[gpui_kit::test]
     async fn status_counts_follow_the_active_buffer(cx: &mut TestAppContext) {
@@ -1085,7 +1091,7 @@ mod tests {
         .unwrap();
 
         cx.update_window(handle, |_, window, cx| {
-            let editor = app.read(cx).tabs.active().unwrap().editor.clone();
+            let editor = app.read(cx).tabs.active().unwrap().document.editor.clone();
             editor.update(cx, |state, cx| {
                 let len = state.text().len();
                 state.set_selected_range(0..len, cx);

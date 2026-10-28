@@ -2,6 +2,7 @@
 #[cfg(test)]
 mod bench;
 mod chrome;
+mod document;
 mod editor;
 mod files;
 mod find_in_files;
@@ -196,7 +197,7 @@ impl TeakApp {
     /// file's full path after the app name.
     fn sync_window_title(&mut self, window: &mut Window) {
         let title = match self.active() {
-            Some(tab) => match tab.path.as_deref() {
+            Some(tab) => match tab.document.path.as_deref() {
                 Some(path) => format!("{WINDOW_TITLE} — {}", path.display()),
                 None => format!("{WINDOW_TITLE} — Untitled"),
             },
@@ -320,9 +321,9 @@ impl TeakApp {
             tabs: self
                 .tabs
                 .iter()
-                .filter_map(|tab| tab.path.clone())
+                .filter_map(|tab| tab.document.path.clone())
                 .collect(),
-            active_tab: self.active().and_then(|tab| tab.path.clone()),
+            active_tab: self.active().and_then(|tab| tab.document.path.clone()),
             expanded,
             selected_path: self.workspace.selected().map(Path::to_path_buf),
             sidebar_visible: self.workspace.sidebar_visible(),
@@ -472,21 +473,21 @@ impl TeakApp {
             let Some(tab) = self.tabs.get(ix) else {
                 continue;
             };
-            if editor.is_some_and(|editor| tab.editor.entity_id() != editor) {
+            if editor.is_some_and(|editor| tab.document.editor_id() != editor) {
                 continue;
             }
-            let Some(path) = tab.path.clone() else {
+            let Some(path) = tab.document.path.clone() else {
                 continue;
             };
             if !self.in_repository(&path) {
-                clear_gutter_marks(&tab.editor, cx);
+                clear_gutter_marks(&tab.document.editor, cx);
                 continue;
             }
             // A huge file is opened as Plain Text for speed; marking it would
             // copy the whole buffer on every pause in typing.
-            let text = tab.editor.read(cx).text().to_string();
+            let text = tab.document.editor.read(cx).text().to_string();
             if text.len() > LARGE_FILE_BYTES {
-                clear_gutter_marks(&tab.editor, cx);
+                clear_gutter_marks(&tab.document.editor, cx);
                 continue;
             }
             let status = self.workspace.git().status(&path);
@@ -576,7 +577,8 @@ impl TeakApp {
                 _ => GutterMark::changed(line, line_change_color(kind, cx)),
             })
             .collect();
-        tab.editor
+        tab.document
+            .editor
             .update(cx, |state, cx| state.set_gutter_marks(marks, cx));
     }
 
@@ -586,7 +588,7 @@ impl TeakApp {
 
     fn active_language(&self) -> SharedString {
         self.active()
-            .map(|tab| tab.language.clone())
+            .map(|tab| tab.document.language.clone())
             .unwrap_or_else(|| "Plain Text".into())
     }
 
@@ -599,7 +601,7 @@ impl TeakApp {
     }
 
     fn active_dirty(&self) -> bool {
-        self.active().map(|tab| tab.dirty).unwrap_or(false)
+        self.active().map(|tab| tab.document.dirty).unwrap_or(false)
     }
 
     fn on_quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
@@ -695,7 +697,7 @@ impl TeakApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(path) = self.active().and_then(|tab| tab.path.clone()) {
+        if let Some(path) = self.active().and_then(|tab| tab.document.path.clone()) {
             self.reveal_in_finder(&path, cx);
         }
     }
@@ -710,8 +712,8 @@ impl TeakApp {
             window.push_notification(Notification::info("Images cannot be printed"), cx);
             return;
         }
-        let title = tab.title.to_string();
-        let text = tab.editor.read(cx).text().to_string();
+        let title = tab.document.title.to_string();
+        let text = tab.document.editor.read(cx).text().to_string();
         crate::print::print_text(&text, &title);
     }
 
@@ -721,7 +723,7 @@ impl TeakApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(path) = self.active().and_then(|tab| tab.path.clone()) {
+        if let Some(path) = self.active().and_then(|tab| tab.document.path.clone()) {
             self.copy_path_to_clipboard(&path, cx);
         }
     }
@@ -736,7 +738,7 @@ impl TeakApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(path) = self.active().and_then(|tab| tab.path.clone()) {
+        if let Some(path) = self.active().and_then(|tab| tab.document.path.clone()) {
             self.copy_relative_path(&path, cx);
         }
     }
@@ -747,7 +749,7 @@ impl TeakApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(path) = self.active().and_then(|tab| tab.path.clone()) {
+        if let Some(path) = self.active().and_then(|tab| tab.document.path.clone()) {
             self.copy_name_to_clipboard(&path, cx);
         }
     }
@@ -922,8 +924,8 @@ impl TeakApp {
         let next = if tab.previewing().is_some() {
             None
         } else {
-            let text = tab.editor.read(cx).value();
-            match Preview::for_text(&tab.language, &text, cx) {
+            let text = tab.document.editor.read(cx).value();
+            match Preview::for_text(&tab.document.language, &text, cx) {
                 Some(preview) => Some(preview),
                 None => {
                     window.push_notification(
@@ -1056,8 +1058,8 @@ impl TeakApp {
         let Some(editor) = self
             .tabs
             .iter()
-            .find(|tab| tab.path.as_deref() == Some(path.as_path()) && !tab.dirty)
-            .map(|tab| tab.editor.clone())
+            .find(|tab| tab.document.path.as_deref() == Some(path.as_path()) && !tab.document.dirty)
+            .map(|tab| tab.document.editor.clone())
         else {
             return;
         };
@@ -1119,7 +1121,11 @@ impl TeakApp {
             tab_size: editor.tab_size(),
             hard_tabs: editor.hard_tabs(),
         };
-        let editors: Vec<_> = self.tabs.iter().map(|tab| tab.editor.clone()).collect();
+        let editors: Vec<_> = self
+            .tabs
+            .iter()
+            .map(|tab| tab.document.editor.clone())
+            .collect();
         for state in editors {
             state.update(cx, |state, cx| {
                 state.set_soft_wrap(editor.soft_wrap(), window, cx);
@@ -1733,7 +1739,7 @@ mod tests {
         let marks = |cx: &mut TestAppContext| {
             cx.update(|cx| {
                 let this = app.read(cx);
-                let editor = &this.tabs.active().unwrap().editor;
+                let editor = &this.tabs.active().unwrap().document.editor;
                 editor
                     .read(cx)
                     .gutter_marks()
@@ -1746,7 +1752,7 @@ mod tests {
 
         let editor = cx
             .update_window(handle, |_, window, cx| {
-                let editor = app.read(cx).tabs.active().unwrap().editor.clone();
+                let editor = app.read(cx).tabs.active().unwrap().document.editor.clone();
                 editor.update(cx, |state, cx| {
                     state.set_value("one\nchanged\nthree\nfour\n", window, cx);
                 });
@@ -1888,9 +1894,9 @@ mod tests {
             (
                 app.tabs
                     .iter()
-                    .filter_map(|tab| tab.path.clone())
+                    .filter_map(|tab| tab.document.path.clone())
                     .collect::<Vec<_>>(),
-                app.tabs.active().and_then(|tab| tab.path.clone()),
+                app.tabs.active().and_then(|tab| tab.document.path.clone()),
             )
         });
         assert_eq!(

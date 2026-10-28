@@ -921,7 +921,11 @@ impl TeakApp {
             tab_size: self.settings.values.editor.tab_size(),
             hard_tabs: self.settings.values.editor.hard_tabs(),
         };
-        let editors: Vec<_> = self.tabs.iter().map(|tab| tab.editor.clone()).collect();
+        let editors: Vec<_> = self
+            .tabs
+            .iter()
+            .map(|tab| tab.document.editor.clone())
+            .collect();
         for editor in editors {
             editor.update(cx, |state, cx| state.set_tab_size(tab, cx));
         }

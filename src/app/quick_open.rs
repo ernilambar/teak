@@ -92,7 +92,7 @@ impl TeakApp {
         let fallback: Vec<PathBuf> = self
             .tabs
             .iter()
-            .filter_map(|tab| tab.path.clone())
+            .filter_map(|tab| tab.document.path.clone())
             .collect();
         cx.spawn_in(window, async move |this, cx| {
             let files = cx
@@ -149,7 +149,7 @@ impl TeakApp {
             .tabs
             .iter()
             .enumerate()
-            .filter_map(|(ix, tab)| tab.path.as_deref().map(|path| (path, ix)))
+            .filter_map(|(ix, tab)| tab.document.path.as_deref().map(|path| (path, ix)))
             .collect();
 
         let mut ranked: Vec<(u32, usize, String, PathBuf)> = self
@@ -398,7 +398,7 @@ mod tests {
             assert!(
                 app.tabs
                     .iter()
-                    .any(|tab| tab.path.as_deref() == Some(path.as_path())),
+                    .any(|tab| tab.document.path.as_deref() == Some(path.as_path())),
                 "the confirmed file opens in a tab"
             );
         })

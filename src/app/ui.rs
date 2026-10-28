@@ -249,16 +249,16 @@ impl TeakApp {
             .map(|(ix, tab)| {
                 let close_entity = entity.clone();
                 let selected = active == Some(ix);
-                let deleted = tab.deleted_on_disk;
+                let deleted = tab.document.deleted_on_disk;
                 // Full path on hover, telling apart titles the ellipsis cuts alike.
-                let tooltip: SharedString = match &tab.path {
+                let tooltip: SharedString = match &tab.document.path {
                     Some(path) => display_path(path).into(),
-                    None => tab.title.clone(),
+                    None => tab.document.title.clone(),
                 };
                 let (dot, dot_color) = if deleted {
                     (true, deleted_color)
                 } else {
-                    (tab.dirty, dirty_color)
+                    (tab.document.dirty, dirty_color)
                 };
                 div()
                     .id(("tab", ix))
@@ -292,7 +292,7 @@ impl TeakApp {
                             );
                         }
                         // Untitled tabs have no path and fall back to the default file icon.
-                        let path = tab.path.as_deref().unwrap_or(Path::new(""));
+                        let path = tab.document.path.as_deref().unwrap_or(Path::new(""));
                         this.child(file_type_icon(file_icon(path), icon_style, None, cx))
                     })
                     .child(
@@ -301,7 +301,7 @@ impl TeakApp {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .child(tab.title.clone()),
+                            .child(tab.document.title.clone()),
                     )
                     .child(
                         div()
@@ -330,8 +330,8 @@ impl TeakApp {
                     .tooltip_show_delay(TAB_TOOLTIP_DELAY)
                     .on_drag(
                         DragTab {
-                            id: tab.editor.entity_id(),
-                            title: tab.title.clone(),
+                            id: tab.document.editor_id(),
+                            title: tab.document.title.clone(),
                         },
                         move |drag: &DragTab, _offset, _window, cx| {
                             cx.new(|_| TabDragPreview {
@@ -359,7 +359,11 @@ impl TeakApp {
             })
             .collect();
 
-        let titles: Vec<SharedString> = self.tabs.iter().map(|tab| tab.title.clone()).collect();
+        let titles: Vec<SharedString> = self
+            .tabs
+            .iter()
+            .map(|tab| tab.document.title.clone())
+            .collect();
         let overflow_entity = entity.clone();
         let menu_entity = entity.clone();
         div()
@@ -381,9 +385,12 @@ impl TeakApp {
                     let app = menu_entity.read(cx);
                     (
                         app.tabs.len(),
-                        app.tabs
-                            .iter()
-                            .any(|tab| tab.path.as_deref().is_some_and(|path| !path.exists())),
+                        app.tabs.iter().any(|tab| {
+                            tab.document
+                                .path
+                                .as_deref()
+                                .is_some_and(|path| !path.exists())
+                        }),
                     )
                 };
                 if ix >= tab_count {
@@ -397,11 +404,11 @@ impl TeakApp {
                 let deleted_entity = menu_entity.clone();
                 let move_entity = menu_entity.clone();
                 let movable = menu_entity.read(cx).tabs.get(ix).is_some_and(|tab| {
-                    !tab.dirty
+                    !tab.document.dirty
                         && !tab.raster
                         && tab.find_results.is_none()
                         && tab.previewing().is_none()
-                        && tab.path.as_deref().is_some_and(Path::is_file)
+                        && tab.document.path.as_deref().is_some_and(Path::is_file)
                 });
 
                 menu.item(
@@ -1064,7 +1071,7 @@ impl TeakApp {
         }
         match tab {
             Some(tab) => {
-                let has_path = tab.path.is_some();
+                let has_path = tab.document.path.is_some();
                 div()
                     .size_full()
                     .bg(cx.theme().background)
@@ -1087,7 +1094,7 @@ impl TeakApp {
                             ))
                     })
                     .child(
-                        Editor::new(&tab.editor)
+                        Editor::new(&tab.document.editor)
                             .appearance(false)
                             .bordered(false)
                             // The element sets this on the state every render.
@@ -1181,7 +1188,9 @@ impl TeakApp {
         let entity = cx.entity();
         let language = self.active_language();
         let dirty = self.active_dirty();
-        let deleted = self.active().is_some_and(|tab| tab.deleted_on_disk);
+        let deleted = self
+            .active()
+            .is_some_and(|tab| tab.document.deleted_on_disk);
         let divider = || div().h_3().w(px(1.)).flex_none().bg(cx.theme().border);
 
         let language_button = Button::new("language-mode")
@@ -1200,9 +1209,9 @@ impl TeakApp {
                                 .active_index()
                                 .and_then(|ix| this.tabs.get_mut(ix))
                             {
-                                tab.language = value.clone();
-                                tab.language_override = true;
-                                tab.editor.update(cx, |state, cx| {
+                                tab.document.language = value.clone();
+                                tab.document.language_override = true;
+                                tab.document.editor.update(cx, |state, cx| {
                                     state.set_highlighter(editor_language_id(&value), cx);
                                 });
                                 cx.notify();
@@ -1278,7 +1287,10 @@ impl TeakApp {
             0 => format!("Ln {cursor_line}, Col {cursor_col}"),
             selected => format!("Ln {cursor_line}, Col {cursor_col} ({selected} selected)"),
         };
-        let format = self.active().map(|tab| tab.format).unwrap_or_default();
+        let format = self
+            .active()
+            .map(|tab| tab.document.format)
+            .unwrap_or_default();
 
         status = status
             .left(div().child(caret))
@@ -1295,7 +1307,7 @@ impl TeakApp {
         // workspace folder when the tab has no path yet.
         let branch = self
             .workspace
-            .branch_for(self.active().and_then(|tab| tab.path.as_deref()));
+            .branch_for(self.active().and_then(|tab| tab.document.path.as_deref()));
         if let Some(branch) = branch {
             status = status
                 .right(

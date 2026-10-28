@@ -113,7 +113,7 @@ impl TeakApp {
         if tab.raster || tab.find_results.is_some() {
             return None;
         }
-        let state = tab.editor.read(cx);
+        let state = tab.document.editor.read(cx);
         let range = state.selected_range();
         let text = state.text().slice(range).to_string();
         (!text.is_empty() && !text.contains('\n')).then_some(text)
@@ -255,7 +255,7 @@ impl TeakApp {
             .tabs
             .iter()
             .filter(|tab| !tab.raster)
-            .filter_map(|tab| tab.path.clone())
+            .filter_map(|tab| tab.document.path.clone())
             .collect();
         let counter = self.overlays.find_generation();
         let replace_with = matcher.clone();
@@ -316,7 +316,7 @@ impl TeakApp {
             let Some(tab) = self.tabs.get_mut(ix) else {
                 return;
             };
-            let editor = tab.editor.clone();
+            let editor = tab.document.editor.clone();
             // `set_value` emits no change event, so the tab stays clean.
             editor.update(cx, |state, cx| state.set_value(text, window, cx));
             if let Some(results) = tab.find_results.as_mut() {
@@ -336,7 +336,7 @@ impl TeakApp {
             return;
         };
         // Read-only comes from the `Editor` element, which sets it each render.
-        let highlights = tab.editor.update(cx, |state, cx| {
+        let highlights = tab.document.editor.update(cx, |state, cx| {
             state.create_range_decorations_collection(decorations, cx)
         });
         tab.find_results = Some(FindResultsTab {
@@ -373,7 +373,7 @@ impl TeakApp {
         let Some(results) = tab.find_results.as_ref() else {
             return;
         };
-        let line = tab.editor.read(cx).cursor_position().line;
+        let line = tab.document.editor.read(cx).cursor_position().line;
         let Some(found) = results
             .targets
             .iter()
@@ -442,7 +442,7 @@ impl TeakApp {
         };
         results.current = Some(found);
         // Without focusing the results tab, so the opened file keeps focus.
-        tab.editor.update(cx, |state, cx| {
+        tab.document.editor.update(cx, |state, cx| {
             let offset = state
                 .text()
                 .position_to_offset(&Position::new(target.doc_line, 0));
@@ -468,7 +468,7 @@ impl TeakApp {
         if let Some(ix) = self
             .tabs
             .iter()
-            .position(|tab| tab.path.as_deref() == Some(path.as_path()))
+            .position(|tab| tab.document.path.as_deref() == Some(path.as_path()))
         {
             self.activate_tab(ix, window, cx);
             self.select_match(ix, jump, window, cx);
@@ -493,7 +493,7 @@ impl TeakApp {
         if tab.raster {
             return;
         }
-        tab.editor.clone().update(cx, |state, cx| {
+        tab.document.editor.clone().update(cx, |state, cx| {
             let start = Position::new(jump.line, jump.start);
             let end = Position::new(jump.line, jump.end);
             // Moving the caret scrolls the line into view and focuses the editor.
@@ -569,8 +569,10 @@ impl TeakApp {
             let open = self
                 .tabs
                 .iter()
-                .find(|tab| tab.path.as_deref() == Some(file.path.as_path()) && !tab.raster)
-                .map(|tab| tab.editor.clone());
+                .find(|tab| {
+                    tab.document.path.as_deref() == Some(file.path.as_path()) && !tab.raster
+                })
+                .map(|tab| tab.document.editor.clone());
             let Some(editor) = open else {
                 closed.push((file.path, file.modified));
                 continue;
@@ -919,6 +921,7 @@ mod tests {
     use gpui_kit::{AppContext as _, Focusable as _, TestAppContext};
 
     use super::{Replace, search_header};
+    use crate::app::document::Document;
     use crate::app::files::TextFormat;
     use crate::app::tabs::{Jump, OpenTab};
     use crate::app::test_support::open_app;
@@ -1010,7 +1013,7 @@ mod tests {
             let tab = this.tabs.active().expect("the results tab opens");
             let results = tab.find_results.as_ref().expect("it is the results tab");
             assert_eq!(results.targets.len(), 1);
-            let text = tab.editor.read(cx).text().to_string();
+            let text = tab.document.editor.read(cx).text().to_string();
             assert!(text.contains("a.txt:"), "{text}");
             assert!(text.contains("2: two needle"), "{text}");
             window.render_frame(cx);
@@ -1019,6 +1022,7 @@ mod tests {
                     .tabs
                     .active()
                     .unwrap()
+                    .document
                     .editor
                     .read(cx)
                     .is_editable(),
@@ -1033,11 +1037,11 @@ mod tests {
             let this = app.read(cx);
             let tab = this.tabs.active().unwrap();
             assert_eq!(
-                tab.path.as_deref(),
+                tab.document.path.as_deref(),
                 Some(file.as_path()),
                 "F4 opens the file"
             );
-            assert_eq!(tab.editor.read(cx).selected_range(), 8..14);
+            assert_eq!(tab.document.editor.read(cx).selected_range(), 8..14);
         })
         .unwrap();
         std::fs::remove_dir_all(&root).unwrap();
@@ -1054,16 +1058,13 @@ mod tests {
                 cx.new(|cx| EditorState::new(window, cx).default_value("one\ntwo needle\n"));
             app.update(cx, |this, _| {
                 this.tabs.push(OpenTab {
-                    path: Some(path.clone()),
-                    title: "find.txt".into(),
-                    language: "Plain Text".into(),
-                    language_override: false,
-                    dirty: false,
-                    disk_modified: None,
-                    dismissed_disk_change: None,
-                    deleted_on_disk: false,
-                    format: TextFormat::default(),
-                    editor: editor.clone(),
+                    document: Document::new(
+                        Some(path.clone()),
+                        "find.txt".into(),
+                        "Plain Text".into(),
+                        TextFormat::default(),
+                        editor.clone(),
+                    ),
                     preview: None,
                     raster: false,
                     find_results: None,
@@ -1113,16 +1114,13 @@ mod tests {
             let editor = cx.new(|cx| EditorState::new(window, cx).default_value("foo in buffer\n"));
             app.update(cx, |this, _| {
                 this.tabs.push(OpenTab {
-                    path: Some(open.clone()),
-                    title: "open.txt".into(),
-                    language: "Plain Text".into(),
-                    language_override: false,
-                    dirty: false,
-                    disk_modified: None,
-                    dismissed_disk_change: None,
-                    deleted_on_disk: false,
-                    format: TextFormat::default(),
-                    editor: editor.clone(),
+                    document: Document::new(
+                        Some(open.clone()),
+                        "open.txt".into(),
+                        "Plain Text".into(),
+                        TextFormat::default(),
+                        editor.clone(),
+                    ),
                     preview: None,
                     raster: false,
                     find_results: None,
@@ -1161,15 +1159,15 @@ mod tests {
                 .read(cx)
                 .tabs
                 .iter()
-                .find(|tab| tab.path.as_deref() == Some(open.as_path()))
-                .map(|tab| tab.editor.clone())
+                .find(|tab| tab.document.path.as_deref() == Some(open.as_path()))
+                .map(|tab| tab.document.editor.clone())
                 .unwrap();
             assert_eq!(editor.read(cx).text().to_string(), "baz in buffer\n");
             app.update(cx, |this, cx| {
                 let ix = this
                     .tabs
                     .iter()
-                    .position(|tab| tab.editor == editor)
+                    .position(|tab| tab.document.editor == editor)
                     .unwrap();
                 this.activate_tab(ix, window, cx);
             });

@@ -70,6 +70,14 @@ in headless environments.
   registry, the shared recent list, the one `session.json` writer, and the bootstrap every
   new or restored window goes through. Add a new module only once a feature is large enough
   to justify the boundary.
+- A file and the tab showing it are separate types. `Document` (`app/document.rs`) owns
+  the buffer (`Entity<EditorState>`), path, title, language, on-disk format, dirty flag and
+  the disk-conflict bookkeeping; `OpenTab` (`app/tabs.rs`) is a view that owns only the
+  preview, the Find Results rows and its subscriptions. Put file state and disk-state
+  transitions on `Document`, not on the tab. A second view of the same path would share
+  this document and its `EditorState` — and therefore its caret — because the engine has no
+  buffer below that entity yet, so paths are deduplicated within a window instead.
+- Performance budgets live in `app/bench.rs` as ignored tests (see `docs/performance.md`).
 - Every user-invokable command is declared once in `commands.rs`: label, action,
   chords, menu placement, palette placement and search keywords. The menu bar, the
   command palette and the keymap are all derived from that table, so a new command
