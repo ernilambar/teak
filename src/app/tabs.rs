@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -224,6 +224,19 @@ impl TabSet {
 
     pub(super) fn find(&self, id: EntityId) -> Option<&OpenTab> {
         self.tabs.iter().find(|tab| tab.editor.entity_id() == id)
+    }
+
+    /// The index of the tab showing `path`, if any.
+    pub(super) fn index_of_path(&self, path: &Path) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.path.as_deref() == Some(path))
+    }
+
+    /// True when `path` already has a tab, so opening it again must only
+    /// activate that tab instead of reading the file a second time.
+    pub(super) fn is_open(&self, path: &Path) -> bool {
+        self.index_of_path(path).is_some()
     }
 
     /// Appends `tab`, returning its index. Activating it is the caller's call.

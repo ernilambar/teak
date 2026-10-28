@@ -165,7 +165,7 @@ fn first_line(editor: &Entity<EditorState>, cx: &App) -> String {
 }
 
 /// The notification shown when a file the user asked for cannot be opened.
-fn open_error(path: &Path, error: &std::io::Error) -> String {
+pub(super) fn open_error(path: &Path, error: &std::io::Error) -> String {
     let filename = file_name(path);
     if error.kind() == std::io::ErrorKind::InvalidData {
         format!("Could not open {filename}: it looks like a binary file")
@@ -213,11 +213,7 @@ impl TeakApp {
                 continue;
             }
             order.push(path.clone());
-            let already_open = self
-                .tabs
-                .iter()
-                .any(|tab| tab.path.as_deref() == Some(path.as_path()));
-            if !already_open && !to_read.contains(&path) {
+            if !self.tabs.is_open(&path) && !to_read.contains(&path) {
                 to_read.push(path);
             }
         }
@@ -252,11 +248,7 @@ impl TeakApp {
                         Ok(content) => {
                             // Another request may have opened it while the read
                             // was in flight; never add a second tab for it.
-                            let already_open = this
-                                .tabs
-                                .iter()
-                                .any(|tab| tab.path.as_deref() == Some(path.as_path()));
-                            if !already_open {
+                            if !this.tabs.is_open(&path) {
                                 this.add_file_tab(path, content, window, cx);
                             }
                         }
@@ -276,11 +268,7 @@ impl TeakApp {
     fn finish_open_many(&mut self, order: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         let mut last = None;
         for path in order {
-            let Some(ix) = self
-                .tabs
-                .iter()
-                .position(|tab| tab.path.as_deref() == Some(path.as_path()))
-            else {
+            let Some(ix) = self.tabs.index_of_path(path) else {
                 continue;
             };
             self.note_recent(path.clone(), cx);

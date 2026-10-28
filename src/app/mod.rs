@@ -205,9 +205,14 @@ impl TeakApp {
         }
     }
 
+    /// Brings back a saved window and the files a command-line launch named.
+    /// The launch files open first, in the order given, so that order wins over
+    /// the session's; the remaining saved tabs follow. A file both lists name
+    /// keeps one tab, at its launch position.
     pub(crate) fn restore_session(
         &mut self,
         session: WindowSession,
+        launch_files: Vec<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -219,12 +224,26 @@ impl TeakApp {
         });
         *self.overlays.find_options_mut() = session.find_options;
 
-        let mut paths = session.tabs;
-        paths.retain(|path| path.is_file());
+        let mut saved_paths = session.tabs;
+        saved_paths.retain(|path| path.is_file());
         let active = session.active_tab.filter(|path| path.is_file());
 
+        let mut launch = Vec::with_capacity(launch_files.len());
+        for path in launch_files {
+            if !launch.contains(&path) {
+                launch.push(path);
+            }
+        }
+        let mut ordered: Vec<(PathBuf, bool)> =
+            launch.iter().cloned().map(|path| (path, true)).collect();
+        for path in saved_paths {
+            if !launch.contains(&path) {
+                ordered.push((path, false));
+            }
+        }
+
         cx.spawn_in(window, async move |this, cx| {
-            for path in paths {
+            for (path, launched) in ordered {
                 let read = cx
                     .background_executor()
                     .spawn({
@@ -232,22 +251,50 @@ impl TeakApp {
                         async move { files::read_file(&path) }
                     })
                     .await;
-                if let Ok(content) = read {
-                    this.update_in(cx, |this, window, cx| {
-                        this.add_file_tab(path, content, window, cx);
-                    })
-                    .ok();
+                match read {
+                    Ok(content) => {
+                        // An external open may have landed while the restore
+                        // was reading; never add a second tab for a path.
+                        this.update_in(cx, |this, window, cx| {
+                            if this.tabs.is_open(&path) {
+                                return;
+                            }
+                            this.add_file_tab(path.clone(), content, window, cx);
+                        })
+                        .ok();
+                    }
+                    // A saved tab whose file vanished is dropped silently; a
+                    // file the command line named is reported like any open.
+                    Err(error) if launched => {
+                        this.update_in(cx, |_this, window, cx| {
+                            window.push_notification(
+                                Notification::error(files::open_error(&path, &error)),
+                                cx,
+                            );
+                        })
+                        .ok();
+                    }
+                    Err(_) => {}
                 }
             }
 
             this.update_in(cx, |this, window, cx| {
-                if let Some(active) = active
-                    && let Some(ix) = this
-                        .tabs
-                        .iter()
-                        .position(|tab| tab.path.as_deref() == Some(active.as_path()))
-                {
+                // The last launch file that opened ends active; a launch whose
+                // files all failed falls back to the saved active tab.
+                let focus = launch
+                    .iter()
+                    .rev()
+                    .find_map(|path| this.tabs.index_of_path(path))
+                    .or_else(|| active.and_then(|path| this.tabs.index_of_path(&path)));
+                if let Some(ix) = focus {
                     this.activate_tab(ix, window, cx);
+                }
+                // A launch file is an open like any other, so it joins the
+                // recent list even when the session already had it.
+                for path in &launch {
+                    if this.tabs.is_open(path) {
+                        this.note_recent(path.clone(), cx);
+                    }
                 }
                 // The initial save recorded the window before its tabs loaded,
                 // so publish the restored state once they are in.
@@ -1628,6 +1675,7 @@ mod tests {
 
     use super::git_may_have_changed;
     use super::test_support::{open_app, open_app_in};
+    use crate::session::WindowSession;
 
     /// Initializes a repository in `dir` and commits what it holds. A machine
     /// without git leaves the caller with nothing to check.
@@ -1791,5 +1839,64 @@ mod tests {
             Path::new("/code/app/target/debug/app"),
             &roots
         ));
+    }
+
+    /// A file named on the command line that the saved session already had
+    /// keeps one tab instead of being restored twice, and the launch order
+    /// overrides the session's: launch files lead in argument order and the
+    /// last one ends focused.
+    #[gpui_kit::test]
+    async fn launch_paths_keep_their_order_next_to_session_tabs(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("teak-restore-paths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first.txt");
+        let launched = dir.join("launched.txt");
+        let added = dir.join("added.txt");
+        let last = dir.join("last.txt");
+        for path in [&first, &launched, &added, &last] {
+            std::fs::write(path, "text\n").unwrap();
+        }
+
+        let (handle, app) = open_app(cx);
+        let session = WindowSession {
+            tabs: vec![first.clone(), launched.clone()],
+            active_tab: Some(first.clone()),
+            ..Default::default()
+        };
+        // `launched` is already a restored tab; the other two are new. The
+        // launch order wins over the session: the launch files come first, in
+        // the order given, and only the untouched saved tab follows.
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.restore_session(
+                    session,
+                    vec![added.clone(), launched.clone(), last.clone()],
+                    window,
+                    cx,
+                )
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        let (paths, active) = cx.update(|cx| {
+            let app = app.read(cx);
+            (
+                app.tabs
+                    .iter()
+                    .filter_map(|tab| tab.path.clone())
+                    .collect::<Vec<_>>(),
+                app.tabs.active().and_then(|tab| tab.path.clone()),
+            )
+        });
+        assert_eq!(
+            paths,
+            vec![added, launched, last.clone(), first],
+            "launch files lead in argument order, then the rest of the session"
+        );
+        assert_eq!(active, Some(last), "the last launch path stays active");
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

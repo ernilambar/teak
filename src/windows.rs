@@ -373,24 +373,29 @@ impl WindowSeed {
     /// Splits launch arguments into sidebar folders and files to open. Files
     /// that do not exist still go through `request_open`, which reports them.
     pub(crate) fn for_paths(settings: Settings, paths: Vec<PathBuf>) -> Self {
-        let mut roots = Vec::new();
-        let mut open_paths = Vec::new();
+        let mut seed = Self::blank(settings);
+        seed.add_paths(paths);
+        seed
+    }
+
+    /// Adds paths a command-line launch asked for. A folder joins the
+    /// workspace; a file opens ahead of whatever the session restores, in the
+    /// order given, so the launch order wins over the saved tab order.
+    pub(crate) fn add_paths(&mut self, paths: Vec<PathBuf>) {
         for path in paths {
             if path.is_dir() {
+                // A restored window reads its roots back from the session, so
+                // a folder has to land there rather than in `self.roots`.
+                let roots = match self.session.as_mut() {
+                    Some(session) => &mut session.roots,
+                    None => &mut self.roots,
+                };
                 if !roots.contains(&path) {
                     roots.push(path);
                 }
             } else {
-                open_paths.push(path);
+                self.open_paths.push(path);
             }
-        }
-        Self {
-            settings,
-            roots,
-            open_paths,
-            session: None,
-            frame: None,
-            settings_error: None,
         }
     }
 
@@ -513,11 +518,17 @@ pub(crate) fn open_app_window(
             });
         }
         if let Some(session) = session {
-            app.update(cx, |this, cx| this.restore_session(session, window, cx));
+            // The launch paths go through the restore so they land ahead of
+            // the saved tabs, in argument order, and never fight the restore
+            // over a file the session already had.
+            app.update(cx, |this, cx| {
+                this.restore_session(session, open_paths, window, cx)
+            });
+        } else {
+            app.update(cx, |this, cx| {
+                this.request_open_many(open_paths, window, cx)
+            });
         }
-        app.update(cx, |this, cx| {
-            this.request_open_many(open_paths, window, cx)
-        });
         app.update(cx, |this, cx| this.check_font_family(window, cx));
         // Start following the workspace and reading git state without waiting
         // for a first activation event.
@@ -631,6 +642,42 @@ mod tests {
         store.remove_window(1);
         assert_eq!(store.state().windows.len(), 1);
         assert_eq!(store.state().windows[0].roots, [PathBuf::from("/two")]);
+    }
+
+    #[test]
+    fn launch_paths_join_the_target_window_after_its_session_tabs() {
+        let dir = std::env::temp_dir().join(format!("teak-seed-paths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let folder = dir.join("folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let saved = dir.join("saved.txt");
+        let launched = dir.join("launched.txt");
+        std::fs::write(&saved, "").unwrap();
+        std::fs::write(&launched, "").unwrap();
+
+        // A restored window keeps its saved folders and tabs; the launch
+        // folder joins the roots and the launch file opens ahead of them.
+        let mut restored = WindowSeed::restored(
+            Settings::default(),
+            WindowSession {
+                roots: vec![dir.clone()],
+                tabs: vec![saved.clone()],
+                ..Default::default()
+            },
+        );
+        restored.add_paths(vec![folder.clone(), launched.clone()]);
+        let session = restored.session.as_ref().unwrap();
+        assert_eq!(session.roots, vec![dir.clone(), folder.clone()]);
+        assert_eq!(session.tabs, vec![saved]);
+        assert_eq!(restored.open_paths, vec![launched.clone()]);
+
+        // A blank window treats the launch paths like any other seed.
+        let mut blank = WindowSeed::blank(Settings::default());
+        blank.add_paths(vec![folder.clone(), launched.clone()]);
+        assert_eq!(blank.roots, vec![folder]);
+        assert_eq!(blank.open_paths, vec![launched]);
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

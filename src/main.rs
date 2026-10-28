@@ -344,16 +344,19 @@ fn main() {
         if seeds.is_empty() {
             seeds.push(WindowSeed::blank(settings.clone()));
         }
+        // Paths given directly to the binary behave like an open event: they
+        // join the active window, which the session lists last, and their
+        // order overrides the restored tab order.
+        if let Some(paths) = route_paths
+            && let Some(seed) = seeds.last_mut()
+        {
+            seed.add_paths(paths);
+        }
         for (ix, mut seed) in seeds.into_iter().enumerate() {
             if ix == 0 {
                 seed.settings_error = settings_error.clone();
             }
             services.open_window(cx, seed);
-        }
-        // Paths given directly to the binary behave like an open event: they
-        // join the active window after the saved layout is up.
-        if let Some(paths) = route_paths {
-            services.route_open(paths, cx);
         }
     });
 }
