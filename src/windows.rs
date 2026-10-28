@@ -317,9 +317,7 @@ impl AppServices {
             handle
                 .update(cx, |_root, window, cx| {
                     app.update(cx, |this, cx| {
-                        for path in paths {
-                            this.request_open(path, window, cx);
-                        }
+                        this.request_open_many(paths, window, cx);
                     });
                 })
                 .ok();
@@ -517,9 +515,9 @@ pub(crate) fn open_app_window(
         if let Some(session) = session {
             app.update(cx, |this, cx| this.restore_session(session, window, cx));
         }
-        for path in open_paths {
-            app.update(cx, |this, cx| this.request_open(path, window, cx));
-        }
+        app.update(cx, |this, cx| {
+            this.request_open_many(open_paths, window, cx)
+        });
         app.update(cx, |this, cx| this.check_font_family(window, cx));
         // Start following the workspace and reading git state without waiting
         // for a first activation event.

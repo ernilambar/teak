@@ -170,47 +170,112 @@ struct NamePrompt {
 }
 
 impl TeakApp {
+    /// Opens one path: a folder joins the workspace, a file gets a tab, and a
+    /// file already in a tab is activated. Multi-file requests go through
+    /// [`Self::request_open_many`], which keeps the given order.
     pub(crate) fn request_open(
         &mut self,
         path: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if path.is_dir() {
-            self.add_root(path, window, cx);
-            return;
+        self.request_open_many(vec![path], window, cx);
+    }
+
+    /// Opens several paths as one request. The tabs land in the order given,
+    /// not in read-completion order, and the last path that resolves to a tab
+    /// ends up active. Folders join the workspace; files already open are only
+    /// activated, so a path listed twice opens one tab.
+    pub(crate) fn request_open_many(
+        &mut self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut order = Vec::with_capacity(paths.len());
+        let mut to_read: Vec<PathBuf> = Vec::new();
+        for path in paths {
+            if path.is_dir() {
+                self.add_root(path, window, cx);
+                continue;
+            }
+            order.push(path.clone());
+            let already_open = self
+                .tabs
+                .iter()
+                .any(|tab| tab.path.as_deref() == Some(path.as_path()));
+            if !already_open && !to_read.contains(&path) {
+                to_read.push(path);
+            }
         }
 
-        if let Some(ix) = self
-            .tabs
-            .iter()
-            .position(|tab| tab.path.as_deref() == Some(path.as_path()))
-        {
-            self.activate_tab(ix, window, cx);
-            self.note_recent(path, cx);
+        if to_read.is_empty() {
+            self.finish_open_many(&order, window, cx);
             return;
         }
 
         cx.spawn_in(window, async move |this, cx| {
-            let read = cx
-                .background_executor()
-                .spawn({
-                    let path = path.clone();
-                    async move { read_file(&path) }
+            // Start every read at once, then collect the results in argument
+            // order so a slow file cannot move its tab.
+            let reads: Vec<_> = to_read
+                .into_iter()
+                .map(|path| {
+                    let read = cx.background_executor().spawn({
+                        let path = path.clone();
+                        async move { read_file(&path) }
+                    });
+                    (path, read)
                 })
-                .await;
-            this.update_in(cx, |this, window, cx| match read {
-                Ok(content) => {
-                    this.add_file_tab(path.clone(), content, window, cx);
-                    this.note_recent(path, cx);
+                .collect();
+
+            let mut results = Vec::with_capacity(reads.len());
+            for (path, read) in reads {
+                results.push((path, read.await));
+            }
+
+            this.update_in(cx, |this, window, cx| {
+                for (path, result) in results {
+                    match result {
+                        Ok(content) => {
+                            // Another request may have opened it while the read
+                            // was in flight; never add a second tab for it.
+                            let already_open = this
+                                .tabs
+                                .iter()
+                                .any(|tab| tab.path.as_deref() == Some(path.as_path()));
+                            if !already_open {
+                                this.add_file_tab(path, content, window, cx);
+                            }
+                        }
+                        Err(error) => window
+                            .push_notification(Notification::error(open_error(&path, &error)), cx),
+                    }
                 }
-                Err(error) => {
-                    window.push_notification(Notification::error(open_error(&path, &error)), cx)
-                }
+                this.finish_open_many(&order, window, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Records each opened path, in the order given, and activates the last one
+    /// that made it into a tab. A path that failed to read is skipped.
+    fn finish_open_many(&mut self, order: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let mut last = None;
+        for path in order {
+            let Some(ix) = self
+                .tabs
+                .iter()
+                .position(|tab| tab.path.as_deref() == Some(path.as_path()))
+            else {
+                continue;
+            };
+            self.note_recent(path.clone(), cx);
+            last = Some(ix);
+        }
+        if let Some(ix) = last {
+            self.activate_tab(ix, window, cx);
+        }
     }
 
     pub(super) fn on_new_file(&mut self, _: &NewFile, window: &mut Window, cx: &mut Context<Self>) {
@@ -232,24 +297,10 @@ impl TeakApp {
 
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = receiver.await {
-                for path in paths {
-                    let read = cx
-                        .background_executor()
-                        .spawn({
-                            let path = path.clone();
-                            async move { read_file(&path) }
-                        })
-                        .await;
-                    this.update_in(cx, |this, window, cx| match read {
-                        Ok(content) => {
-                            this.add_file_tab(path.clone(), content, window, cx);
-                            this.note_recent(path, cx);
-                        }
-                        Err(error) => window
-                            .push_notification(Notification::error(open_error(&path, &error)), cx),
-                    })
-                    .ok();
-                }
+                this.update_in(cx, |this, window, cx| {
+                    this.request_open_many(paths, window, cx);
+                })
+                .ok();
             }
         })
         .detach();
@@ -1448,6 +1499,59 @@ mod tests {
 
         let _ = std::fs::remove_file(&edited);
         let _ = std::fs::remove_file(&other);
+    }
+
+    /// A batch open keeps the argument order and leaves the last path active,
+    /// even though the reads finish independently. Re-listing open files only
+    /// activates them and never adds duplicates.
+    #[gpui_kit::test]
+    async fn batch_open_keeps_argument_order_and_activates_the_last_path(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("app-open-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let names = ["z-first.txt", "m-second.txt", "a-third.txt"];
+        let paths: Vec<PathBuf> = names
+            .iter()
+            .map(|name| {
+                let path = dir.join(name);
+                std::fs::write(&path, name).unwrap();
+                path
+            })
+            .collect();
+
+        let (handle, app) = open_app(cx);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.request_open_many(paths.clone(), window, cx)
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        let (titles, active) = cx.update(|cx| {
+            let app = app.read(cx);
+            let titles: Vec<String> = app.tabs.iter().map(|tab| tab.title.to_string()).collect();
+            (titles, app.tabs.active_index())
+        });
+        assert_eq!(titles, names);
+        assert_eq!(active, Some(names.len() - 1));
+
+        // Asking for two files that are already open changes neither the tab
+        // list nor the order; it only activates the last one given.
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.request_open_many(vec![paths[2].clone(), paths[1].clone()], window, cx)
+            });
+        })
+        .unwrap();
+        let (titles, active) = cx.update(|cx| {
+            let app = app.read(cx);
+            let titles: Vec<String> = app.tabs.iter().map(|tab| tab.title.to_string()).collect();
+            (titles, app.tabs.active_index())
+        });
+        assert_eq!(titles, names);
+        assert_eq!(active, Some(1));
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
