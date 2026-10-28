@@ -828,14 +828,29 @@ impl TeakApp {
     }
 
     /// Picks up edits another program made to the active tab's file, and asks
-    /// when those edits would overwrite unsaved work. Also refreshes whether the
-    /// file still exists, which is how a tab deleted while the app was in the
-    /// background learns about it.
-    pub(crate) fn check_outside_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.active().and_then(|tab| tab.path.clone()) else {
-            return;
-        };
-        self.handle_disk_change(&path, Change::Changed, window, cx);
+    /// when those edits would overwrite unsaved work. Only that tab reloads or
+    /// asks now; a background tab's question waits until it is focused. Every
+    /// tab, though, refreshes whether its file still exists, so a deletion
+    /// while the app was in the background is marked even on a tab that is not
+    /// focused — and even on a file outside the watched folders, which raises
+    /// no event at all.
+    pub(crate) fn check_outside_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active = self.active().and_then(|tab| tab.path.clone());
+        let others: Vec<(EntityId, PathBuf)> = self
+            .tabs
+            .iter()
+            .filter(|tab| !tab.raster)
+            .filter_map(|tab| {
+                let path = tab.path.clone()?;
+                (active.as_deref() != Some(path.as_path())).then(|| (tab.editor.entity_id(), path))
+            })
+            .collect();
+        for (id, path) in others {
+            self.set_deleted_on_disk(id, modified_time(&path).is_none(), cx);
+        }
+        if let Some(path) = active {
+            self.handle_disk_change(&path, Change::Changed, window, cx);
+        }
     }
 
     /// Asks whether to reload a file that changed under unsaved edits. The
@@ -1571,6 +1586,56 @@ mod tests {
 
         let _ = std::fs::remove_file(&edited);
         let _ = std::fs::remove_file(&other);
+    }
+
+    /// A file outside the watched folders raises no event, so an activation has
+    /// to look at every tab: a background one deleted while the app was away
+    /// must be marked without being activated. The active tab is still the only
+    /// one that reloads.
+    #[gpui_kit::test]
+    async fn an_activation_flags_a_background_tab_whose_file_vanished(cx: &mut TestAppContext) {
+        let background = temp_path("background");
+        let active = temp_path("active");
+        std::fs::write(&background, "gone soon\n").unwrap();
+        std::fs::write(&active, "stays\n").unwrap();
+
+        let (handle, app) = open_app(cx);
+        for path in [&background, &active] {
+            cx.update_window(handle, |_, window, cx| {
+                app.update(cx, |this, cx| {
+                    let content = super::read_file(path).unwrap();
+                    this.add_file_tab(path.clone(), content, window, cx);
+                });
+            })
+            .unwrap();
+        }
+
+        std::fs::remove_file(&background).unwrap();
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| this.check_outside_changes(window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        assert!(deleted_on_disk(&app, cx, &background));
+        assert!(!deleted_on_disk(&app, cx, &active));
+        assert_eq!(
+            tab_text(&app, cx, &background).as_deref(),
+            Some("gone soon\n"),
+            "a deleted tab keeps its text"
+        );
+
+        // Brought back, the mark clears on the next check as well.
+        std::fs::write(&background, "back\n").unwrap();
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| this.check_outside_changes(window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(!deleted_on_disk(&app, cx, &background));
+
+        let _ = std::fs::remove_file(&background);
+        let _ = std::fs::remove_file(&active);
     }
 
     /// A batch open keeps the argument order and leaves the last path active,

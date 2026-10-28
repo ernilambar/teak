@@ -550,7 +550,7 @@ pub(crate) fn open_app_window(
                 this.refresh_menus(cx);
                 if window.is_window_active() {
                     this.mark_window_active(cx);
-                    this.check_outside_change(window, cx);
+                    this.check_outside_changes(window, cx);
                 }
                 cx.notify()
             })

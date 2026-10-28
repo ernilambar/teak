@@ -567,7 +567,7 @@ impl TeakApp {
         // changes, since the tree cache is otherwise only refreshed on
         // activation and in-app file operations.
         self.reload_tree(cx);
-        self.check_outside_change(window, cx);
+        self.check_outside_changes(window, cx);
         cx.notify();
     }
 
