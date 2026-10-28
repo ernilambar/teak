@@ -129,6 +129,16 @@ fn raster_format(path: &Path) -> Option<ImageFormat> {
     }
 }
 
+/// A 1×1 transparent PNG, used by the image-viewer tests.
+#[cfg(test)]
+pub(super) const ONE_PIXEL_PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x64, 0x60, 0xF8, 0x5F,
+    0x0F, 0x00, 0x02, 0x87, 0x01, 0x80, 0xEB, 0x47, 0xBA, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
 /// Reads `path` for a new tab. Raster images load as raw bytes; everything
 /// else is decoded as text.
 pub(super) fn read_file(path: &Path) -> std::io::Result<FileContent> {
@@ -1570,6 +1580,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::SystemTime;
 
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, ImageFormat, TestAppContext};
 
     use super::{DiskChange, TextFormat, classify_disk_change, disk_moved_on, raster_format};
@@ -1577,6 +1588,36 @@ mod tests {
     use crate::app::tabs::TabSet;
     use crate::app::test_support::open_app;
     use crate::watcher::Change;
+
+    /// A raster file opens as a view-only tab with its preview already built,
+    /// so typing and saving never touch the bytes on disk.
+    #[gpui_kit::test]
+    async fn a_png_opens_as_a_view_only_image_tab(cx: &mut TestAppContext) {
+        let path = std::env::temp_dir().join(format!("teak-image-{}.png", std::process::id()));
+        std::fs::write(&path, super::ONE_PIXEL_PNG).unwrap();
+
+        let (handle, app) = open_app(cx);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let content = super::read_file(&path).unwrap();
+                this.add_file_tab(path.clone(), content, false, window, cx);
+            });
+            window.render_frame(cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+        cx.update(|cx| {
+            let app = app.read(cx);
+            let tab = app.tabs.active().expect("the image tab opens");
+            assert!(tab.raster, "it is view-only");
+            assert!(tab.previewing().is_some(), "the image is what is shown");
+            assert!(!tab.document.dirty, "opening does not edit it");
+            assert!(tab.image.fit, "a freshly opened image is fitted");
+        });
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// One tab is left in the background so the dirty case never opens a
     /// dialog: only the visible tab asks.

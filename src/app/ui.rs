@@ -171,6 +171,26 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+/// The status bar's one line for an image: format, pixel size and bytes.
+fn image_summary(image: &Image) -> String {
+    let format = image.format.extension().to_ascii_uppercase();
+    match image_dimensions(image) {
+        Some((width, height)) => format!(
+            "{format} · {width} × {height} · {}",
+            format_size(image.bytes.len())
+        ),
+        None => format!("{format} · {}", format_size(image.bytes.len())),
+    }
+}
+
+/// The image's pixel size, read from its header only. `None` for a format the
+/// header reader does not know, which leaves the viewer in fit mode.
+fn image_dimensions(image: &Image) -> Option<(usize, usize)> {
+    imagesize::blob_size(&image.bytes)
+        .ok()
+        .map(|size| (size.width, size.height))
+}
+
 /// A file-type icon for the sidebar and tabs. GPUI's `svg` element — and the
 /// `Icon` component built on it — flattens an SVG to a single tinted color, so
 /// the colorful style draws the vendored SVG through the image pipeline
@@ -1058,25 +1078,88 @@ impl TeakApp {
             }
             Some(Preview::Image(image)) => {
                 let muted = cx.theme().muted_foreground;
+                let view = tab.map(|tab| tab.image).unwrap_or_default();
+                // The image's own pixels, expressed in the window's logical
+                // units so `zoom` 1 is actual size on a Retina display too.
+                let dimensions = image_dimensions(image);
+                let factor = window.scale_factor();
+                let source = |image: &Arc<Image>| ImageSource::Image(image.clone());
+
+                let body = if view.fit || dimensions.is_none() {
+                    div()
+                        .size_full()
+                        .p_6()
+                        .child(
+                            img(source(image))
+                                .size_full()
+                                .object_fit(ObjectFit::ScaleDown)
+                                .with_fallback(move || {
+                                    div()
+                                        .size_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(muted)
+                                        .child("Cannot display image")
+                                        .into_any_element()
+                                }),
+                        )
+                        .into_any_element()
+                } else {
+                    let (width, height) = dimensions.unwrap_or_default();
+                    div()
+                        .min_w_full()
+                        .min_h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            img(source(image))
+                                .w(px(width as f32 / factor * view.zoom))
+                                .h(px(height as f32 / factor * view.zoom))
+                                .with_fallback(move || {
+                                    div()
+                                        .size_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(muted)
+                                        .child("Cannot display image")
+                                        .into_any_element()
+                                }),
+                        )
+                        .into_any_element()
+                };
+
                 return div()
+                    .id("image-view")
                     .size_full()
-                    .p_6()
                     .bg(cx.theme().background)
-                    .child(
-                        img(ImageSource::Image(image.clone()))
-                            .size_full()
-                            .object_fit(ObjectFit::ScaleDown)
-                            .with_fallback(move || {
-                                div()
-                                    .size_full()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_color(muted)
-                                    .child("Cannot display image")
-                                    .into_any_element()
-                            }),
-                    )
+                    .overflow_scroll()
+                    // ⌘-scroll zooms; a plain scroll pans the zoomed image.
+                    .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
+                        if !(event.modifiers.platform || event.modifiers.control) {
+                            return;
+                        }
+                        let direction = match event.delta {
+                            ScrollDelta::Lines(point) => point.y,
+                            ScrollDelta::Pixels(point) => point.y.as_f32() / 40.,
+                        };
+                        if direction == 0. {
+                            return;
+                        }
+                        this.step_image_zoom(direction.signum());
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                    // Double-click toggles fit and actual size.
+                    .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
+                        if event.click_count() >= 2 {
+                            this.toggle_image_fit();
+                            cx.notify();
+                        }
+                    }))
+                    .child(body)
                     .into_any_element();
             }
             None => {}
@@ -1267,11 +1350,7 @@ impl TeakApp {
 
         let mut status = StatusBar::new();
         if let Some(image) = self.active_raster() {
-            return status.left(div().child(format!(
-                "{} · {}",
-                image.format.extension().to_ascii_uppercase(),
-                format_size(image.bytes.len())
-            )));
+            return status.left(div().child(image_summary(image)));
         }
         if let Some(label) = self.chrome.busy().cloned() {
             status = status.left(
@@ -1494,6 +1573,15 @@ mod tests {
         .unwrap();
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_image_summary_names_its_format_and_pixels() {
+        let image = gpui_kit::Image::from_bytes(
+            gpui_kit::ImageFormat::Png,
+            super::super::files::ONE_PIXEL_PNG.to_vec(),
+        );
+        assert_eq!(super::image_summary(&image), "PNG · 1 × 1 · 70 B");
     }
 
     #[test]

@@ -24,6 +24,49 @@ use crate::search::ResultTarget;
 /// How many recently closed tabs to remember for `ReopenClosedTab`.
 const MAX_CLOSED_TABS: usize = 10;
 
+/// How an image is shown: fitted to the pane, or at a zoom the user set.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ImageView {
+    pub(super) zoom: f32,
+    /// True while the image scales down to the pane; a manual zoom clears it.
+    pub(super) fit: bool,
+}
+
+impl Default for ImageView {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            fit: true,
+        }
+    }
+}
+
+/// The bounds a manual zoom may reach.
+pub(super) const MIN_IMAGE_ZOOM: f32 = 0.1;
+pub(super) const MAX_IMAGE_ZOOM: f32 = 16.0;
+
+impl ImageView {
+    /// One wheel notch: zoom in or out, clamped, and no longer fitted.
+    pub(super) fn stepped(&self, direction: f32) -> Self {
+        Self {
+            zoom: (self.zoom * 1.25f32.powf(direction)).clamp(MIN_IMAGE_ZOOM, MAX_IMAGE_ZOOM),
+            fit: false,
+        }
+    }
+
+    /// Double-click: fit when zoomed, actual size when fitted.
+    pub(super) fn toggled(&self) -> Self {
+        if self.fit {
+            Self {
+                zoom: 1.0,
+                fit: false,
+            }
+        } else {
+            Self::default()
+        }
+    }
+}
+
 /// What [`TeakApp::push_tab`] is given to build one view.
 struct TabSeed {
     path: Option<PathBuf>,
@@ -47,6 +90,8 @@ pub(super) struct OpenTab {
     /// True for the preview tab: the one slot a browsing click reuses until the
     /// user edits it or opens the file explicitly.
     pub(super) transient: bool,
+    /// Zoom and fit for an image view. Ignored by text tabs.
+    pub(super) image: ImageView,
     pub(super) _subscriptions: Vec<Subscription>,
 }
 
@@ -437,6 +482,7 @@ impl TeakApp {
             raster: false,
             find_results: None,
             transient,
+            image: ImageView::default(),
             _subscriptions: vec![change_subscription, cursor_subscription],
         });
         let ix = match slot {
@@ -979,6 +1025,40 @@ impl TeakApp {
     /// Refreshes the status bar's word and character totals from the active
     /// buffer. Called when the text or the active tab changes, so the totals
     /// follow Replace All and external reloads too.
+    /// Zooms the image the active tab shows, if it shows one.
+    pub(super) fn step_image_zoom(&mut self, direction: f32) {
+        let Some(ix) = self.tabs.active_index() else {
+            return;
+        };
+        let is_image = self
+            .tabs
+            .get(ix)
+            .is_some_and(|tab| matches!(tab.previewing(), Some(Preview::Image(_))));
+        if !is_image {
+            return;
+        }
+        if let Some(tab) = self.tabs.get_mut(ix) {
+            tab.image = tab.image.stepped(direction);
+        }
+    }
+
+    /// Double-click on an image: fit it, or show it at actual size.
+    pub(super) fn toggle_image_fit(&mut self) {
+        let Some(ix) = self.tabs.active_index() else {
+            return;
+        };
+        let is_image = self
+            .tabs
+            .get(ix)
+            .is_some_and(|tab| matches!(tab.previewing(), Some(Preview::Image(_))));
+        if !is_image {
+            return;
+        }
+        if let Some(tab) = self.tabs.get_mut(ix) {
+            tab.image = tab.image.toggled();
+        }
+    }
+
     pub(super) fn sync_counts(&mut self, cx: &mut Context<Self>) {
         let counts = match self.tabs.active() {
             Some(tab) if !tab.raster => Some(count_text(tab.document.editor.read(cx).text())),
@@ -1009,7 +1089,7 @@ mod tests {
     use crate::app::test_support::{open_app, open_app_in};
 
     use super::Document;
-    use super::{OpenTab, TabSet, TextFormat, remap_moved_index};
+    use super::{ImageView, OpenTab, TabSet, TextFormat, remap_moved_index};
 
     /// `n` tabs whose editors are real (empty) editor entities, so the entity
     /// ids the index bookkeeping matches on are distinct.
@@ -1033,6 +1113,7 @@ mod tests {
                 raster: false,
                 find_results: None,
                 transient: false,
+                image: ImageView::default(),
                 _subscriptions: Vec::new(),
             });
         }
@@ -1043,6 +1124,34 @@ mod tests {
         set.iter()
             .map(|tab| tab.document.title.to_string())
             .collect()
+    }
+
+    #[test]
+    fn image_zoom_steps_clamp_and_leave_fit() {
+        let fit = ImageView::default();
+        let zoomed = fit.stepped(1.0);
+        assert!(!zoomed.fit, "a manual zoom stops fitting");
+        assert!(zoomed.zoom > 1.0);
+
+        let mut view = ImageView::default();
+        for _ in 0..100 {
+            view = view.stepped(1.0);
+        }
+        assert_eq!(view.zoom, super::MAX_IMAGE_ZOOM);
+
+        for _ in 0..200 {
+            view = view.stepped(-1.0);
+        }
+        assert_eq!(view.zoom, super::MIN_IMAGE_ZOOM);
+    }
+
+    #[test]
+    fn a_double_click_toggles_between_fit_and_actual_size() {
+        let fit = ImageView::default();
+        let actual = fit.toggled();
+        assert!(!actual.fit);
+        assert_eq!(actual.zoom, 1.0);
+        assert!(actual.toggled().fit, "toggling again fits it");
     }
 
     #[test]

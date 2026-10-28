@@ -1069,6 +1069,7 @@ mod tests {
                     raster: false,
                     find_results: None,
                     transient: false,
+                    image: Default::default(),
                     _subscriptions: Vec::new(),
                 });
             });
@@ -1126,6 +1127,7 @@ mod tests {
                     raster: false,
                     find_results: None,
                     transient: false,
+                    image: Default::default(),
                     _subscriptions: Vec::new(),
                 });
             });

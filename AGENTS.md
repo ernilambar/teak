@@ -119,6 +119,10 @@ in headless environments.
 - Performance is a contract. Budgets live in `src/app/bench.rs` as ignored tests and
   are documented in `docs/performance.md`. A change that regresses a ceiling does not
   land; if a ceiling must move, update the doc in the same change.
+- Raster images open as view-only tabs (`OpenTab::raster`), never as text: `read_file`
+  detects them by extension, the tab shows `Preview::Image`, and save/move/duplicate
+  paths refuse them. View state (zoom/fit) lives on the tab, not the document.
+  `imagesize` reads only the header for the pixel dimensions shown in the status bar.
 - The app targets macOS. Do not add per-OS `cfg` branches.
 
 ## Releasing
