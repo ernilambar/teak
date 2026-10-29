@@ -235,7 +235,7 @@ impl TeakApp {
             }
         };
         let (include, mut exclude) = parse_where(&scope);
-        exclude.extend(self.settings.values.search.exclude().iter().cloned());
+        exclude.extend(self.settings.values.index_exclude());
         let globs = exclude_set(&include).and_then(|include| Ok((include, exclude_set(&exclude)?)));
         let (include, exclude) = match globs {
             Ok(globs) => globs,

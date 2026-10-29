@@ -51,6 +51,17 @@ pub(crate) const DEFAULT_SIDEBAR_POSITION: &str = "left";
 /// Unknown `ui.sidebar_position` values fall back to this.
 pub(crate) const SIDEBAR_POSITION_RIGHT: &str = "right";
 
+/// Globs hidden from the tree and the file index when `files.exclude` is
+/// unset: version-control metadata and the bookkeeping files macOS and Windows
+/// leave in folders. Emptying the list shows everything.
+pub(crate) const DEFAULT_FILE_EXCLUDE: &[&str] = &[
+    "**/.git",
+    "**/.svn",
+    "**/.hg",
+    "**/.DS_Store",
+    "**/Thumbs.db",
+];
+
 /// How file-type icons are painted. Kept GPUI-free; the renderer maps it to the
 /// right element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +109,7 @@ pub(crate) struct Settings {
     pub(crate) editor: EditorSettings,
     pub(crate) ui: UiSettings,
     pub(crate) search: SearchSettings,
+    pub(crate) files: FilesSettings,
 }
 
 /// Quick Open and Find in Files preferences.
@@ -112,6 +124,53 @@ pub(crate) struct SearchSettings {
 impl SearchSettings {
     pub(crate) fn exclude(&self) -> &[String] {
         self.exclude.as_deref().unwrap_or_default()
+    }
+}
+
+/// Which files and folders the workspace tree and the file index leave out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct FilesSettings {
+    /// Globs relative to each workspace folder, such as `**/.git` or
+    /// `**/.DS_Store`, hidden from the tree, Quick Open and Find in Files.
+    /// An empty array shows everything, including dot files.
+    #[serde(default = "default_file_exclude")]
+    pub(crate) exclude: Vec<String>,
+}
+
+impl FilesSettings {
+    pub(crate) fn exclude(&self) -> &[String] {
+        &self.exclude
+    }
+}
+
+impl Default for FilesSettings {
+    /// The same list a settings file with no `files` section gets, so
+    /// `Settings::default()` and `parse_settings("{}")` agree.
+    fn default() -> Self {
+        Self {
+            exclude: default_file_exclude(),
+        }
+    }
+}
+
+pub(crate) fn default_file_exclude() -> Vec<String> {
+    DEFAULT_FILE_EXCLUDE
+        .iter()
+        .map(|pattern| (*pattern).to_string())
+        .collect()
+}
+
+impl Settings {
+    /// Globs that hide a path from the file index: [`FilesSettings::exclude`],
+    /// which the tree follows too, plus the search-only `search.exclude`.
+    pub(crate) fn index_exclude(&self) -> Vec<String> {
+        self.files
+            .exclude()
+            .iter()
+            .chain(self.search.exclude())
+            .cloned()
+            .collect()
     }
 }
 
@@ -299,6 +358,8 @@ pub(crate) fn load_settings() -> Result<Settings, String> {
     let settings = parse_settings(&data).map_err(|error| format!("Invalid settings: {error}"))?;
     exclude_set(settings.search.exclude())
         .map_err(|error| format!("Invalid settings: search.exclude: {error}"))?;
+    exclude_set(settings.files.exclude())
+        .map_err(|error| format!("Invalid settings: files.exclude: {error}"))?;
     Ok(settings)
 }
 
@@ -348,6 +409,7 @@ pub(crate) fn defaults_document(
         search: SearchSettings {
             exclude: Some(Vec::new()),
         },
+        files: FilesSettings::default(),
     };
     serde_json::to_string_pretty(&defaults).expect("settings serialize as JSON")
 }
@@ -641,6 +703,34 @@ mod tests {
     }
 
     #[test]
+    fn files_exclude_defaults_to_noise_and_honors_an_override() {
+        let expected = default_file_exclude();
+        assert_eq!(Settings::default().files.exclude(), expected.as_slice());
+        assert_eq!(
+            parse_settings("{}").unwrap().files.exclude(),
+            expected.as_slice(),
+            "an absent section keeps the default list"
+        );
+
+        let settings = parse_settings(r#"{"files": {"exclude": []}}"#).unwrap();
+        assert!(
+            settings.files.exclude().is_empty(),
+            "an empty list shows everything"
+        );
+        assert!(parse_settings(r#"{"files": {"exclud": []}}"#).is_err());
+    }
+
+    #[test]
+    fn index_exclude_combines_files_and_search_patterns() {
+        let settings = parse_settings(
+            r#"{"files": {"exclude": ["**/.DS_Store"]}, "search": {"exclude": ["vendor/**"]}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.index_exclude(), ["**/.DS_Store", "vendor/**"]);
+    }
+
+    #[test]
     fn parses_editor_section() {
         let settings = parse_settings(
             r#"{"editor": {"font_family": "Menlo", "font_size": 15, "font_weight": 600}}"#,
@@ -756,6 +846,7 @@ mod tests {
         assert_eq!(parsed.ui.tab_icons(), ui.tab_icons());
         assert_eq!(parsed.ui.icon_color(), ui.icon_color());
         assert_eq!(parsed.ui.sidebar_position(), ui.sidebar_position());
+        assert_eq!(parsed.files.exclude(), FilesSettings::default().exclude());
     }
 
     #[test]

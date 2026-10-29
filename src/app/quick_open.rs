@@ -49,7 +49,7 @@ impl TeakApp {
     pub(super) fn start_file_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let roots = self.workspace.roots().to_vec();
         // Settings were validated on load, so a bad glob cannot reach here.
-        let exclude = exclude_set(self.settings.values.search.exclude()).unwrap_or_default();
+        let exclude = exclude_set(&self.settings.values.index_exclude()).unwrap_or_default();
         let fallback: Vec<PathBuf> = self
             .tabs
             .iter()

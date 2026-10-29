@@ -108,7 +108,10 @@ in headless environments.
   `settings.json` only
   to create a starter file or to record a choice made from the Settings overlay or a view
   toggle. Each write is a surgical `section.key` update that never rewrites unrelated keys.
-  Group new settings keys by area (`editor.*`, `ui.*`).
+  Group new settings keys by area (`editor.*`, `ui.*`, `files.*`). `files.exclude`
+  hides matching paths from the tree, Quick Open and Find in Files, and defaults to
+  version-control metadata plus `.DS_Store` and `Thumbs.db`; `search.exclude` adds
+  search-only patterns on top. An empty `files.exclude` shows everything.
 - `vendor/gpui-base` is gpui-base with `patches/gpui-base.patch` applied, wired in through
   `[patch.crates-io]`. It adds `selected_ranges()` (read every selection); upstream
   `add_selection` covers adding them. It also adds the gutter-mark API

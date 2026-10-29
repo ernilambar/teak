@@ -113,9 +113,10 @@ pub(crate) fn is_noise_path(path: &Path, roots: &[PathBuf]) -> bool {
     })
 }
 
-/// Compiles `search.exclude` globs, matched against paths relative to their
-/// workspace root. A `dir/**` pattern also matches `dir` itself, so the walk
-/// skips the whole folder instead of visiting every file in it.
+/// Compiles `files.exclude` or `search.exclude` globs, matched against paths
+/// relative to their workspace root. A `dir/**` pattern also matches `dir`
+/// itself, so the walk skips the whole folder instead of visiting every file
+/// in it.
 pub(crate) fn exclude_set(patterns: &[String]) -> Result<GlobSet, String> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
@@ -563,6 +564,18 @@ mod tests {
     fn exclude_set_rejects_invalid_globs() {
         assert!(exclude_set(&["**/*.{js".to_string()]).is_err());
         assert!(exclude_set(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn double_star_excludes_match_at_any_depth() {
+        let globs = exclude_set(&["**/.git".to_string(), "**/.DS_Store".to_string()]).unwrap();
+
+        assert!(globs.is_match(Path::new(".git")), "a root-level match");
+        assert!(globs.is_match(Path::new("src/.git")));
+        assert!(globs.is_match(Path::new(".DS_Store")));
+        assert!(globs.is_match(Path::new("src/nested/.DS_Store")));
+        assert!(!globs.is_match(Path::new("src/.gitignore")));
+        assert!(!globs.is_match(Path::new("DS_Store")));
     }
 
     #[test]

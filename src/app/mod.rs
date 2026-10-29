@@ -177,13 +177,18 @@ impl TeakApp {
     ) -> Self {
         // The sidebar starts open only when there is a folder to show. Toggling
         // it later is independent of the roots, and reveals the empty state.
+        let exclude = settings.files.exclude().to_vec();
         let mut app = Self {
             focus_handle: cx.focus_handle(),
             services,
             window_id,
             frame,
             workspace_file,
-            workspace: Workspace::new(workspace_roots, cx.new(|_| ResizableState::default())),
+            workspace: Workspace::new(
+                workspace_roots,
+                cx.new(|_| ResizableState::default()),
+                &exclude,
+            ),
             tabs: TabSet::new(),
             overlays: Overlays::new(),
             chrome: Chrome::new(),
@@ -1060,6 +1065,8 @@ impl TeakApp {
     ) {
         self.settings.values = settings;
         self.apply_editor_options_to_all(window, cx);
+        let exclude = self.settings.values.files.exclude().to_vec();
+        self.workspace.set_exclude(&exclude);
         self.refresh_menus(cx);
         cx.notify();
     }
@@ -1420,6 +1427,8 @@ impl TeakApp {
                 // Re-run the editor-only options and the theme on top of what
                 // was already open, so editing the settings file re-applies.
                 self.apply_editor_options_to_all(window, cx);
+                let exclude = self.settings.values.files.exclude().to_vec();
+                self.workspace.set_exclude(&exclude);
                 let choice = self.settings.values.ui.theme().to_string();
                 self.apply_theme_choice(&choice, Some(window), cx);
                 self.check_font_family(window, cx);

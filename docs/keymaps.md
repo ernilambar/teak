@@ -98,8 +98,8 @@ of the selected text on each press, wrapping past the end of the file.
 
 `⌘⇧F` opens the Find panel above the status bar. **Find** takes the query;
 **Where** narrows the files with comma-separated globs, where a leading `-`
-excludes (`src/**, -**/*.min.js`). Files listed in `.gitignore` and in the
-`search.exclude` setting are always skipped.
+excludes (`src/**, -**/*.min.js`). Files listed in `.gitignore`, in the
+`files.exclude` setting and in the `search.exclude` setting are always skipped.
 
 **Replace All…** searches again, asks with the counts, then replaces. Open files
 change in their tabs, unsaved, and one `⌘Z` reverts each. Closed files are saved

@@ -12,11 +12,14 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use globset::GlobSet;
 use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::*;
 
 use crate::git::{Branch, GitState, Status};
-use crate::paths::{DirEntry, RootConflict, nearest_root, read_dir, remap_prefix, root_conflict};
+use crate::paths::{
+    DirEntry, RootConflict, exclude_set, nearest_root, read_dir, remap_prefix, root_conflict,
+};
 use crate::session::{SidebarView, WindowSession};
 use crate::watcher::Watcher;
 
@@ -77,6 +80,12 @@ pub(super) struct Workspace {
     /// Directory listings for every root and expanded folder, so rendering
     /// the tree never touches the disk. Invalidated on filesystem changes.
     dir_cache: HashMap<PathBuf, Vec<DirEntry>>,
+    /// Compiled `files.exclude` globs, matched against each entry's path
+    /// relative to its workspace root.
+    exclude: GlobSet,
+    /// The patterns `exclude` was built from, so a settings reload that did not
+    /// touch the list leaves the cached listings alone.
+    exclude_patterns: Vec<String>,
     /// The flattened, visible rows derived from `dir_cache` + `expanded`,
     /// rebuilt only when the tree changes.
     rows: Vec<TreeRow>,
@@ -109,9 +118,14 @@ pub(super) struct Workspace {
 
 impl Workspace {
     /// Builds a workspace from `folders`, keeping the ones that exist and
-    /// dropping duplicates. Every root starts expanded; the caller reloads once
-    /// the app is assembled.
-    pub(super) fn new(folders: Vec<PathBuf>, panels: Entity<ResizableState>) -> Self {
+    /// dropping duplicates. `exclude` is the `files.exclude` list the tree
+    /// filters with. Every root starts expanded; the caller reloads once the
+    /// app is assembled.
+    pub(super) fn new(
+        folders: Vec<PathBuf>,
+        panels: Entity<ResizableState>,
+        exclude: &[String],
+    ) -> Self {
         let roots: Vec<PathBuf> =
             folders
                 .into_iter()
@@ -131,6 +145,8 @@ impl Workspace {
             selected: None,
             flash: None,
             dir_cache: HashMap::new(),
+            exclude: exclude_set(exclude).unwrap_or_else(|_| GlobSet::empty()),
+            exclude_patterns: exclude.to_vec(),
             rows: Vec::new(),
             git: GitState::default(),
             changes: Vec::new(),
@@ -379,9 +395,36 @@ impl Workspace {
     }
 
     fn cache_dir(&mut self, dir: &Path) {
-        if !self.dir_cache.contains_key(dir) {
-            self.dir_cache.insert(dir.to_path_buf(), read_dir(dir));
+        if self.dir_cache.contains_key(dir) {
+            return;
         }
+        // The root `dir` belongs to decides what its entries are matched
+        // against; roots never overlap, so one lookup covers the whole listing.
+        let root = nearest_root(&self.roots, dir).map(Path::to_path_buf);
+        let entries = read_dir(dir)
+            .into_iter()
+            .filter(|entry| {
+                root.as_deref().is_none_or(|root| {
+                    !self
+                        .exclude
+                        .is_match(entry.path.strip_prefix(root).unwrap_or(&entry.path))
+                })
+            })
+            .collect();
+        self.dir_cache.insert(dir.to_path_buf(), entries);
+    }
+
+    /// Replaces the tree's exclusions and re-reads every cached listing. An
+    /// empty list shows everything, including dot files and `.git`.
+    pub(super) fn set_exclude(&mut self, patterns: &[String]) {
+        if self.exclude_patterns == patterns {
+            return;
+        }
+        self.exclude_patterns = patterns.to_vec();
+        // `load_settings` rejects invalid globs, so a bad pattern can only come
+        // from a caller bug; showing everything is the harmless fallback.
+        self.exclude = exclude_set(patterns).unwrap_or_else(|_| GlobSet::empty());
+        self.reload();
     }
 
     /// Walks `dir`'s cached entries in display order, pushing a row per entry
@@ -570,9 +613,21 @@ mod tests {
     }
 
     fn workspace(cx: &mut TestAppContext, folders: Vec<PathBuf>) -> Workspace {
+        workspace_excluding(cx, folders, &[])
+    }
+
+    fn workspace_excluding(
+        cx: &mut TestAppContext,
+        folders: Vec<PathBuf>,
+        exclude: &[&str],
+    ) -> Workspace {
+        let exclude: Vec<String> = exclude
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect();
         cx.update(|cx| {
             let panels = cx.new(|_| ResizableState::default());
-            Workspace::new(folders, panels)
+            Workspace::new(folders, panels, &exclude)
         })
     }
 
@@ -783,5 +838,56 @@ mod tests {
         assert!(workspace.finish_status_read(GitState::default()));
         assert!(workspace.start_status_read());
         assert!(!workspace.finish_status_read(GitState::default()));
+    }
+
+    #[gpui_kit::test]
+    async fn exclude_hides_matching_entries_and_an_empty_list_restores_them(
+        cx: &mut TestAppContext,
+    ) {
+        let root = fixture("exclude");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join(".git").join("HEAD"), "").unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        for file in [".DS_Store", "src/.DS_Store", "src/main.rs", ".gitignore"] {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+
+        let mut workspace =
+            workspace_excluding(cx, vec![root.clone()], &["**/.git", "**/.DS_Store"]);
+        workspace.reload();
+        workspace.toggle_expanded(&root.join("src"));
+
+        assert_eq!(
+            shape(&workspace),
+            [
+                (file_name(&root), 0, true),
+                ("src".to_string(), 1, false),
+                ("main.rs".to_string(), 2, false),
+                (".gitignore".to_string(), 1, false),
+            ]
+        );
+
+        workspace.set_exclude(&[]);
+        let rows = shape(&workspace);
+        assert!(rows.iter().any(|(name, _, _)| name == ".DS_Store"));
+        assert!(rows.iter().any(|(name, _, _)| name == ".git"));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[gpui_kit::test]
+    async fn an_excluded_folder_is_never_descended(cx: &mut TestAppContext) {
+        let root = fixture("exclude-dir");
+        std::fs::create_dir_all(root.join("node_modules").join("pkg")).unwrap();
+        std::fs::write(root.join("node_modules").join("pkg").join("index.js"), "").unwrap();
+
+        let mut workspace = workspace_excluding(cx, vec![root.clone()], &["**/node_modules"]);
+        workspace.expand(root.join("node_modules"));
+        workspace.expand(root.join("node_modules").join("pkg"));
+        workspace.reload();
+
+        assert_eq!(shape(&workspace), [(file_name(&root), 0, true)]);
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
