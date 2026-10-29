@@ -1,8 +1,9 @@
-//! Material Icon Theme file icons.
+//! Seti file icons.
 //!
-//! The SVGs are vendored from the VS Code Material Icon Theme (MIT); see
-//! `assets/file-icons/LICENSE`. The name and extension associations mirror that
-//! theme's generated manifest.
+//! The SVGs are vendored from Seti UI (MIT); see `assets/file-icons/LICENSE`
+//! and `scripts/vendor-seti-icons.sh`. The name and extension associations are
+//! Teak's own: Seti publishes its associations as a VS Code font plus
+//! `languageIds`, not as an extension map that could be copied.
 
 use std::path::Path;
 
@@ -12,11 +13,21 @@ macro_rules! icon {
     };
 }
 
-const DEFAULT_FILE: &[u8] = icon!("file");
+const DEFAULT_FILE: &[u8] = icon!("default");
 const DEFAULT_FOLDER: &[u8] = icon!("folder");
 
 pub(crate) fn folder_icon() -> &'static [u8] {
     DEFAULT_FOLDER
+}
+
+/// Whether `bytes` paints itself. Seti's icons are half brand-colored and half
+/// bare paths meant to be tinted, so the painter needs to tell them apart: an
+/// SVG with no `fill` renders black, which disappears on a dark sidebar.
+pub(crate) fn has_own_color(bytes: &[u8]) -> bool {
+    const MARKERS: [&[u8]; 3] = [b"fill=\"#", b"fill:#", b"stop-color=\"#"];
+    MARKERS
+        .iter()
+        .any(|marker| bytes.windows(marker.len()).any(|window| window == *marker))
 }
 
 pub(crate) fn file_icon(path: &Path) -> &'static [u8] {
@@ -44,21 +55,8 @@ fn icon_for_name(name: &str) -> Option<&'static [u8]> {
         }
         ".editorconfig" => icon!("editorconfig"),
         ".npmrc" => icon!("npm"),
-        "package.json" | "package-lock.json" | "npm-shrinkwrap.json" => icon!("nodejs"),
+        "package.json" | "package-lock.json" | "npm-shrinkwrap.json" => icon!("npm"),
         "tsconfig.json" => icon!("tsconfig"),
-        ".eslintrc" | ".eslintrc.js" | ".eslintrc.cjs" | ".eslintrc.json" | ".eslintrc.yaml"
-        | ".eslintrc.yml" | "eslint.config.js" | "eslint.config.mjs" | "eslint.config.cjs"
-        | "eslint.config.ts" => icon!("eslint"),
-        ".prettierrc"
-        | ".prettierrc.json"
-        | ".prettierrc.js"
-        | ".prettierrc.cjs"
-        | ".prettierrc.yaml"
-        | ".prettierrc.yml"
-        | "prettier.config.js"
-        | "prettier.config.cjs" => {
-            icon!("prettier")
-        }
         ".babelrc" | ".babelrc.js" | ".babelrc.cjs" | "babel.config.js" | "babel.config.cjs"
         | "babel.config.json" => icon!("babel"),
         "vite.config.js" | "vite.config.ts" | "vite.config.mjs" | "vite.config.mts"
@@ -70,24 +68,29 @@ fn icon_for_name(name: &str) -> Option<&'static [u8]> {
         | "webpack.config.babel.js" => icon!("webpack"),
         "makefile" | "makefile.am" | "makefile.in" | "gnumakefile" => icon!("makefile"),
         "settings.json" => icon!("settings"),
-        "license" | "licence" | "copying" | "copyright" => icon!("license"),
-        ".envrc" => icon!("console"),
+        "yarn.lock" => icon!("yarn"),
+        "bower.json" | ".bowerrc" => icon!("bower"),
+        "firebase.json" | ".firebaserc" => icon!("firebase"),
+        ".envrc" => icon!("config"),
         ".bashrc" | ".bash_profile" | ".bash_login" | ".bash_aliases" | ".profile" | ".zshrc"
         | ".zprofile" | ".zshenv" | ".zlogin" | ".kshrc" | ".cshrc" | ".tcshrc" | ".inputrc" => {
-            icon!("console")
+            icon!("shell")
         }
         _ => {
             if name.starts_with("dockerfile") || name.starts_with("docker-compose") {
                 return Some(icon!("docker"));
             }
-            if name.starts_with("readme") {
-                return Some(icon!("readme"));
-            }
             if name.starts_with("license") || name.starts_with("licence") {
                 return Some(icon!("license"));
             }
+            if name.starts_with(".eslintrc") || name.starts_with("eslint.config.") {
+                return Some(icon!("eslint"));
+            }
+            if name.starts_with(".prettierrc") || name.starts_with("prettier.config.") {
+                return Some(icon!("config"));
+            }
             if name.starts_with(".env") {
-                return Some(icon!("tune"));
+                return Some(icon!("config"));
             }
             return None;
         }
@@ -101,24 +104,21 @@ fn icon_for_extension(ext: &str) -> Option<&'static [u8]> {
         "js" | "mjs" | "cjs" => icon!("javascript"),
         "jsx" => icon!("react"),
         "ts" | "mts" | "cts" => icon!("typescript"),
-        "tsx" => icon!("react_ts"),
+        "tsx" => icon!("react"),
         "vue" => icon!("vue"),
         "svelte" => icon!("svelte"),
-        "astro" => icon!("astro"),
         "py" | "pyi" | "pyw" => icon!("python"),
         "php" | "phtml" | "php3" | "php4" | "php5" => icon!("php"),
-        "html" | "htm" => icon!("html"),
+        "html" | "htm" | "razor" | "cshtml" => icon!("html"),
         "css" => icon!("css"),
         "scss" | "sass" => icon!("sass"),
         "less" => icon!("less"),
         "styl" | "stylus" => icon!("stylus"),
         "coffee" => icon!("coffee"),
         "ls" => icon!("livescript"),
-        "c" => icon!("c"),
-        "h" => icon!("h"),
-        "cpp" | "cc" | "cxx" | "c++" | "cp" => icon!("cpp"),
-        "hpp" | "hh" | "hxx" | "h++" => icon!("hpp"),
-        "cs" | "csx" => icon!("csharp"),
+        "c" | "h" => icon!("c"),
+        "cpp" | "cc" | "cxx" | "c++" | "cp" | "hpp" | "hh" | "hxx" | "h++" => icon!("cpp"),
+        "cs" | "csx" => icon!("c-sharp"),
         "java" => icon!("java"),
         "kt" | "kts" => icon!("kotlin"),
         "swift" => icon!("swift"),
@@ -128,7 +128,6 @@ fn icon_for_extension(ext: &str) -> Option<&'static [u8]> {
         "dart" => icon!("dart"),
         "scala" | "sc" => icon!("scala"),
         "ex" | "exs" => icon!("elixir"),
-        "erl" | "hrl" => icon!("erlang"),
         "hs" => icon!("haskell"),
         "clj" | "cljs" | "cljc" | "edn" => icon!("clojure"),
         "elm" => icon!("elm"),
@@ -136,40 +135,34 @@ fn icon_for_extension(ext: &str) -> Option<&'static [u8]> {
         "zig" | "zon" => icon!("zig"),
         "jl" => icon!("julia"),
         "r" => icon!("r"),
-        "asm" | "s" => icon!("assembly"),
-        "f" | "f90" | "f95" | "f03" | "for" | "ftn" => icon!("fortran"),
-        "m" => icon!("objective-c"),
+        "asm" | "s" => icon!("asm"),
         "ml" | "mli" => icon!("ocaml"),
-        "fs" | "fsi" | "fsx" | "fsscript" => icon!("fsharp"),
+        "fs" | "fsi" | "fsx" | "fsscript" => icon!("f-sharp"),
         "purs" => icon!("purescript"),
-        "re" | "rei" => icon!("reason"),
+        "re" | "rei" => icon!("reasonml"),
         "res" | "resi" => icon!("rescript"),
         "graphql" | "gql" => icon!("graphql"),
         "prisma" => icon!("prisma"),
-        "sol" => icon!("solidity"),
         "tex" | "latex" | "sty" | "cls" => icon!("tex"),
         "tf" | "tfvars" | "tfstate" => icon!("terraform"),
-        "nginx" | "nginxconf" => icon!("nginx"),
-        "sh" | "bash" | "zsh" | "ksh" | "fish" | "ash" => icon!("console"),
+        "nginx" | "nginxconf" => icon!("config"),
+        "sh" | "bash" | "zsh" | "ksh" | "fish" | "ash" => icon!("shell"),
         "ps1" | "psm1" | "psd1" => icon!("powershell"),
-        "ipynb" => icon!("jupyter"),
+        "ipynb" => icon!("notebook"),
         "j2" | "jinja" | "jinja2" => icon!("jinja"),
-        "pug" | "jade" => icon!("pug"),
+        "pug" => icon!("pug"),
+        "jade" => icon!("jade"),
         "ejs" => icon!("ejs"),
         "twig" => icon!("twig"),
         "haml" => icon!("haml"),
-        "razor" | "cshtml" => icon!("razor"),
         "json" | "jsonc" | "json5" | "jsonl" => icon!("json"),
-        "yaml" | "yml" => icon!("yaml"),
-        "toml" => icon!("toml"),
+        "yaml" | "yml" => icon!("yml"),
+        "toml" => icon!("config"),
         "xml" | "xsd" | "xsl" | "xslt" | "dtd" | "plist" => icon!("xml"),
-        "md" | "markdown" => icon!("markdown"),
-        "mdx" => icon!("mdx"),
-        "sql" | "db" | "sqlite" | "sqlite3" | "mysql" | "pgsql" => icon!("database"),
-        "csv" | "tsv" => icon!("table"),
-        "lock" => icon!("lock"),
-        "key" | "pem" | "p12" | "pfx" => icon!("key"),
-        "crt" | "cer" | "der" => icon!("certificate"),
+        "md" | "markdown" | "mdx" => icon!("markdown"),
+        "sql" | "db" | "sqlite" | "sqlite3" | "mysql" | "pgsql" => icon!("db"),
+        "csv" | "tsv" => icon!("csv"),
+        "lock" | "key" | "pem" | "p12" | "pfx" | "crt" | "cer" | "der" => icon!("lock"),
         "svg" => icon!("svg"),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff" | "avif" => {
             icon!("image")
@@ -180,8 +173,8 @@ fn icon_for_extension(ext: &str) -> Option<&'static [u8]> {
         "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "rar" | "7z" | "zst" => icon!("zip"),
         "pdf" => icon!("pdf"),
         "doc" | "docx" | "odt" | "rtf" | "pages" => icon!("word"),
-        "txt" => icon!("document"),
-        "log" => icon!("log"),
+        "wasm" => icon!("wasm"),
+        "wat" => icon!("wat"),
         _ => return None,
     };
     Some(icon)
@@ -199,19 +192,20 @@ mod tests {
             ("app.mjs", icon!("javascript")),
             ("component.jsx", icon!("react")),
             ("app.ts", icon!("typescript")),
-            ("view.tsx", icon!("react_ts")),
+            ("view.tsx", icon!("react")),
             ("index.html", icon!("html")),
             ("style.css", icon!("css")),
             ("style.scss", icon!("sass")),
             ("script.py", icon!("python")),
             ("index.php", icon!("php")),
             ("data.json", icon!("json")),
-            ("config.yaml", icon!("yaml")),
-            ("Cargo.toml", icon!("toml")),
+            ("config.yaml", icon!("yml")),
+            ("Cargo.toml", icon!("config")),
             ("Cargo.lock", icon!("lock")),
-            ("notes.txt", icon!("document")),
+            ("notes.txt", DEFAULT_FILE),
             ("photo.png", icon!("image")),
             ("archive.zip", icon!("zip")),
+            ("program.wasm", icon!("wasm")),
         ] {
             assert_eq!(file_icon(Path::new(file)), expected, "{file}");
         }
@@ -220,8 +214,8 @@ mod tests {
     #[test]
     fn matches_special_file_names_before_extension() {
         for (file, expected) in [
-            ("package.json", icon!("nodejs")),
-            ("package-lock.json", icon!("nodejs")),
+            ("package.json", icon!("npm")),
+            ("package-lock.json", icon!("npm")),
             ("tsconfig.json", icon!("tsconfig")),
             (".gitignore", icon!("git")),
             (".editorconfig", icon!("editorconfig")),
@@ -229,11 +223,11 @@ mod tests {
             ("Dockerfile.prod", icon!("docker")),
             ("docker-compose.yml", icon!("docker")),
             ("Makefile", icon!("makefile")),
-            ("README.md", icon!("readme")),
             ("LICENSE", icon!("license")),
             (".npmrc", icon!("npm")),
-            (".env", icon!("tune")),
-            (".bashrc", icon!("console")),
+            (".env", icon!("config")),
+            (".bashrc", icon!("shell")),
+            ("yarn.lock", icon!("yarn")),
         ] {
             assert_eq!(file_icon(Path::new(file)), expected, "{file}");
         }
@@ -244,5 +238,14 @@ mod tests {
         for file in ["notes.unknownext", "Makefile.unknown", "noextension"] {
             assert_eq!(file_icon(Path::new(file)), DEFAULT_FILE, "{file}");
         }
+    }
+
+    #[test]
+    fn tells_colored_icons_from_bare_ones() {
+        // Seti's Go icon paints itself; its Rust icon has no `fill` and relies
+        // on the theme tint, so the painter must not rasterize it as-is.
+        assert!(has_own_color(icon!("go")));
+        assert!(!has_own_color(icon!("rust")));
+        assert!(!has_own_color(icon!("default")));
     }
 }

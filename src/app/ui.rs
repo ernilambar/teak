@@ -24,7 +24,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::file_icons::{file_icon, folder_icon};
+use crate::file_icons::{file_icon, folder_icon, has_own_color};
 use crate::git::{Branch, Status};
 use crate::language::{LANGUAGES, editor_language_id};
 use crate::paths::{display_path, file_name, format_size};
@@ -201,6 +201,12 @@ fn image_dimensions(image: &Image) -> Option<(usize, usize)> {
 /// instead, which preserves its fills. A rasterized icon cannot be recolored,
 /// so a requested `tint` draws the monochrome silhouette even in the colorful
 /// style; it is the same glyph, in one color.
+///
+/// Only icons that paint themselves take the image path. Seti ships bare paths
+/// for roughly half its set — Rust, Swift, Vue, the default file and folder
+/// among them — and an SVG with no `fill` is black, which a dark sidebar hides
+/// entirely. Those fall through to the tinted `svg` element, which paints them
+/// in the row's foreground color.
 pub(super) fn file_type_icon(
     bytes: &'static [u8],
     style: IconStyle,
@@ -209,6 +215,7 @@ pub(super) fn file_type_icon(
 ) -> AnyElement {
     if tint.is_none()
         && style == IconStyle::Colorful
+        && has_own_color(bytes)
         && let Some(image) = colored_icon(bytes, cx)
     {
         return img(image)
@@ -1618,6 +1625,26 @@ mod tests {
     }
 
     #[test]
+    fn every_vendored_file_icon_parses() {
+        let renderer = SvgRenderer::new(Arc::new(()));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/file-icons");
+        let mut broken = Vec::new();
+
+        for entry in std::fs::read_dir(&root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("svg") {
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            if renderer.parse_svg(&bytes).is_err() {
+                broken.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            }
+        }
+
+        assert!(broken.is_empty(), "unparsable file icons: {broken:?}");
+    }
+
+    #[test]
     fn branch_labels_show_divergence_only_when_there_is_some() {
         let branch = |name: &str, ahead, behind| Branch {
             name: name.to_string(),
@@ -1654,30 +1681,29 @@ mod tests {
     }
 
     #[test]
-    fn colorful_icons_are_square_at_the_cached_size() {
-        // Icons ship at different intrinsic sizes (16px and 32px viewBoxes); the
-        // requested size must yield a uniform square raster either way.
+    fn colorful_icons_rasterize_square() {
+        // Icons ship at different viewBoxes; a raster taller than it is wide
+        // would be stretched by the fixed-size `img`. resvg truncates a
+        // fractional final pixel, so the edge can land one short of the
+        // request; squareness is what matters.
         for bytes in [
             file_icon(Path::new("main.rs")),
             file_icon(Path::new("notes.txt")),
+            file_icon(Path::new("app.js")),
         ] {
-            let image = rasterize(bytes);
-            assert_eq!(
-                image.size(0),
-                gpui_kit::Size::new(
-                    DevicePixels(COLOR_ICON_PIXELS),
-                    DevicePixels(COLOR_ICON_PIXELS)
-                ),
-            );
+            let size = rasterize(bytes).size(0);
+            assert_eq!(size.width, size.height, "not square: {size:?}");
+            assert!(size.width.0 >= COLOR_ICON_PIXELS - 1, "{size:?}");
         }
     }
 
     #[test]
     fn colorful_icons_keep_the_svg_fill_color() {
-        // Rust's icon is brand orange (#ff7043). The tinted `svg` element would
-        // flatten it to one theme color, so a red-leaning opaque pixel proves
-        // the image path preserved the fill. RenderImage bytes are BGRA.
-        let image = rasterize(file_icon(Path::new("main.rs")));
+        // JavaScript's icon is brand yellow (#F1DD3F). The tinted `svg` element
+        // would flatten it to one theme color, so a blue-leaning pixel proves
+        // the image path preserved the fill. RenderImage bytes are BGRA, so
+        // `pixel[0]` is blue and `pixel[2]` is red.
+        let image = rasterize(file_icon(Path::new("app.js")));
         let (pixels, _) = image.as_bytes(0).unwrap().as_chunks::<4>();
         assert!(
             pixels
