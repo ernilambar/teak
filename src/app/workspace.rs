@@ -504,31 +504,60 @@ impl Workspace {
     /// this way rather than refused or added a second time. Returns false when
     /// `path` is not under any open root.
     pub(super) fn reveal(&mut self, path: &Path) -> bool {
-        let Some(root) = nearest_root(&self.roots, path).map(Path::to_path_buf) else {
+        if self.expand_to(path).is_none() {
             return false;
-        };
+        }
 
-        self.expanded.insert(root.clone());
+        self.sidebar_visible = true;
+        self.reload();
+        self.scroll_to(path, ScrollStrategy::Center);
+        true
+    }
+
+    /// Reveals `path` for a change of the active tab: expands and selects it,
+    /// scrolling only when its row is off screen. The sidebar keeps its
+    /// current visibility, so a hidden Explorer stays hidden. Returns false
+    /// when `path` is not under an open root.
+    pub(super) fn reveal_active(&mut self, path: &Path) -> bool {
+        match self.expand_to(path) {
+            // Only the newly expanded folders need reading; the rest of the
+            // cached tree and its rows stay valid.
+            Some(true) => self.rebuild_rows(),
+            Some(false) => {}
+            None => return false,
+        }
+
+        self.scroll_to(path, ScrollStrategy::Nearest);
+        true
+    }
+
+    /// Expands `path`'s ancestors and selects its row. Returns `None` when
+    /// `path` is not under an open root, otherwise whether the expansion set
+    /// grew, so the caller knows the rows need rebuilding.
+    fn expand_to(&mut self, path: &Path) -> Option<bool> {
+        let root = nearest_root(&self.roots, path).map(Path::to_path_buf)?;
+        let mut expanded = self.expanded.insert(root.clone());
         let mut ancestor = path.parent();
         while let Some(dir) = ancestor {
             if !dir.starts_with(&root) {
                 break;
             }
-            self.expanded.insert(dir.to_path_buf());
+            expanded |= self.expanded.insert(dir.to_path_buf());
             ancestor = dir.parent();
         }
         if path.is_dir() {
-            self.expanded.insert(path.to_path_buf());
+            expanded |= self.expanded.insert(path.to_path_buf());
         }
 
         self.selected = Some(path.to_path_buf());
-        self.sidebar_visible = true;
-        self.reload();
+        Some(expanded)
+    }
 
+    /// Scrolls the sidebar list to `path`'s row, when it is currently listed.
+    fn scroll_to(&self, path: &Path, strategy: ScrollStrategy) {
         if let Some(ix) = self.rows.iter().position(|row| row.path.as_path() == path) {
-            self.scroll.scroll_to_item(ix, ScrollStrategy::Center);
+            self.scroll.scroll_to_item(ix, strategy);
         }
-        true
     }
 
     /// Removes one workspace root and its subtree expansion state. Open tabs
@@ -775,6 +804,64 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[gpui_kit::test]
+    async fn revealing_the_active_tab_keeps_a_hidden_sidebar_hidden(cx: &mut TestAppContext) {
+        let root = fixture("active-reveal");
+        let nested = root.join("one").join("two");
+        std::fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("file.txt");
+        std::fs::write(&file, "").unwrap();
+
+        let mut workspace = workspace(cx, vec![root.clone()]);
+        workspace.reload();
+        workspace.toggle_expanded(&root);
+        workspace.toggle_sidebar_visible();
+        assert!(!workspace.sidebar_visible());
+
+        assert!(workspace.reveal_active(&file));
+        assert!(workspace.is_expanded(&root));
+        assert!(workspace.is_expanded(&root.join("one")));
+        assert_eq!(
+            workspace.selected(),
+            Some(file.as_path()),
+            "the active tab's file is selected"
+        );
+        assert!(
+            !workspace.sidebar_visible(),
+            "revealing for a tab never opens a hidden sidebar"
+        );
+        assert!(
+            shape(&workspace)
+                .iter()
+                .any(|(name, depth, _)| name == "file.txt" && *depth == 3),
+            "the revealed file is visible at its depth"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[gpui_kit::test]
+    async fn revealing_the_active_tab_ignores_a_path_outside_the_roots(cx: &mut TestAppContext) {
+        let root = fixture("active-outside");
+        let outside = fixture("active-outside-other");
+        let file = outside.join("file.txt");
+        std::fs::write(&file, "").unwrap();
+
+        let mut workspace = workspace(cx, vec![root.clone()]);
+        workspace.reload();
+        workspace.set_selected(Some(root.clone()));
+
+        assert!(!workspace.reveal_active(&file));
+        assert_eq!(
+            workspace.selected(),
+            Some(root.as_path()),
+            "a file outside every root leaves the selection alone"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     #[gpui_kit::test]

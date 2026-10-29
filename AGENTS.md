@@ -112,6 +112,9 @@ in headless environments.
   hides matching paths from the tree, Quick Open and Find in Files, and defaults to
   version-control metadata plus `.DS_Store` and `Thumbs.db`; `search.exclude` adds
   search-only patterns on top. An empty `files.exclude` shows everything.
+  `files.auto_reveal` (on by default) expands and selects the active tab's file in the tree
+  when tab focus changes, scrolling only when its row is off screen; a hidden sidebar stays
+  hidden.
 - `vendor/gpui-base` is gpui-base with `patches/gpui-base.patch` applied, wired in through
   `[patch.crates-io]`. It adds `selected_ranges()` (read every selection); upstream
   `add_selection` covers adding them. It also adds the gutter-mark API

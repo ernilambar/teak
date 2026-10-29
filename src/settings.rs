@@ -136,11 +136,18 @@ pub(crate) struct FilesSettings {
     /// An empty array shows everything, including dot files.
     #[serde(default = "default_file_exclude")]
     pub(crate) exclude: Vec<String>,
+    /// Expand and select the active tab's file in the tree when tab focus
+    /// changes. A hidden sidebar stays hidden.
+    pub(crate) auto_reveal: Option<bool>,
 }
 
 impl FilesSettings {
     pub(crate) fn exclude(&self) -> &[String] {
         &self.exclude
+    }
+
+    pub(crate) fn auto_reveal(&self) -> bool {
+        self.auto_reveal.unwrap_or(true)
     }
 }
 
@@ -150,6 +157,7 @@ impl Default for FilesSettings {
     fn default() -> Self {
         Self {
             exclude: default_file_exclude(),
+            auto_reveal: None,
         }
     }
 }
@@ -376,6 +384,7 @@ pub(crate) fn defaults_document(
 ) -> String {
     let editor = EditorSettings::default();
     let ui = UiSettings::default();
+    let files = FilesSettings::default();
     let defaults = Settings {
         editor: EditorSettings {
             font_family: Some(mono_family.to_string()),
@@ -409,7 +418,10 @@ pub(crate) fn defaults_document(
         search: SearchSettings {
             exclude: Some(Vec::new()),
         },
-        files: FilesSettings::default(),
+        files: FilesSettings {
+            exclude: files.exclude().to_vec(),
+            auto_reveal: Some(files.auto_reveal()),
+        },
     };
     serde_json::to_string_pretty(&defaults).expect("settings serialize as JSON")
 }
@@ -718,6 +730,22 @@ mod tests {
             "an empty list shows everything"
         );
         assert!(parse_settings(r#"{"files": {"exclud": []}}"#).is_err());
+    }
+
+    #[test]
+    fn files_auto_reveal_defaults_on_and_honors_an_override() {
+        assert!(
+            Settings::default().files.auto_reveal(),
+            "the explorer follows the active tab unless told otherwise"
+        );
+        assert!(
+            parse_settings("{}").unwrap().files.auto_reveal(),
+            "an absent files section keeps it on"
+        );
+
+        let settings = parse_settings(r#"{"files": {"auto_reveal": false}}"#).unwrap();
+        assert!(!settings.files.auto_reveal());
+        assert!(parse_settings(r#"{"files": {"auto_reveal": "no"}}"#).is_err());
     }
 
     #[test]

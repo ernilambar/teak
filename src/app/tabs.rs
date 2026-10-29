@@ -682,6 +682,20 @@ impl TeakApp {
         }
     }
 
+    /// Points the Explorer at the active tab: expands its folders, selects its
+    /// row and scrolls only when that row is off screen. A hidden sidebar stays
+    /// hidden, and tabs with no file (Untitled, Find Results, diffs) leave the
+    /// tree alone. `files.auto_reveal` turns this off.
+    fn reveal_active_tab_in_tree(&mut self) {
+        if !self.settings.values.files.auto_reveal() {
+            return;
+        }
+        let Some(path) = self.active().and_then(|tab| tab.document.path.clone()) else {
+            return;
+        };
+        self.workspace.reveal_active(&path);
+    }
+
     pub(super) fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.tabs.set_active(Some(ix));
         self.reveal_active_tab();
@@ -695,6 +709,7 @@ impl TeakApp {
         // changes, since the tree cache is otherwise only refreshed on
         // activation and in-app file operations.
         self.reload_tree(cx);
+        self.reveal_active_tab_in_tree();
         self.check_outside_changes(window, cx);
         cx.notify();
     }
@@ -966,6 +981,7 @@ impl TeakApp {
             // Quit, New File…) is reachable from the menu bar.
             self.focus_handle.focus(window, cx);
         }
+        self.reveal_active_tab_in_tree();
         self.sync_counts(cx);
         self.save_session(cx);
         cx.notify();
@@ -1392,5 +1408,98 @@ mod tests {
             );
         })
         .unwrap();
+    }
+
+    /// Switching tabs points the Explorer at the new file: its folders expand
+    /// and it becomes the selected row, without opening a hidden sidebar.
+    #[gpui_kit::test]
+    async fn switching_tabs_reveals_the_active_file_in_the_tree(cx: &mut TestAppContext) {
+        let root = std::env::temp_dir().join(format!("teak-auto-reveal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let nested = root.join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        let top = root.join("top.txt");
+        let deep = nested.join("deep.txt");
+        std::fs::write(&top, "top\n").unwrap();
+        std::fs::write(&deep, "deep\n").unwrap();
+
+        let (handle, app) = open_app_in(cx, vec![root.clone()]);
+        for path in [&top, &deep] {
+            cx.update_window(handle, |_, window, cx| {
+                app.update(cx, |this, cx| {
+                    let content = super::super::files::read_file(path).unwrap();
+                    this.add_file_tab(path.clone(), content, false, window, cx);
+                });
+            })
+            .unwrap();
+        }
+
+        let state = |cx: &mut TestAppContext| {
+            cx.read(|cx| {
+                let this = app.read(cx);
+                (
+                    this.workspace.selected().map(std::path::Path::to_path_buf),
+                    this.workspace.is_expanded(&nested),
+                    this.workspace.sidebar_visible(),
+                )
+            })
+        };
+
+        // The deep tab starts active but was opened without a tab switch.
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| this.activate_tab(0, window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            state(cx),
+            (Some(top.clone()), false, true),
+            "the first tab is selected and the nested folder stays closed"
+        );
+
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| this.activate_tab(1, window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            state(cx),
+            (Some(deep.clone()), true, true),
+            "the nested file expands its folder and is selected"
+        );
+
+        // A hidden sidebar stays hidden; the selection still follows.
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.workspace.toggle_sidebar_visible();
+                this.activate_tab(0, window, cx);
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            state(cx),
+            (Some(top.clone()), true, false),
+            "revealing never opens a hidden sidebar and never collapses a folder"
+        );
+
+        // `files.auto_reveal: false` leaves the tree where the user put it.
+        cx.update(|cx| {
+            app.update(cx, |this, _cx| {
+                this.settings.values.files.auto_reveal = Some(false);
+            });
+        });
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| this.activate_tab(1, window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            state(cx),
+            (Some(top), true, false),
+            "the setting turns auto-reveal off"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
