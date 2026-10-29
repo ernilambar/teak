@@ -49,6 +49,7 @@ use crate::settings::{
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
 use crate::watcher::{Change, Watcher};
 use crate::windows::{AppServices, WindowSeed, cascaded_frame};
+use crate::workspace_file;
 use crate::{
     About, BringAllToFront, CheckForUpdates, ClearRecent, CloseWindow, CopyFileName, CopyFilePath,
     CopyRelativePath, InstallCli, JumpToTab, MinimizeWindow, NewWindow, NextTab,
@@ -118,6 +119,24 @@ fn line_change_color(kind: git::LineKind, cx: &App) -> Hsla {
 /// Drops a tab's gutter marks, for a file git cannot describe.
 fn clear_gutter_marks(editor: &Entity<EditorState>, cx: &mut App) {
     editor.update(cx, |state, cx| state.set_gutter_marks(Vec::new(), cx));
+}
+
+/// The native window title: the app name, the active workspace when one is
+/// open, then the active file's path. The workspace sits ahead of the file so
+/// macOS truncating a long path never hides which workspace the window holds.
+fn window_title(workspace: Option<&Path>, file: Option<&Path>, has_tab: bool) -> String {
+    let mut title = WINDOW_TITLE.to_string();
+    if let Some(workspace) = workspace {
+        title.push_str(" — ");
+        title.push_str(&workspace_file::label(workspace));
+    }
+    if let Some(path) = file {
+        title.push_str(" — ");
+        title.push_str(&path.display().to_string());
+    } else if has_tab {
+        title.push_str(" — Untitled");
+    }
+    title
 }
 
 pub(crate) struct TeakApp {
@@ -199,22 +218,14 @@ impl TeakApp {
         self.services.refresh_menus_others(self.window_id, cx);
     }
 
-    /// Keeps the native window title in sync with the focused tab, appending the
-    /// file's full path after the app name. With no file active, a workspace's
-    /// name stands in so two windows are told apart at a glance.
+    /// Keeps the native window title in sync with the workspace and the focused
+    /// tab.
     fn sync_window_title(&mut self, window: &mut Window) {
-        let title = if let Some(path) = self.active().and_then(|tab| tab.document.path.as_deref()) {
-            format!("{WINDOW_TITLE} — {}", path.display())
-        } else if let Some(workspace) = self.workspace_file.as_deref() {
-            format!(
-                "{WINDOW_TITLE} — {}",
-                crate::workspace_file::label(workspace)
-            )
-        } else if self.active().is_some() {
-            format!("{WINDOW_TITLE} — Untitled")
-        } else {
-            WINDOW_TITLE.to_string()
-        };
+        let title = window_title(
+            self.workspace_file.as_deref(),
+            self.active().and_then(|tab| tab.document.path.as_deref()),
+            self.active().is_some(),
+        );
 
         if self.chrome.title_changed(&title) {
             window.set_window_title(&title);
@@ -1743,7 +1754,32 @@ mod tests {
 
     use super::git_may_have_changed;
     use super::test_support::{open_app, open_app_in};
+    use super::window_title;
     use crate::session::WindowSession;
+
+    /// A workspace stays in the title whichever tab is focused, so two windows
+    /// on different workspaces never look the same.
+    #[test]
+    fn the_title_keeps_the_workspace_ahead_of_the_file() {
+        let workspace = Path::new("/work/work.teak-workspace");
+        let file = Path::new("/work/work/src/main.rs");
+
+        assert_eq!(
+            window_title(Some(workspace), Some(file), true),
+            "Teak — work — /work/work/src/main.rs"
+        );
+        assert_eq!(
+            window_title(Some(workspace), None, true),
+            "Teak — work — Untitled"
+        );
+        assert_eq!(window_title(Some(workspace), None, false), "Teak — work");
+        assert_eq!(
+            window_title(None, Some(file), true),
+            "Teak — /work/work/src/main.rs"
+        );
+        assert_eq!(window_title(None, None, true), "Teak — Untitled");
+        assert_eq!(window_title(None, None, false), "Teak");
+    }
 
     /// Initializes a repository in `dir` and commits what it holds. A machine
     /// without git leaves the caller with nothing to check.
