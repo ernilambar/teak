@@ -8,9 +8,9 @@
 //! Paths in the file are relative to the file itself, so a workspace can be
 //! committed and moved with the tree it describes.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Extension teak writes. Keep it in sync with the file-type help text.
 pub(crate) const EXTENSION: &str = "teak-workspace";
@@ -20,11 +20,11 @@ pub(crate) const VSCODE_EXTENSION: &str = "code-workspace";
 
 /// One `folders` entry: VS Code and Sublime write objects with a `path`; a bare
 /// string is accepted too so hand-written files can stay short.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum FolderEntry {
-    /// `{ "path": "../api", "name": "API" }`. Unknown keys are ignored, which
-    /// is what lets a `.code-workspace` keep its per-folder patterns.
+    /// `{ "path": "../api", "name": "API" }`. Unknown keys are ignored on read,
+    /// which is what lets a `.code-workspace` keep its per-folder patterns.
     Object {
         path: PathBuf,
     },
@@ -43,7 +43,7 @@ impl FolderEntry {
 /// The part of a workspace file teak understands. Unknown top-level keys —
 /// `$schema`, `settings`, `tasks`, `launch`, `extensions` — are tolerated
 /// because deserialization ignores what it was not asked for.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 struct WorkspaceDocument {
     folders: Vec<FolderEntry>,
@@ -148,11 +148,71 @@ pub(crate) fn fold(folders: Vec<PathBuf>) -> Vec<PathBuf> {
     kept
 }
 
+/// Writes `folders` to `path`, relative to the file so the workspace can move
+/// with the tree it describes. Written to a temporary file first so a failed
+/// write never truncates an existing workspace.
+pub(crate) fn save(path: &Path, folders: &[PathBuf]) -> Result<(), String> {
+    let base = base_dir(path);
+    let document = WorkspaceDocument {
+        folders: folders
+            .iter()
+            .map(|folder| FolderEntry::Object {
+                path: relative_from(&base, folder).unwrap_or_else(|| folder.clone()),
+            })
+            .collect(),
+    };
+    let mut json = serde_json::to_string_pretty(&document)
+        .map_err(|error| format!("Could not write {}: {error}", path.display()))?;
+    json.push('\n');
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
+    }
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("workspace.{EXTENSION}"));
+    let temp = path.with_file_name(format!("{name}.tmp"));
+    std::fs::write(&temp, json)
+        .map_err(|error| format!("Could not write {}: {error}", temp.display()))?;
+    std::fs::rename(&temp, path)
+        .map_err(|error| format!("Could not replace {}: {error}", path.display()))
+}
+
+/// `target` expressed relative to `base`, for the workspace file. `None` only
+/// when the two paths do not share a root, which on macOS means never; the
+/// caller then writes the absolute path.
+fn relative_from(base: &Path, target: &Path) -> Option<PathBuf> {
+    let base: Vec<Component> = base.components().collect();
+    let target: Vec<Component> = target.components().collect();
+    if base.first() != target.first() {
+        return None;
+    }
+    let common = base
+        .iter()
+        .zip(&target)
+        .take_while(|(left, right)| left == right)
+        .count();
+
+    let mut relative = PathBuf::new();
+    for _ in common..base.len() {
+        relative.push("..");
+    }
+    for component in &target[common..] {
+        relative.push(component.as_os_str());
+    }
+    if relative.as_os_str().is_empty() {
+        relative.push(".");
+    }
+    Some(relative)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{EXTENSION, fold, is_workspace_path, load, parse};
+    use super::{EXTENSION, fold, is_workspace_path, load, parse, save};
 
     fn fixture(name: &str) -> PathBuf {
         let root =
@@ -289,6 +349,51 @@ mod tests {
         assert_eq!(folders.len(), 1);
         assert_eq!(folders[0], root);
         assert!(folders[0].is_absolute());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn save_writes_relative_paths_that_load_back() {
+        let root = fixture("save");
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        std::fs::create_dir_all(root.join("api")).unwrap();
+        let file = root.join(format!("work.{EXTENSION}"));
+
+        save(&file, &[root.join("app"), root.join("api")]).unwrap();
+
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert!(written.contains(r#""path": "app""#), "{written}");
+        assert!(written.contains(r#""path": "api""#), "{written}");
+        assert!(
+            !written.contains(&root.display().to_string()),
+            "the folders are written relative to the file:\n{written}"
+        );
+        assert_eq!(
+            load(&file).unwrap(),
+            [root.join("app"), root.join("api")],
+            "a saved workspace reopens with the same folders"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn save_climbs_out_of_the_file_directory_for_a_sibling_folder() {
+        let root = fixture("save-sibling");
+        std::fs::create_dir_all(root.join("repo")).unwrap();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        let file = root.join("repo").join(format!("work.{EXTENSION}"));
+
+        save(&file, &[root.join("repo"), root.join("shared")]).unwrap();
+
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert!(written.contains(r#""path": ".""#), "{written}");
+        assert!(written.contains(r#""path": "../shared""#), "{written}");
+        assert_eq!(
+            load(&file).unwrap(),
+            [root.join("repo"), root.join("shared")]
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -317,24 +317,23 @@ impl TeakApp {
         cx.notify();
     }
 
-    /// Publishes this window's current state to the shared session writer.
-    pub(crate) fn save_session(&self, cx: &mut Context<Self>) {
+    /// This window's state, as the session stores it. Switching workspaces
+    /// reuses it so the window's find text, sidebar geometry and frame carry
+    /// across the swap.
+    pub(crate) fn window_session(&self) -> WindowSession {
         let mut expanded: Vec<PathBuf> = self.workspace.expanded().iter().cloned().collect();
         expanded.sort();
 
-        let tabs: Vec<PathBuf> = self
-            .tabs
-            .iter()
-            .filter_map(|tab| tab.document.path.clone())
-            .collect();
-        let active_tab = self.active().and_then(|tab| tab.document.path.clone());
-
-        let state = WindowSession {
+        WindowSession {
             workspace: self.workspace_file.clone(),
             roots: self.workspace.roots().to_vec(),
-            tabs: tabs.clone(),
-            active_tab: active_tab.clone(),
-            expanded: expanded.clone(),
+            tabs: self
+                .tabs
+                .iter()
+                .filter_map(|tab| tab.document.path.clone())
+                .collect(),
+            active_tab: self.active().and_then(|tab| tab.document.path.clone()),
+            expanded,
             selected_path: self.workspace.selected().map(Path::to_path_buf),
             sidebar_visible: self.workspace.sidebar_visible(),
             sidebar_width: Some(self.workspace.width()),
@@ -344,16 +343,21 @@ impl TeakApp {
             find_replace: self.overlays.find_text().replace.clone(),
             find_options: self.overlays.find_options(),
             frame: self.frame,
-        };
+        }
+    }
+
+    /// Publishes this window's current state to the shared session writer.
+    pub(crate) fn save_session(&self, cx: &mut Context<Self>) {
+        let state = self.window_session();
         // The same tabs are parked under the workspace, so switching back to it
         // restores them even if this window is gone by then.
         let parked = self.workspace_file.clone().map(|path| {
             (
                 path,
                 WorkspaceSession {
-                    tabs,
-                    active_tab,
-                    expanded,
+                    tabs: state.tabs.clone(),
+                    active_tab: state.active_tab.clone(),
+                    expanded: state.expanded.clone(),
                 },
             )
         });
@@ -1541,6 +1545,9 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_new_window))
             .on_action(cx.listener(Self::on_open_file))
             .on_action(cx.listener(Self::on_open_folder_in_new_window))
+            .on_action(cx.listener(Self::on_open_workspace))
+            .on_action(cx.listener(Self::on_save_workspace_as))
+            .on_action(cx.listener(Self::on_close_workspace))
             .on_action(cx.listener(Self::on_print))
             .on_action(cx.listener(Self::on_add_folder))
             .on_action(cx.listener(Self::on_close_all_folders))

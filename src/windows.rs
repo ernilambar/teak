@@ -104,9 +104,6 @@ pub(crate) struct SessionStore {
     /// settings and the recent list do.
     workspaces: BTreeMap<PathBuf, WorkspaceSession>,
     recent: Vec<PathBuf>,
-    /// Recent workspace files. Kept for the Open Recent Workspace entries; the
-    /// list is read back from the session so a failed write never invents one.
-    recent_workspaces: Vec<PathBuf>,
     active: u64,
 }
 
@@ -119,6 +116,11 @@ impl SessionStore {
     /// workspace passes the set it was showing; the last writer wins.
     fn set_workspace(&mut self, path: PathBuf, state: WorkspaceSession) {
         self.workspaces.insert(path, state);
+    }
+
+    /// The tab set last parked under `path`, for a window switching back to it.
+    fn parked(&self, path: &Path) -> Option<WorkspaceSession> {
+        self.workspaces.get(path).cloned()
     }
 
     fn remove_window(&mut self, id: u64) {
@@ -152,7 +154,6 @@ impl SessionStore {
             windows,
             workspaces: self.workspaces.clone(),
             recent: self.recent.clone(),
-            recent_workspaces: self.recent_workspaces.clone(),
         }
     }
 
@@ -199,6 +200,13 @@ impl AppServices {
 
     pub(crate) fn recent_paths(&self, cx: &App) -> Vec<PathBuf> {
         self.recent.read(cx).paths().to_vec()
+    }
+
+    /// The tabs the last window to show workspace `path` parked there. `None`
+    /// means the workspace has not been open since the session was written, so
+    /// switching to it starts with no tabs.
+    pub(crate) fn parked_workspace(&self, path: &Path, cx: &App) -> Option<WorkspaceSession> {
+        self.session.read(cx).parked(path)
     }
 
     /// True while at least one window is still alive. Used by the macOS reopen
@@ -669,13 +677,13 @@ pub(crate) fn open_app_window(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use gpui_kit::{AppContext as _, Bounds, TestAppContext, WindowBounds, point, px, size};
 
     use super::{
         AppServices, RecentFiles, SessionStore, WindowFrame, WindowFrameState, WindowSeed,
-        WindowSession, bounds_of, frame_of, open_app_window,
+        WindowSession, WorkspaceSession, bounds_of, frame_of, open_app_window,
     };
     use crate::settings::Settings;
 
@@ -872,6 +880,26 @@ mod tests {
         );
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_workspace_parks_one_tab_set_per_file() {
+        let mut store = SessionStore::default();
+        let workspace = PathBuf::from("/w/work.teak-workspace");
+        let parked = WorkspaceSession {
+            tabs: vec![PathBuf::from("/w/work/a.rs")],
+            active_tab: Some(PathBuf::from("/w/work/a.rs")),
+            expanded: vec![PathBuf::from("/w/work")],
+        };
+        store.set_workspace(workspace.clone(), parked.clone());
+
+        assert_eq!(
+            store.state().workspaces.get(&workspace),
+            Some(&parked),
+            "the parked set is written with the window entries"
+        );
+        assert_eq!(store.parked(&workspace), Some(parked));
+        assert_eq!(store.parked(Path::new("/w/other.teak-workspace")), None);
     }
 
     /// Closing one of two windows removes only it from the registry; closing

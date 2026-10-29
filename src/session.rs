@@ -18,11 +18,10 @@ pub(crate) struct SessionState {
     /// it even when the window is gone.
     pub(crate) workspaces: BTreeMap<PathBuf, WorkspaceSession>,
     /// Recently opened files and folders, newest first, for File > Open Recent.
-    /// Shared by every window, so it lives outside [`WindowSession`].
+    /// Shared by every window, so it lives outside [`WindowSession`]. Workspace
+    /// files share the list, and opening one is routed to the workspace instead
+    /// of to a tab.
     pub(crate) recent: Vec<PathBuf>,
-    /// Recently opened workspace files, newest first. Kept apart from `recent`
-    /// because a workspace is a folder set, not a file to open in a tab.
-    pub(crate) recent_workspaces: Vec<PathBuf>,
 }
 
 /// One window's workspace and open tabs.
@@ -147,7 +146,6 @@ impl LegacySession {
             }],
             workspaces: BTreeMap::new(),
             recent: self.recent,
-            recent_workspaces: Vec::new(),
         }
     }
 }
@@ -232,7 +230,6 @@ mod tests {
                 },
             )]),
             recent: vec![PathBuf::from("/tmp/project/a.rs")],
-            recent_workspaces: vec![PathBuf::from("/tmp/project/work.teak-workspace")],
         };
         let json = serde_json::to_string(&state).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
@@ -257,7 +254,6 @@ mod tests {
         assert_eq!(restored.windows[0].frame, state.windows[0].frame);
         assert_eq!(restored.workspaces, state.workspaces);
         assert_eq!(restored.recent, state.recent);
-        assert_eq!(restored.recent_workspaces, state.recent_workspaces);
     }
 
     #[test]
@@ -278,7 +274,6 @@ mod tests {
             Some(Path::new("/tmp/project/work.teak-workspace"))
         );
         assert!(restored.workspaces.is_empty());
-        assert!(restored.recent_workspaces.is_empty());
     }
 
     #[test]
