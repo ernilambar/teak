@@ -182,7 +182,8 @@ Usage:
   {name} [OPTIONS] [PATH]...
 
 Arguments:
-  [PATH]...  Folders to open in the sidebar, files to open in tabs
+  [PATH]...  Folders to open in the sidebar, files to open in tabs, or a
+             .teak-workspace file whose folders become the workspace
 
 Options:
   -n, --new-window  Open the given paths in a new window

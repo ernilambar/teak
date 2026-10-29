@@ -65,11 +65,11 @@ in headless environments.
   fields so rendering can read them directly. `app/changes.rs`, `files.rs`, `editor.rs`,
   `find_in_files.rs`, `picker.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
   orchestration blocks; GPUI-free helpers live in `cli.rs`, `git.rs`, `language.rs`,
-  `paths.rs`, `search.rs`, `session.rs`, `settings.rs`, `update.rs`, `watcher.rs`, and the
-  AppKit printing wrapper in `print.rs`. `windows.rs` holds app-level window coordination: the live-window
-  registry, the shared recent list, the one `session.json` writer, and the bootstrap every
-  new or restored window goes through. Add a new module only once a feature is large enough
-  to justify the boundary.
+  `paths.rs`, `search.rs`, `session.rs`, `settings.rs`, `update.rs`, `watcher.rs` and
+  `workspace_file.rs`, and the AppKit printing wrapper in `print.rs`. `windows.rs` holds
+  app-level window coordination: the live-window registry, the shared recent list, the one
+  `session.json` writer, and the bootstrap every new or restored window goes through. Add a
+  new module only once a feature is large enough to justify the boundary.
 - A file and the tab showing it are separate types. `Document` (`app/document.rs`) owns
   the buffer (`Entity<EditorState>`), path, title, language, on-disk format, dirty flag and
   the disk-conflict bookkeeping; `OpenTab` (`app/tabs.rs`) is a view that owns only the
@@ -100,8 +100,12 @@ in headless environments.
   `KeyBinding::load` and the `MenuItem::Action` variant directly — both public, but
   lower-level than the ergonomic constructors.
 - `session.json` (app-written state) and `settings.json` (user-authored preferences) both
-  live in `paths::support_dir()`. `session.json` holds one entry per open window plus the
-  shared recent list, and only `windows.rs` writes it. The app writes `settings.json` only
+  live in `paths::support_dir()`. `session.json` holds one entry per open window, the tab
+  set parked under each workspace file, and the shared recent list; only `windows.rs` writes
+  it. A workspace's own file (`.teak-workspace`, see `workspace_file.rs`) holds just its
+  folders and is written only by Save Workspace As, so it stays safe to commit; a window
+  records which one it shows and parks its tabs under that path. The app writes
+  `settings.json` only
   to create a starter file or to record a choice made from the Settings overlay or a view
   toggle. Each write is a surgical `section.key` update that never rewrites unrelated keys.
   Group new settings keys by area (`editor.*`, `ui.*`).

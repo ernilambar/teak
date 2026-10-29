@@ -16,6 +16,7 @@ mod theme;
 mod update;
 mod watcher;
 mod windows;
+mod workspace_file;
 
 use std::path::PathBuf;
 
@@ -35,6 +36,7 @@ gpui_kit::actions!(
         CloseWindow,
         OpenFile,
         OpenFolderInNewWindow,
+        OpenWorkspace,
         MoveTabToNewWindow,
         MinimizeWindow,
         ZoomWindow,
@@ -62,6 +64,8 @@ gpui_kit::actions!(
         SaveFile,
         SaveFileAs,
         SaveAll,
+        SaveWorkspaceAs,
+        CloseWorkspace,
         CloseTab,
         Quit,
         Hide,

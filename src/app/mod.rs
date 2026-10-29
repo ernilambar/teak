@@ -40,7 +40,7 @@ use gpui_kit::*;
 use crate::cli::{install_cli, launcher_target};
 use crate::git;
 use crate::paths::is_noise_path;
-use crate::session::{WindowFrame, WindowSession};
+use crate::session::{WindowFrame, WindowSession, WorkspaceSession};
 use crate::settings::{
     DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, UiSettings,
     defaults_document, font_family_issue, load_settings, save_editor_flag, save_font_size,
@@ -49,6 +49,7 @@ use crate::settings::{
 use crate::update::{INSTALL_COMMAND, is_newer, latest_version};
 use crate::watcher::{Change, Watcher};
 use crate::windows::{AppServices, WindowSeed, cascaded_frame};
+use crate::workspace_file;
 use crate::{
     About, BringAllToFront, CheckForUpdates, ClearRecent, CloseWindow, CopyFileName, CopyFilePath,
     CopyRelativePath, InstallCli, JumpToTab, MinimizeWindow, NewWindow, NextTab,
@@ -120,6 +121,24 @@ fn clear_gutter_marks(editor: &Entity<EditorState>, cx: &mut App) {
     editor.update(cx, |state, cx| state.set_gutter_marks(Vec::new(), cx));
 }
 
+/// The native window title: the app name, the active workspace when one is
+/// open, then the active file's path. The workspace sits ahead of the file so
+/// macOS truncating a long path never hides which workspace the window holds.
+fn window_title(workspace: Option<&Path>, file: Option<&Path>, has_tab: bool) -> String {
+    let mut title = WINDOW_TITLE.to_string();
+    if let Some(workspace) = workspace {
+        title.push_str(" — ");
+        title.push_str(&workspace_file::label(workspace));
+    }
+    if let Some(path) = file {
+        title.push_str(" — ");
+        title.push_str(&path.display().to_string());
+    } else if has_tab {
+        title.push_str(" — Untitled");
+    }
+    title
+}
+
 pub(crate) struct TeakApp {
     pub(crate) focus_handle: FocusHandle,
     /// App-level state shared with every other window.
@@ -128,6 +147,9 @@ pub(crate) struct TeakApp {
     window_id: u64,
     /// The frame last observed, persisted with the session.
     frame: Option<WindowFrame>,
+    /// The `.teak-workspace` this window is showing, if any. Its folders are the
+    /// workspace's roots; the path is what the session parks the tab set under.
+    workspace_file: Option<PathBuf>,
     /// The open folders, the expanded set, and the rows rendered from them.
     workspace: Workspace,
     /// The open tabs and the indexes that track the focused one.
@@ -146,6 +168,7 @@ pub(crate) struct TeakApp {
 impl TeakApp {
     pub(crate) fn new(
         workspace_roots: Vec<PathBuf>,
+        workspace_file: Option<PathBuf>,
         settings: Settings,
         services: AppServices,
         window_id: u64,
@@ -159,6 +182,7 @@ impl TeakApp {
             services,
             window_id,
             frame,
+            workspace_file,
             workspace: Workspace::new(workspace_roots, cx.new(|_| ResizableState::default())),
             tabs: TabSet::new(),
             overlays: Overlays::new(),
@@ -194,16 +218,14 @@ impl TeakApp {
         self.services.refresh_menus_others(self.window_id, cx);
     }
 
-    /// Keeps the native window title in sync with the focused tab, appending the
-    /// file's full path after the app name.
+    /// Keeps the native window title in sync with the workspace and the focused
+    /// tab.
     fn sync_window_title(&mut self, window: &mut Window) {
-        let title = match self.active() {
-            Some(tab) => match tab.document.path.as_deref() {
-                Some(path) => format!("{WINDOW_TITLE} — {}", path.display()),
-                None => format!("{WINDOW_TITLE} — Untitled"),
-            },
-            None => WINDOW_TITLE.to_string(),
-        };
+        let title = window_title(
+            self.workspace_file.as_deref(),
+            self.active().and_then(|tab| tab.document.path.as_deref()),
+            self.active().is_some(),
+        );
 
         if self.chrome.title_changed(&title) {
             window.set_window_title(&title);
@@ -312,12 +334,15 @@ impl TeakApp {
         cx.notify();
     }
 
-    /// Publishes this window's current state to the shared session writer.
-    pub(crate) fn save_session(&self, cx: &mut Context<Self>) {
+    /// This window's state, as the session stores it. Switching workspaces
+    /// reuses it so the window's find text, sidebar geometry and frame carry
+    /// across the swap.
+    pub(crate) fn window_session(&self) -> WindowSession {
         let mut expanded: Vec<PathBuf> = self.workspace.expanded().iter().cloned().collect();
         expanded.sort();
 
-        let state = WindowSession {
+        WindowSession {
+            workspace: self.workspace_file.clone(),
             roots: self.workspace.roots().to_vec(),
             tabs: self
                 .tabs
@@ -335,10 +360,27 @@ impl TeakApp {
             find_replace: self.overlays.find_text().replace.clone(),
             find_options: self.overlays.find_options(),
             frame: self.frame,
-        };
+        }
+    }
+
+    /// Publishes this window's current state to the shared session writer.
+    pub(crate) fn save_session(&self, cx: &mut Context<Self>) {
+        let state = self.window_session();
+        // The same tabs are parked under the workspace, so switching back to it
+        // restores them even if this window is gone by then.
+        let parked = self.workspace_file.clone().map(|path| {
+            (
+                path,
+                WorkspaceSession {
+                    tabs: state.tabs.clone(),
+                    active_tab: state.active_tab.clone(),
+                    expanded: state.expanded.clone(),
+                },
+            )
+        });
         let recent = self.services.recent_paths(cx);
         self.services
-            .store_window(self.window_id, state, recent, cx);
+            .store_window(self.window_id, state, parked, recent, cx);
     }
 
     /// Remembers the current frame for the next session write. Called on
@@ -1520,6 +1562,9 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_new_window))
             .on_action(cx.listener(Self::on_open_file))
             .on_action(cx.listener(Self::on_open_folder_in_new_window))
+            .on_action(cx.listener(Self::on_open_workspace))
+            .on_action(cx.listener(Self::on_save_workspace_as))
+            .on_action(cx.listener(Self::on_close_workspace))
             .on_action(cx.listener(Self::on_print))
             .on_action(cx.listener(Self::on_add_folder))
             .on_action(cx.listener(Self::on_close_all_folders))
@@ -1693,7 +1738,7 @@ pub(super) mod test_support {
         cx.update(|cx| {
             let services = AppServices::new(cx, Vec::new());
             open_window(WindowOptions::default(), cx, |_window, cx| {
-                cx.new(|cx| TeakApp::new(roots, Settings::default(), services, 0, None, cx))
+                cx.new(|cx| TeakApp::new(roots, None, Settings::default(), services, 0, None, cx))
             })
             .unwrap()
         })
@@ -1709,7 +1754,32 @@ mod tests {
 
     use super::git_may_have_changed;
     use super::test_support::{open_app, open_app_in};
+    use super::window_title;
     use crate::session::WindowSession;
+
+    /// A workspace stays in the title whichever tab is focused, so two windows
+    /// on different workspaces never look the same.
+    #[test]
+    fn the_title_keeps_the_workspace_ahead_of_the_file() {
+        let workspace = Path::new("/work/work.teak-workspace");
+        let file = Path::new("/work/work/src/main.rs");
+
+        assert_eq!(
+            window_title(Some(workspace), Some(file), true),
+            "Teak — work — /work/work/src/main.rs"
+        );
+        assert_eq!(
+            window_title(Some(workspace), None, true),
+            "Teak — work — Untitled"
+        );
+        assert_eq!(window_title(Some(workspace), None, false), "Teak — work");
+        assert_eq!(
+            window_title(None, Some(file), true),
+            "Teak — /work/work/src/main.rs"
+        );
+        assert_eq!(window_title(None, None, true), "Teak — Untitled");
+        assert_eq!(window_title(None, None, false), "Teak");
+    }
 
     /// Initializes a repository in `dir` and commits what it holds. A machine
     /// without git leaves the caller with nothing to check.

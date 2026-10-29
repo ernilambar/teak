@@ -31,7 +31,7 @@ use crate::paths::display_path;
 use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, BringAllToFront,
     CheckForUpdates, ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CloseWindow,
-    CommandPalette, ConvertToCamelCase, ConvertToConstantCase, ConvertToKebabCase,
+    CloseWorkspace, CommandPalette, ConvertToCamelCase, ConvertToConstantCase, ConvertToKebabCase,
     ConvertToLowercase, ConvertToPascalCase, ConvertToSnakeCase, ConvertToTitleCase,
     ConvertToUppercase, CopyFileName, CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath,
     DeleteLine, FindAndReplaceInEditor, FindInEditor, FindInFiles, FindNextField, FindNextInEditor,
@@ -39,13 +39,13 @@ use crate::{
     InsertLineBelow, InstallCli, JoinLines, JumpToTab, MinimizeWindow, MoveLineDown, MoveLineUp,
     MoveTabToNewWindow, NewFile, NewWindow, NextResult, NextTab, OpenDefaultSettings, OpenFile,
     OpenFolderInNewWindow, OpenKeybindings, OpenPath, OpenRecentPicker, OpenResult, OpenSettings,
-    OpenThemesFolder, PreviousResult, PreviousTab, Print, QuickOpen, Quit, Refresh,
+    OpenThemesFolder, OpenWorkspace, PreviousResult, PreviousTab, Print, QuickOpen, Quit, Refresh,
     ReopenClosedTab, ReplaceAll, RevealInFinder, RunFind, SaveAll, SaveFile, SaveFileAs,
-    SelectLine, SetTheme, ShowAll, ShowChanges, ShowExplorer, SplitSelectionIntoLines,
-    THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleFullScreen, ToggleIndentGuides,
-    ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent,
-    ToggleWhitespace, ToggleWordWrap, TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset,
-    ZoomWindow,
+    SaveWorkspaceAs, SelectLine, SetTheme, ShowAll, ShowChanges, ShowExplorer,
+    SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleFullScreen,
+    ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar,
+    ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap, TrimTrailingWhitespace, ZoomIn, ZoomOut,
+    ZoomReset, ZoomWindow,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -172,6 +172,30 @@ static COMMANDS: &[Command] = &[
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 6)),
         keywords: &["folder", "window"],
+    },
+    Command {
+        label: "Open Workspace…",
+        make: || Box::new(OpenWorkspace),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::File, 0)),
+        palette: Some((PaletteGroup::File, 30)),
+        keywords: &["workspace", "project", "folders"],
+    },
+    Command {
+        label: "Save Workspace As…",
+        make: || Box::new(SaveWorkspaceAs),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::File, 0)),
+        palette: Some((PaletteGroup::File, 31)),
+        keywords: &["workspace", "project", "save"],
+    },
+    Command {
+        label: "Close Workspace",
+        make: || Box::new(CloseWorkspace),
+        bindings: NO_KEYS,
+        menu: Some((MenuKind::File, 0)),
+        palette: Some((PaletteGroup::File, 32)),
+        keywords: &["workspace", "project", "close"],
     },
     Command {
         label: "Close All Folders",
@@ -1669,6 +1693,9 @@ mod tests {
                     "Quick Open…",
                     "Add Folder…",
                     "Open Folder in New Window…",
+                    "Open Workspace…",
+                    "Save Workspace As…",
+                    "Close Workspace",
                     "Close All Folders",
                     "Save",
                     "Save As…",
@@ -1899,7 +1926,7 @@ mod tests {
     /// editing the table shows up here rather than as a missing menu entry.
     #[test]
     fn surface_sizes_are_pinned() {
-        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 80);
-        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 78);
+        assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 83);
+        assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 81);
     }
 }

@@ -16,13 +16,21 @@ use crate::paths::{
 };
 use crate::watcher::Change;
 use crate::windows::{WindowSeed, cascaded_frame};
+use crate::workspace_file;
 use crate::{
-    AddFolder, CloseAllFolders, NewFile, OpenFile, OpenFolderInNewWindow, SaveAll, SaveFile,
-    SaveFileAs,
+    AddFolder, CloseAllFolders, CloseWorkspace, NewFile, OpenFile, OpenFolderInNewWindow,
+    OpenWorkspace, SaveAll, SaveFile, SaveFileAs, SaveWorkspaceAs,
 };
 
 use super::TeakApp;
 use super::workspace::{AddRoot, FileClipboard};
+
+/// A workspace being opened: its file and the folders it declared.
+type WorkspaceTarget = (PathBuf, Vec<PathBuf>);
+
+/// An action that waits for the tabs to be saved: a method on the app plus the
+/// workspace it should act on, if any.
+type GuardedAction = fn(&mut TeakApp, Option<WorkspaceTarget>, &mut Window, &mut Context<TeakApp>);
 
 /// A file read for a new tab: text for the editor, or a raster image to view.
 pub(super) enum FileContent {
@@ -231,11 +239,24 @@ impl TeakApp {
 
     fn open_many(
         &mut self,
-        paths: Vec<PathBuf>,
+        mut paths: Vec<PathBuf>,
         transient: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A workspace file is a folder set, not a tab: opening one switches the
+        // window rather than showing its JSON. Any other paths in the same
+        // request are dropped with it, since a workspace replaces the folder
+        // set they would otherwise be resolved against.
+        if let Some(ix) = paths
+            .iter()
+            .position(|path| workspace_file::is_workspace_path(path))
+        {
+            let path = paths.remove(ix);
+            self.request_open_workspace(path, window, cx);
+            return;
+        }
+
         let mut order = Vec::with_capacity(paths.len());
         let mut to_read: Vec<PathBuf> = Vec::new();
         for path in paths {
@@ -413,6 +434,251 @@ impl TeakApp {
         .detach();
     }
 
+    /// Opens a workspace file from the picker, switching this window to it.
+    pub(super) fn on_open_workspace(
+        &mut self,
+        _: &OpenWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Open Workspace".into()),
+        });
+
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = receiver.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                this.update_in(cx, |this, window, cx| {
+                    this.request_open_workspace(path, window, cx)
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Makes `path` this window's workspace: its folders replace the open ones
+    /// and the tab set parked under it comes back. A malformed file changes
+    /// nothing.
+    pub(crate) fn request_open_workspace(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let folders = match workspace_file::load(&path) {
+            Ok(folders) => folders,
+            Err(message) => {
+                window.push_notification(Notification::error(message), cx);
+                return;
+            }
+        };
+        self.with_clean_tabs(
+            window,
+            cx,
+            "Switching workspaces closes the open tabs. Save them first?",
+            Self::switch_workspace,
+            Some((path, folders)),
+        );
+    }
+
+    /// Writes the open folders as a workspace file, then binds this window to
+    /// it so later switches park their tabs under the new key.
+    pub(super) fn on_save_workspace_as(
+        &mut self,
+        _: &SaveWorkspaceAs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace.roots().is_empty() {
+            window.push_notification(
+                Notification::warning("Open a folder before saving a workspace"),
+                cx,
+            );
+            return;
+        }
+
+        let directory = self
+            .workspace_file
+            .as_deref()
+            .and_then(Path::parent)
+            .or_else(|| {
+                self.workspace
+                    .roots()
+                    .first()
+                    .and_then(|root| root.parent())
+            })
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let suggested = self
+            .workspace_file
+            .as_deref()
+            .and_then(Path::file_stem)
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .or_else(|| self.workspace.roots().first().map(|root| file_name(root)))
+            .unwrap_or_else(|| "workspace".to_string());
+        let suggested = format!("{suggested}.{}", workspace_file::EXTENSION);
+
+        let receiver = cx.prompt_for_new_path(&directory, Some(suggested.as_str()));
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(path))) = receiver.await {
+                this.update_in(cx, |this, window, cx| {
+                    this.save_workspace_file(path, window, cx)
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Closes the workspace: its tabs and folders go, and the window becomes a
+    /// plain one. The parked set stays in the session, so reopening the
+    /// workspace later restores it.
+    pub(super) fn on_close_workspace(
+        &mut self,
+        _: &CloseWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace_file.is_none() && self.workspace.roots().is_empty() {
+            return;
+        }
+        self.with_clean_tabs(
+            window,
+            cx,
+            "Closing the workspace closes its tabs. Save them first?",
+            Self::close_workspace,
+            None,
+        );
+    }
+
+    /// Builds the workspace file and binds the window to it. A name the save
+    /// pane returned without an extension gets one, so the file is recognized
+    /// the next time it is opened.
+    fn save_workspace_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let path = if workspace_file::is_workspace_path(&path) {
+            path
+        } else {
+            path.with_extension(workspace_file::EXTENSION)
+        };
+        match workspace_file::save(&path, self.workspace.roots()) {
+            Ok(()) => {
+                self.workspace_file = Some(path.clone());
+                // Park the current tabs under the new name too.
+                self.save_session(cx);
+                self.note_recent(path.clone(), cx);
+                window.push_notification(
+                    Notification::success(format!("Saved {}", file_name(&path))),
+                    cx,
+                );
+            }
+            Err(message) => window.push_notification(Notification::error(message), cx),
+        }
+    }
+
+    /// Continues with `action` once no tab has unsaved edits, offering to save
+    /// everything first. A save that cannot finish — an Untitled tab or a file
+    /// whose path is gone — stops the action instead of dropping the edits.
+    fn with_clean_tabs(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        description: &'static str,
+        action: GuardedAction,
+        target: Option<WorkspaceTarget>,
+    ) {
+        if !self.any_dirty() {
+            action(self, target, window, cx);
+            return;
+        }
+
+        let entity = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let entity = entity.clone();
+            let target = target.clone();
+            alert
+                .confirm()
+                .title("Unsaved Changes")
+                .description(description)
+                .ok_text("Save All and Continue")
+                .cancel_text("Cancel")
+                .on_ok(move |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.save_all_editors(window, cx);
+                        if this.any_dirty() {
+                            window.push_notification(
+                                Notification::warning(
+                                    "Some files need a path before they can be saved.",
+                                ),
+                                cx,
+                            );
+                            return;
+                        }
+                        action(this, target.clone(), window, cx);
+                    });
+                    true
+                })
+        });
+    }
+
+    /// Switches this window to the workspace in `target`. The tabs it was
+    /// showing are already parked by the preceding [`Self::save_session`], so
+    /// closing them cannot lose the set.
+    fn switch_workspace(
+        &mut self,
+        target: Option<WorkspaceTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((path, folders)) = target else {
+            return;
+        };
+
+        self.save_session(cx);
+        let parked = self.services.parked_workspace(&path, cx);
+
+        // Close the old tabs while unbound: saving per closed tab would
+        // otherwise overwrite the set parked a line above with an empty one.
+        self.workspace_file = None;
+        self.close_all_tabs(window, cx);
+
+        let mut session = self.window_session();
+        session.workspace = Some(path.clone());
+        session.roots = folders;
+        session.tabs = parked
+            .as_ref()
+            .map(|state| state.tabs.clone())
+            .unwrap_or_default();
+        session.active_tab = parked.as_ref().and_then(|state| state.active_tab.clone());
+        session.expanded = parked
+            .map(|state| state.expanded)
+            .unwrap_or_else(|| session.roots.clone());
+
+        self.workspace_file = Some(path.clone());
+        self.restore_session(session, Vec::new(), window, cx);
+        // Opening a workspace is an open like any other, so it joins Open Recent.
+        self.note_recent(path, cx);
+        cx.notify();
+    }
+
+    /// Clears the workspace binding, its tabs and its folders. The parked tab
+    /// set stays in the session for the next time the workspace is opened.
+    fn close_workspace(
+        &mut self,
+        _target: Option<WorkspaceTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace_file = None;
+        self.close_all_tabs(window, cx);
+        self.close_all_roots(cx);
+        cx.notify();
+    }
+
     /// Handles paths dropped from the file manager. A plain drop adds folders
     /// to this workspace and opens files as tabs; holding Option opens
     /// everything in a new window instead.
@@ -514,6 +780,9 @@ impl TeakApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The open set no longer matches the workspace file, so the window stops
+        // being bound to it.
+        self.workspace_file = None;
         self.close_all_roots(cx);
     }
 
@@ -625,6 +894,12 @@ impl TeakApp {
     /// deleted files are left alone, the latter so a save never recreates a file
     /// the user removed.
     pub(super) fn on_save_all(&mut self, _: &SaveAll, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_all_editors(window, cx);
+    }
+
+    /// The Save All body, shared with the workspace switch and close guards so
+    /// every path that closes tabs saves the same set.
+    fn save_all_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let targets: Vec<(EntityId, PathBuf)> = self
             .tabs
             .iter()

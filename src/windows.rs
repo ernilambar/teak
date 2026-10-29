@@ -7,16 +7,18 @@
 //! `main` and the app's New Window command open a window the same way.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::component::{WindowExt as _, notification::Notification};
 use gpui_kit::*;
 
 use crate::app::{TeakApp, WINDOW_TITLE};
 use crate::session::{
-    SessionState, WindowFrame, WindowFrameState, WindowSession, push_recent, session_path,
+    SessionState, WindowFrame, WindowFrameState, WindowSession, WorkspaceSession, push_recent,
+    session_path,
 };
 use crate::settings::{Settings, load_settings};
+use crate::workspace_file;
 
 /// One open window: the platform handle, its app entity, and the id used in the
 /// session file.
@@ -97,6 +99,10 @@ impl RecentFiles {
 #[derive(Default)]
 pub(crate) struct SessionStore {
     windows: BTreeMap<u64, WindowSession>,
+    /// Parked tab sets, keyed by workspace file. Written by whichever window is
+    /// showing that workspace, so two windows on one workspace resolve the way
+    /// settings and the recent list do.
+    workspaces: BTreeMap<PathBuf, WorkspaceSession>,
     recent: Vec<PathBuf>,
     active: u64,
 }
@@ -104,6 +110,17 @@ pub(crate) struct SessionStore {
 impl SessionStore {
     fn set_window(&mut self, id: u64, window: WindowSession) {
         self.windows.insert(id, window);
+    }
+
+    /// Parks `state` under `path`. A window that switched away from its
+    /// workspace passes the set it was showing; the last writer wins.
+    fn set_workspace(&mut self, path: PathBuf, state: WorkspaceSession) {
+        self.workspaces.insert(path, state);
+    }
+
+    /// The tab set last parked under `path`, for a window switching back to it.
+    fn parked(&self, path: &Path) -> Option<WorkspaceSession> {
+        self.workspaces.get(path).cloned()
     }
 
     fn remove_window(&mut self, id: u64) {
@@ -135,6 +152,7 @@ impl SessionStore {
         }
         SessionState {
             windows,
+            workspaces: self.workspaces.clone(),
             recent: self.recent.clone(),
         }
     }
@@ -184,6 +202,13 @@ impl AppServices {
         self.recent.read(cx).paths().to_vec()
     }
 
+    /// The tabs the last window to show workspace `path` parked there. `None`
+    /// means the workspace has not been open since the session was written, so
+    /// switching to it starts with no tabs.
+    pub(crate) fn parked_workspace(&self, path: &Path, cx: &App) -> Option<WorkspaceSession> {
+        self.session.read(cx).parked(path)
+    }
+
     /// True while at least one window is still alive. Used by the macOS reopen
     /// callback to decide whether a dock click needs a fresh window.
     pub(crate) fn has_windows(&self, cx: &App) -> bool {
@@ -208,18 +233,22 @@ impl AppServices {
         self.recent.update(cx, |recent, _| recent.clear());
     }
 
-    /// Publishes one window's snapshot, plus the shared recent list, and writes
-    /// the file.
+    /// Publishes one window's snapshot and the tabs it has parked under a
+    /// workspace, plus the shared recent list, and writes the file.
     pub(crate) fn store_window(
         &self,
         id: u64,
         window: WindowSession,
+        workspace: Option<(PathBuf, WorkspaceSession)>,
         recent: Vec<PathBuf>,
         cx: &mut App,
     ) {
         let active = self.active_window_id(cx);
         self.session.update(cx, |store, _| {
             store.set_window(id, window);
+            if let Some((path, state)) = workspace {
+                store.set_workspace(path, state);
+            }
             store.set_recent(recent);
             store.set_active(active);
             store.write();
@@ -312,6 +341,8 @@ impl AppServices {
 
     /// Sends externally opened paths to the active window, or to the newest
     /// window when nothing is focused. With no windows open, this starts one.
+    /// A workspace file among them switches that window rather than opening a
+    /// tab, so Finder opens and `open -a` follow the same rule as the picker.
     pub(crate) fn route_open(&self, paths: Vec<PathBuf>, cx: &mut App) {
         if let Some((handle, app)) = self.target_window(cx) {
             handle
@@ -355,7 +386,14 @@ pub(crate) struct WindowSeed {
     pub(crate) open_paths: Vec<PathBuf>,
     pub(crate) session: Option<WindowSession>,
     pub(crate) frame: Option<WindowFrame>,
+    /// The `.teak-workspace` this window shows, if any. Kept on the seed rather
+    /// than reconstructed from the roots so the window knows which tab set to
+    /// park when it switches away.
+    pub(crate) workspace: Option<PathBuf>,
     pub(crate) settings_error: Option<String>,
+    /// Why a workspace file named on the command line could not be opened. The
+    /// window still opens; `open_app_window` reports this once it has one.
+    pub(crate) workspace_error: Option<String>,
 }
 
 impl WindowSeed {
@@ -366,7 +404,9 @@ impl WindowSeed {
             open_paths: Vec::new(),
             session: None,
             frame: None,
+            workspace: None,
             settings_error: None,
+            workspace_error: None,
         }
     }
 
@@ -378,12 +418,15 @@ impl WindowSeed {
         seed
     }
 
-    /// Adds paths a command-line launch asked for. A folder joins the
-    /// workspace; a file opens ahead of whatever the session restores, in the
-    /// order given, so the launch order wins over the saved tab order.
+    /// Adds paths a command-line launch asked for. A workspace file defines the
+    /// folder set outright; a folder joins the set; a file opens ahead of
+    /// whatever the session restores, in the order given, so the launch order
+    /// wins over the saved tab order.
     pub(crate) fn add_paths(&mut self, paths: Vec<PathBuf>) {
         for path in paths {
-            if path.is_dir() {
+            if workspace_file::is_workspace_path(&path) {
+                self.open_workspace(&path);
+            } else if path.is_dir() {
                 // A restored window reads its roots back from the session, so
                 // a folder has to land there rather than in `self.roots`.
                 let roots = match self.session.as_mut() {
@@ -399,6 +442,33 @@ impl WindowSeed {
         }
     }
 
+    /// Binds the seed to a workspace file and replaces its folders with the
+    /// ones the file declares. A bad or missing file leaves the folders and the
+    /// binding alone and reports through `workspace_error`, so one unreadable
+    /// argument cannot stop a window from opening.
+    fn open_workspace(&mut self, path: &Path) {
+        match workspace_file::load(path) {
+            Ok(folders) => {
+                self.workspace = Some(path.to_path_buf());
+                self.workspace_error = None;
+                self.set_roots(folders);
+            }
+            Err(message) => self.workspace_error = Some(message),
+        }
+    }
+
+    /// Replaces the folder set wherever the seed keeps it: a restored window
+    /// reads its roots back from its session, a blank one from `roots`.
+    fn set_roots(&mut self, folders: Vec<PathBuf>) {
+        match self.session.as_mut() {
+            Some(session) => {
+                session.workspace = self.workspace.clone();
+                session.roots = folders;
+            }
+            None => self.roots = folders,
+        }
+    }
+
     /// Reopens a saved window with its workspace, tabs and frame. A zero-sized
     /// frame (written before the window was ever measured) is discarded so the
     /// platform picks a usable default.
@@ -407,13 +477,41 @@ impl WindowSeed {
             .frame
             .filter(|frame| frame.width > 0. && frame.height > 0.);
         session.frame = frame;
-        Self {
+        let mut seed = Self {
             settings,
             roots: session.roots.clone(),
             open_paths: Vec::new(),
+            workspace: session.workspace.clone(),
             frame,
             session: Some(session),
             settings_error: None,
+            workspace_error: None,
+        };
+        seed.refresh_workspace_folders();
+        seed
+    }
+
+    /// Re-reads the workspace file a restored window was bound to, so folders
+    /// edited outside teak are what the file says now. A file that has gone
+    /// drops the binding silently: the window reopens as a plain folder window
+    /// with the folders and tabs the session had.
+    fn refresh_workspace_folders(&mut self) {
+        let Some(path) = self.workspace.clone() else {
+            return;
+        };
+        match workspace_file::load(&path) {
+            Ok(folders) => {
+                if let Some(session) = self.session.as_mut() {
+                    session.roots = folders.clone();
+                }
+                self.roots = folders;
+            }
+            Err(_) => {
+                self.workspace = None;
+                if let Some(session) = self.session.as_mut() {
+                    session.workspace = None;
+                }
+            }
         }
     }
 }
@@ -478,7 +576,9 @@ pub(crate) fn open_app_window(
         open_paths,
         session,
         frame,
+        workspace,
         settings_error,
+        workspace_error,
     } = seed;
     let id = services
         .registry
@@ -502,7 +602,7 @@ pub(crate) fn open_app_window(
         // Apply the appearance through the new window so a window opened after
         // the themes directory reloaded picks up the current scheme too.
         crate::theme::apply(&settings, Some(window), cx);
-        let app = cx.new(|cx| TeakApp::new(roots, settings, services, id, frame, cx));
+        let app = cx.new(|cx| TeakApp::new(roots, workspace, settings, services, id, frame, cx));
 
         // Block the red close button (and app termination) while there are
         // unsaved edits, prompting instead.
@@ -513,6 +613,11 @@ pub(crate) fn open_app_window(
 
         // The notification layer is attached after this closure returns.
         if let Some(message) = settings_error {
+            window.defer(cx, move |window, cx| {
+                window.push_notification(Notification::error(message), cx);
+            });
+        }
+        if let Some(message) = workspace_error {
             window.defer(cx, move |window, cx| {
                 window.push_notification(Notification::error(message), cx);
             });
@@ -589,13 +694,13 @@ pub(crate) fn open_app_window(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use gpui_kit::{AppContext as _, Bounds, TestAppContext, WindowBounds, point, px, size};
 
     use super::{
         AppServices, RecentFiles, SessionStore, WindowFrame, WindowFrameState, WindowSeed,
-        WindowSession, bounds_of, frame_of, open_app_window,
+        WindowSession, WorkspaceSession, bounds_of, frame_of, open_app_window,
     };
     use crate::settings::Settings;
 
@@ -717,6 +822,159 @@ mod tests {
             assert_eq!(frame_of(bounds), frame);
             assert_eq!(bounds_of(frame), bounds);
         }
+    }
+
+    #[test]
+    fn a_workspace_file_seeds_its_folders_and_binding() {
+        let dir = std::env::temp_dir().join(format!("teak-seed-workspace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        std::fs::create_dir_all(dir.join("api")).unwrap();
+        let file = dir.join("work.teak-workspace");
+        std::fs::write(
+            &file,
+            r#"{ "folders": [{ "path": "app" }, { "path": "api" }, { "path": "app" }] }"#,
+        )
+        .unwrap();
+
+        let seed = WindowSeed::for_paths(Settings::default(), vec![file.clone()]);
+
+        assert_eq!(seed.workspace, Some(file));
+        assert_eq!(seed.roots, [dir.join("app"), dir.join("api")]);
+        assert!(seed.open_paths.is_empty());
+        assert!(seed.workspace_error.is_none());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_broken_workspace_file_reports_and_leaves_the_window_usable() {
+        let dir = std::env::temp_dir().join(format!("teak-seed-broken-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("work.teak-workspace");
+        std::fs::write(&file, r#"{ "folders": ["#).unwrap();
+
+        let seed = WindowSeed::for_paths(Settings::default(), vec![file]);
+
+        assert_eq!(seed.workspace, None, "a failed load does not bind");
+        assert!(seed.roots.is_empty());
+        assert!(
+            seed.workspace_error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("Could not parse workspace file")),
+            "{:?}",
+            seed.workspace_error
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_workspace_file_on_the_command_line_replaces_a_restored_folder_set() {
+        let dir = std::env::temp_dir().join(format!("teak-seed-restored-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("saved")).unwrap();
+        std::fs::create_dir_all(dir.join("work")).unwrap();
+        let file = dir.join("work.teak-workspace");
+        std::fs::write(&file, r#"{ "folders": ["work"] }"#).unwrap();
+
+        let mut seed = WindowSeed::restored(
+            Settings::default(),
+            WindowSession {
+                roots: vec![dir.join("saved")],
+                ..Default::default()
+            },
+        );
+        seed.add_paths(vec![file.clone()]);
+
+        let session = seed.session.as_ref().unwrap();
+        assert_eq!(session.workspace, Some(file));
+        assert_eq!(
+            session.roots,
+            [dir.join("work")],
+            "the file wins over the session"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_workspace_parks_one_tab_set_per_file() {
+        let mut store = SessionStore::default();
+        let workspace = PathBuf::from("/w/work.teak-workspace");
+        let parked = WorkspaceSession {
+            tabs: vec![PathBuf::from("/w/work/a.rs")],
+            active_tab: Some(PathBuf::from("/w/work/a.rs")),
+            expanded: vec![PathBuf::from("/w/work")],
+        };
+        store.set_workspace(workspace.clone(), parked.clone());
+
+        assert_eq!(
+            store.state().workspaces.get(&workspace),
+            Some(&parked),
+            "the parked set is written with the window entries"
+        );
+        assert_eq!(store.parked(&workspace), Some(parked));
+        assert_eq!(store.parked(Path::new("/w/other.teak-workspace")), None);
+    }
+
+    #[test]
+    fn a_restored_window_reloads_the_folders_its_workspace_file_declares() {
+        let dir =
+            std::env::temp_dir().join(format!("teak-restore-workspace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        std::fs::create_dir_all(dir.join("api")).unwrap();
+        let file = dir.join("work.teak-workspace");
+        std::fs::write(&file, r#"{ "folders": ["app", "api"] }"#).unwrap();
+
+        let seed = WindowSeed::restored(
+            Settings::default(),
+            WindowSession {
+                workspace: Some(file.clone()),
+                // The file says two folders; the session was written when it
+                // said one.
+                roots: vec![dir.join("app")],
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(seed.workspace, Some(file));
+        assert_eq!(seed.roots, [dir.join("app"), dir.join("api")]);
+        assert_eq!(
+            seed.session.as_ref().unwrap().roots,
+            [dir.join("app"), dir.join("api")],
+            "the restore opens the folders the file declares"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_restored_window_drops_a_binding_whose_file_is_gone() {
+        let dir = std::env::temp_dir().join(format!("teak-restore-gone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("saved")).unwrap();
+
+        let seed = WindowSeed::restored(
+            Settings::default(),
+            WindowSession {
+                workspace: Some(dir.join("missing.teak-workspace")),
+                roots: vec![dir.join("saved")],
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(seed.workspace, None, "the binding is cleared");
+        assert_eq!(seed.roots, [dir.join("saved")], "the folders stay");
+        assert_eq!(seed.session.as_ref().unwrap().workspace, None);
+        assert!(
+            seed.workspace_error.is_none(),
+            "a workspace that moved away is not an error"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Closing one of two windows removes only it from the registry; closing
