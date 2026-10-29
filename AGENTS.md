@@ -65,11 +65,11 @@ in headless environments.
   fields so rendering can read them directly. `app/changes.rs`, `files.rs`, `editor.rs`,
   `find_in_files.rs`, `picker.rs`, `quick_open.rs` and `ui.rs` hold further `impl TeakApp`
   orchestration blocks; GPUI-free helpers live in `cli.rs`, `git.rs`, `language.rs`,
-  `paths.rs`, `search.rs`, `session.rs`, `settings.rs`, `update.rs`, `watcher.rs`, and the
-  AppKit printing wrapper in `print.rs`. `windows.rs` holds app-level window coordination: the live-window
-  registry, the shared recent list, the one `session.json` writer, and the bootstrap every
-  new or restored window goes through. Add a new module only once a feature is large enough
-  to justify the boundary.
+  `paths.rs`, `search.rs`, `session.rs`, `settings.rs`, `update.rs`, `watcher.rs` and
+  `workspace_file.rs`, and the AppKit printing wrapper in `print.rs`. `windows.rs` holds
+  app-level window coordination: the live-window registry, the shared recent list, the one
+  `session.json` writer, and the bootstrap every new or restored window goes through. Add a
+  new module only once a feature is large enough to justify the boundary.
 - A file and the tab showing it are separate types. `Document` (`app/document.rs`) owns
   the buffer (`Entity<EditorState>`), path, title, language, on-disk format, dirty flag and
   the disk-conflict bookkeeping; `OpenTab` (`app/tabs.rs`) is a view that owns only the

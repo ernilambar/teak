@@ -16,6 +16,7 @@ mod theme;
 mod update;
 mod watcher;
 mod windows;
+mod workspace_file;
 
 use std::path::PathBuf;
 

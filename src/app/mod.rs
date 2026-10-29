@@ -40,7 +40,7 @@ use gpui_kit::*;
 use crate::cli::{install_cli, launcher_target};
 use crate::git;
 use crate::paths::is_noise_path;
-use crate::session::{WindowFrame, WindowSession};
+use crate::session::{WindowFrame, WindowSession, WorkspaceSession};
 use crate::settings::{
     DEFAULT_FONT_WEIGHT, EditorSettings, MAX_FONT_SIZE, MIN_FONT_SIZE, Settings, UiSettings,
     defaults_document, font_family_issue, load_settings, save_editor_flag, save_font_size,
@@ -128,6 +128,9 @@ pub(crate) struct TeakApp {
     window_id: u64,
     /// The frame last observed, persisted with the session.
     frame: Option<WindowFrame>,
+    /// The `.teak-workspace` this window is showing, if any. Its folders are the
+    /// workspace's roots; the path is what the session parks the tab set under.
+    workspace_file: Option<PathBuf>,
     /// The open folders, the expanded set, and the rows rendered from them.
     workspace: Workspace,
     /// The open tabs and the indexes that track the focused one.
@@ -146,6 +149,7 @@ pub(crate) struct TeakApp {
 impl TeakApp {
     pub(crate) fn new(
         workspace_roots: Vec<PathBuf>,
+        workspace_file: Option<PathBuf>,
         settings: Settings,
         services: AppServices,
         window_id: u64,
@@ -159,6 +163,7 @@ impl TeakApp {
             services,
             window_id,
             frame,
+            workspace_file,
             workspace: Workspace::new(workspace_roots, cx.new(|_| ResizableState::default())),
             tabs: TabSet::new(),
             overlays: Overlays::new(),
@@ -317,15 +322,19 @@ impl TeakApp {
         let mut expanded: Vec<PathBuf> = self.workspace.expanded().iter().cloned().collect();
         expanded.sort();
 
+        let tabs: Vec<PathBuf> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.document.path.clone())
+            .collect();
+        let active_tab = self.active().and_then(|tab| tab.document.path.clone());
+
         let state = WindowSession {
+            workspace: self.workspace_file.clone(),
             roots: self.workspace.roots().to_vec(),
-            tabs: self
-                .tabs
-                .iter()
-                .filter_map(|tab| tab.document.path.clone())
-                .collect(),
-            active_tab: self.active().and_then(|tab| tab.document.path.clone()),
-            expanded,
+            tabs: tabs.clone(),
+            active_tab: active_tab.clone(),
+            expanded: expanded.clone(),
             selected_path: self.workspace.selected().map(Path::to_path_buf),
             sidebar_visible: self.workspace.sidebar_visible(),
             sidebar_width: Some(self.workspace.width()),
@@ -336,9 +345,21 @@ impl TeakApp {
             find_options: self.overlays.find_options(),
             frame: self.frame,
         };
+        // The same tabs are parked under the workspace, so switching back to it
+        // restores them even if this window is gone by then.
+        let parked = self.workspace_file.clone().map(|path| {
+            (
+                path,
+                WorkspaceSession {
+                    tabs,
+                    active_tab,
+                    expanded,
+                },
+            )
+        });
         let recent = self.services.recent_paths(cx);
         self.services
-            .store_window(self.window_id, state, recent, cx);
+            .store_window(self.window_id, state, parked, recent, cx);
     }
 
     /// Remembers the current frame for the next session write. Called on
@@ -1693,7 +1714,7 @@ pub(super) mod test_support {
         cx.update(|cx| {
             let services = AppServices::new(cx, Vec::new());
             open_window(WindowOptions::default(), cx, |_window, cx| {
-                cx.new(|cx| TeakApp::new(roots, Settings::default(), services, 0, None, cx))
+                cx.new(|cx| TeakApp::new(roots, None, Settings::default(), services, 0, None, cx))
             })
             .unwrap()
         })

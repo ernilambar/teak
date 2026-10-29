@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -6,20 +7,32 @@ use crate::paths::support_dir;
 use crate::search::SearchOptions;
 
 /// Everything the app persists between launches: one entry per open window,
-/// plus the shared recent list.
+/// the tab sets parked by workspaces, and the shared recent lists.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct SessionState {
     pub(crate) windows: Vec<WindowSession>,
+    /// The tabs each workspace reopens with, keyed by the workspace file's
+    /// path. A window showing a workspace publishes here as well as in
+    /// `windows`, so switching away parks the set and switching back restores
+    /// it even when the window is gone.
+    pub(crate) workspaces: BTreeMap<PathBuf, WorkspaceSession>,
     /// Recently opened files and folders, newest first, for File > Open Recent.
     /// Shared by every window, so it lives outside [`WindowSession`].
     pub(crate) recent: Vec<PathBuf>,
+    /// Recently opened workspace files, newest first. Kept apart from `recent`
+    /// because a workspace is a folder set, not a file to open in a tab.
+    pub(crate) recent_workspaces: Vec<PathBuf>,
 }
 
 /// One window's workspace and open tabs.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct WindowSession {
+    /// The `.teak-workspace` this window is showing, if any. Its folders are in
+    /// `roots` as well; the file is remembered so a relaunch can keep the
+    /// binding and a switch can park the tabs under the right key.
+    pub(crate) workspace: Option<PathBuf>,
     pub(crate) roots: Vec<PathBuf>,
     pub(crate) tabs: Vec<PathBuf>,
     pub(crate) active_tab: Option<PathBuf>,
@@ -38,6 +51,18 @@ pub(crate) struct WindowSession {
     /// The window's frame at the last save, so a relaunch can reopen it where
     /// the user left it.
     pub(crate) frame: Option<WindowFrame>,
+}
+
+/// The tabs a workspace reopens with. Parked while another workspace is
+/// showing, and written by whichever window is showing it, so two windows on
+/// one workspace resolve the same way settings and the recent list do: the last
+/// writer wins.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct WorkspaceSession {
+    pub(crate) tabs: Vec<PathBuf>,
+    pub(crate) active_tab: Option<PathBuf>,
+    pub(crate) expanded: Vec<PathBuf>,
 }
 
 /// What the sidebar shows: the folder tree, or the files git reports changed.
@@ -105,6 +130,7 @@ impl LegacySession {
     fn into_session(self) -> SessionState {
         SessionState {
             windows: vec![WindowSession {
+                workspace: None,
                 roots: self.roots,
                 tabs: self.tabs,
                 active_tab: self.active_tab,
@@ -119,7 +145,9 @@ impl LegacySession {
                 find_options: self.find_options,
                 frame: None,
             }],
+            workspaces: BTreeMap::new(),
             recent: self.recent,
+            recent_workspaces: Vec::new(),
         }
     }
 }
@@ -159,10 +187,13 @@ pub(crate) fn parse_session(data: &str) -> Option<SessionState> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     fn window(path: &str) -> WindowSession {
         WindowSession {
+            workspace: Some(PathBuf::from(format!("{path}/work.teak-workspace"))),
             roots: vec![PathBuf::from(path)],
             tabs: vec![PathBuf::from(format!("{path}/a.rs"))],
             active_tab: Some(PathBuf::from(format!("{path}/a.rs"))),
@@ -192,12 +223,22 @@ mod tests {
     fn session_round_trips_through_json() {
         let state = SessionState {
             windows: vec![window("/tmp/project"), window("/tmp/other")],
+            workspaces: BTreeMap::from([(
+                PathBuf::from("/tmp/project/work.teak-workspace"),
+                WorkspaceSession {
+                    tabs: vec![PathBuf::from("/tmp/project/a.rs")],
+                    active_tab: Some(PathBuf::from("/tmp/project/a.rs")),
+                    expanded: vec![PathBuf::from("/tmp/project")],
+                },
+            )]),
             recent: vec![PathBuf::from("/tmp/project/a.rs")],
+            recent_workspaces: vec![PathBuf::from("/tmp/project/work.teak-workspace")],
         };
         let json = serde_json::to_string(&state).unwrap();
         let restored: SessionState = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.windows.len(), 2);
+        assert_eq!(restored.windows[0].workspace, state.windows[0].workspace);
         assert_eq!(restored.windows[0].roots, state.windows[0].roots);
         assert_eq!(restored.windows[0].tabs, state.windows[0].tabs);
         assert_eq!(restored.windows[0].active_tab, state.windows[0].active_tab);
@@ -214,7 +255,30 @@ mod tests {
             state.windows[0].find_options
         );
         assert_eq!(restored.windows[0].frame, state.windows[0].frame);
+        assert_eq!(restored.workspaces, state.workspaces);
         assert_eq!(restored.recent, state.recent);
+        assert_eq!(restored.recent_workspaces, state.recent_workspaces);
+    }
+
+    #[test]
+    fn a_workspace_file_binding_survives_a_missing_workspaces_table() {
+        let restored = parse_session(
+            r#"{
+                "windows": [{
+                    "workspace": "/tmp/project/work.teak-workspace",
+                    "roots": ["/tmp/project"],
+                    "tabs": ["/tmp/project/a.txt"]
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            restored.windows[0].workspace.as_deref(),
+            Some(Path::new("/tmp/project/work.teak-workspace"))
+        );
+        assert!(restored.workspaces.is_empty());
+        assert!(restored.recent_workspaces.is_empty());
     }
 
     #[test]
