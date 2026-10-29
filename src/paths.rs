@@ -251,6 +251,52 @@ pub(crate) fn relative_display(path: &Path, root: &Path) -> String {
         .to_string()
 }
 
+/// For each tab, the shortest trailing part of its parent path that no other
+/// tab with the same title shares, so two open `README.md` files can read
+/// `README.md · teak` and `README.md · other`. `None` means the title is unique
+/// in the strip and the tab needs no parent. Paths are compared component-wise,
+/// so `/code/teak/README.md` and `/code/teak-extra/README.md` stay separate.
+pub(crate) fn distinct_parents(tabs: &[(String, Option<PathBuf>)]) -> Vec<Option<String>> {
+    let components: Vec<Option<Vec<String>>> = tabs
+        .iter()
+        .map(|(_, path)| path.as_deref().map(path_components))
+        .collect();
+
+    tabs.iter()
+        .enumerate()
+        .map(|(index, (title, _))| {
+            let own = components[index].as_deref()?;
+            let peers: Vec<&[String]> = components
+                .iter()
+                .enumerate()
+                .filter(|(peer, _)| *peer != index && tabs[*peer].0 == *title)
+                .filter_map(|(_, components)| components.as_deref())
+                .collect();
+            if peers.is_empty() {
+                return None;
+            }
+            distinguishing_parent(own, &peers)
+        })
+        .collect()
+}
+
+fn path_components(path: &Path) -> Vec<String> {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// The parent part of the shortest suffix of `own` that no `peer` ends with.
+/// `own` includes the file name, so a match starts at two components: the bare
+/// name never tells same-named files apart.
+fn distinguishing_parent(own: &[String], peers: &[&[String]]) -> Option<String> {
+    (2..=own.len()).find_map(|depth| {
+        let tail = &own[own.len() - depth..];
+        let unique = peers.iter().all(|peer| !peer.ends_with(tail));
+        unique.then(|| tail[..depth - 1].join("/"))
+    })
+}
+
 /// Why a folder cannot be added as another workspace root.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RootConflict {
@@ -652,6 +698,105 @@ mod tests {
             relative_display(Path::new("/elsewhere/main.rs"), Path::new("/tmp/project")),
             "/elsewhere/main.rs"
         );
+    }
+
+    #[test]
+    fn distinct_parents_only_marks_shared_titles() {
+        let tabs = vec![
+            (
+                "README.md".to_string(),
+                Some(PathBuf::from("/code/teak/README.md")),
+            ),
+            (
+                "main.rs".to_string(),
+                Some(PathBuf::from("/code/teak/src/main.rs")),
+            ),
+            ("Untitled".to_string(), None),
+        ];
+
+        assert_eq!(distinct_parents(&tabs), [None, None, None]);
+    }
+
+    /// Two same-named files in different roots get their folder names, and a
+    /// file whose title is unique keeps its bare name.
+    #[test]
+    fn distinct_parents_names_the_folder_that_differs() {
+        let tabs = vec![
+            (
+                "README.md".to_string(),
+                Some(PathBuf::from("/code/teak/README.md")),
+            ),
+            (
+                "README.md".to_string(),
+                Some(PathBuf::from("/code/other/README.md")),
+            ),
+            (
+                "notes.md".to_string(),
+                Some(PathBuf::from("/code/teak/docs/notes.md")),
+            ),
+        ];
+
+        assert_eq!(
+            distinct_parents(&tabs),
+            [Some("teak".to_string()), Some("other".to_string()), None]
+        );
+    }
+
+    /// When the immediate folders match, the suffix grows until it separates
+    /// them; a shorter path never counts as sharing a longer tail.
+    #[test]
+    fn distinct_parents_grows_until_the_paths_differ() {
+        let tabs = vec![
+            (
+                "README.md".to_string(),
+                Some(PathBuf::from("/code/teak/docs/README.md")),
+            ),
+            (
+                "README.md".to_string(),
+                Some(PathBuf::from("/code/other/docs/README.md")),
+            ),
+        ];
+
+        assert_eq!(
+            distinct_parents(&tabs),
+            [
+                Some("teak/docs".to_string()),
+                Some("other/docs".to_string())
+            ]
+        );
+
+        let nested = vec![
+            (
+                "index.js".to_string(),
+                Some(PathBuf::from("/code/a/docs/api/index.js")),
+            ),
+            (
+                "index.js".to_string(),
+                Some(PathBuf::from("/code/b/docs/api/index.js")),
+            ),
+        ];
+        assert_eq!(
+            distinct_parents(&nested),
+            [
+                Some("a/docs/api".to_string()),
+                Some("b/docs/api".to_string())
+            ]
+        );
+    }
+
+    /// A pathless tab can share a title but cannot say where it lives, so the
+    /// file tab keeps its name alone rather than gaining a misleading parent.
+    #[test]
+    fn distinct_parents_ignores_a_pathless_twin() {
+        let tabs = vec![
+            ("README.md".to_string(), None),
+            (
+                "README.md".to_string(),
+                Some(PathBuf::from("/code/teak/README.md")),
+            ),
+        ];
+
+        assert_eq!(distinct_parents(&tabs), [None, None]);
     }
 
     #[test]

@@ -379,6 +379,28 @@ impl TabSet {
 }
 
 impl TeakApp {
+    /// The folder path each tab needs to be told apart from another tab with
+    /// the same title, aligned with [`TabSet::iter`]. A diff tab answers with
+    /// the file it describes, which its generated title does not show.
+    pub(super) fn tab_parents(&self) -> Vec<Option<SharedString>> {
+        let tabs: Vec<(String, Option<PathBuf>)> = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                let path = tab
+                    .document
+                    .path
+                    .clone()
+                    .or_else(|| tab.diff.as_ref().map(|diff| diff.source.clone()));
+                (tab.document.title.to_string(), path)
+            })
+            .collect();
+        crate::paths::distinct_parents(&tabs)
+            .into_iter()
+            .map(|parent| parent.map(SharedString::from))
+            .collect()
+    }
+
     pub(super) fn add_tab(
         &mut self,
         path: Option<PathBuf>,
@@ -1158,6 +1180,43 @@ mod tests {
         set.iter()
             .map(|tab| tab.document.title.to_string())
             .collect()
+    }
+
+    #[gpui_kit::test]
+    async fn tab_parents_name_the_folder_of_same_named_files(cx: &mut TestAppContext) {
+        let base = std::env::temp_dir().join(format!("app-tab-parents-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dirs = [base.join("teak"), base.join("other")];
+        for dir in &dirs {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("README.md"), "# Readme\n").unwrap();
+        }
+
+        let (handle, app) = open_app(cx);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                for dir in &dirs {
+                    let path = dir.join("README.md");
+                    let content = crate::app::files::read_file(&path).unwrap();
+                    this.add_file_tab(path, content, false, window, cx);
+                }
+            });
+        })
+        .unwrap();
+
+        let parents: Vec<Option<String>> = cx.update(|cx| {
+            app.read(cx)
+                .tab_parents()
+                .into_iter()
+                .map(|parent| parent.map(|parent| parent.to_string()))
+                .collect()
+        });
+        assert_eq!(
+            parents,
+            [Some("teak".to_string()), Some("other".to_string())]
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

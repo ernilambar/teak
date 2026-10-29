@@ -272,6 +272,10 @@ impl TeakApp {
         let accent = theme.blue;
         let show_icons = self.settings.values.ui.tab_icons();
         let icon_style = self.settings.values.ui.icon_style();
+        // Folder hints for tabs whose titles collide, so two open `README.md`
+        // tabs are not both just "README.md".
+        let detail_fg = theme.muted_foreground;
+        let parents = self.tab_parents();
 
         let tabs: Vec<Stateful<Div>> = self
             .tabs
@@ -285,6 +289,12 @@ impl TeakApp {
                 let tooltip: SharedString = match &tab.document.path {
                     Some(path) => display_path(path).into(),
                     None => tab.document.title.clone(),
+                };
+                let parent = parents.get(ix).cloned().flatten();
+                let parent_color = if selected {
+                    detail_fg
+                } else {
+                    fg.opacity(0.75)
                 };
                 let (dot, dot_color) = if deleted {
                     (true, deleted_color)
@@ -344,6 +354,22 @@ impl TeakApp {
                             .when(tab.transient, |this| this.italic())
                             .child(tab.document.title.clone()),
                     )
+                    // Same-named files from different folders carry the shortest
+                    // folder path that tells them apart, so two open `README.md`
+                    // tabs are not both just "README.md".
+                    .when_some(parent, |this, parent| {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .max_w(px(96.))
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .text_xs()
+                                .text_color(parent_color)
+                                .child(format!("· {parent}")),
+                        )
+                    })
                     .child(
                         div()
                             .relative()
@@ -410,7 +436,11 @@ impl TeakApp {
         let titles: Vec<SharedString> = self
             .tabs
             .iter()
-            .map(|tab| tab.document.title.clone())
+            .enumerate()
+            .map(|(ix, tab)| match parents.get(ix).and_then(Option::as_ref) {
+                Some(parent) => format!("{} · {parent}", tab.document.title).into(),
+                None => tab.document.title.clone(),
+            })
             .collect();
         let overflow_entity = entity.clone();
         let menu_entity = entity.clone();
