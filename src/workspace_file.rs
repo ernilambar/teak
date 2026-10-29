@@ -60,6 +60,14 @@ pub(crate) fn is_workspace_path(path: &Path) -> bool {
         })
 }
 
+/// The name shown for a workspace in the title bar: the file's stem, so
+/// `work.teak-workspace` reads as `work`.
+pub(crate) fn label(path: &Path) -> String {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 /// The folders a workspace file declares, absolute, folded, with the entries
 /// that are no longer directories dropped. The workspace file itself is the
 /// source of truth for the set, so this replaces whatever folders a window had.
@@ -212,7 +220,7 @@ fn relative_from(base: &Path, target: &Path) -> Option<PathBuf> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{EXTENSION, fold, is_workspace_path, load, parse, save};
+    use super::{EXTENSION, fold, is_workspace_path, label, load, parse, save};
 
     fn fixture(name: &str) -> PathBuf {
         let root =
@@ -279,6 +287,12 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn label_drops_the_extension() {
+        assert_eq!(label(Path::new("/w/work.teak-workspace")), "work");
+        assert_eq!(label(Path::new("/w/team.code-workspace")), "team");
     }
 
     #[test]

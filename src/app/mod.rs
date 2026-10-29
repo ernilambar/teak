@@ -200,14 +200,20 @@ impl TeakApp {
     }
 
     /// Keeps the native window title in sync with the focused tab, appending the
-    /// file's full path after the app name.
+    /// file's full path after the app name. With no file active, a workspace's
+    /// name stands in so two windows are told apart at a glance.
     fn sync_window_title(&mut self, window: &mut Window) {
-        let title = match self.active() {
-            Some(tab) => match tab.document.path.as_deref() {
-                Some(path) => format!("{WINDOW_TITLE} — {}", path.display()),
-                None => format!("{WINDOW_TITLE} — Untitled"),
-            },
-            None => WINDOW_TITLE.to_string(),
+        let title = if let Some(path) = self.active().and_then(|tab| tab.document.path.as_deref()) {
+            format!("{WINDOW_TITLE} — {}", path.display())
+        } else if let Some(workspace) = self.workspace_file.as_deref() {
+            format!(
+                "{WINDOW_TITLE} — {}",
+                crate::workspace_file::label(workspace)
+            )
+        } else if self.active().is_some() {
+            format!("{WINDOW_TITLE} — Untitled")
+        } else {
+            WINDOW_TITLE.to_string()
         };
 
         if self.chrome.title_changed(&title) {
