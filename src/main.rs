@@ -79,6 +79,7 @@ gpui_kit::actions!(
         CheckForUpdates,
         About,
         OpenSettings,
+        CloseSettings,
         OpenDefaultSettings,
         OpenKeybindings,
         OpenThemesFolder,

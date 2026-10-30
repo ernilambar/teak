@@ -192,7 +192,7 @@ impl TeakApp {
             tabs: TabSet::new(),
             overlays: Overlays::new(),
             chrome: Chrome::new(),
-            settings: SettingsState::new(settings),
+            settings: SettingsState::new(settings, cx.focus_handle()),
             git_marks_generation: 0,
         };
         app.workspace.reload();
@@ -1298,9 +1298,12 @@ impl TeakApp {
         .detach();
     }
 
-    fn on_open_settings(&mut self, _: &OpenSettings, _window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.toggle_open();
-        cx.notify();
+    fn on_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_open() {
+            self.close_settings(window, cx);
+        } else {
+            self.open_settings(window, cx);
+        }
     }
 
     /// Opens the generated "Default Settings" document: every key with the
@@ -1622,6 +1625,7 @@ impl Render for TeakApp {
             .on_action(cx.listener(Self::on_check_for_updates))
             .on_action(cx.listener(Self::on_about))
             .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_close_settings))
             .on_action(cx.listener(Self::on_open_default_settings))
             .on_action(cx.listener(Self::on_open_themes_folder))
             .on_action(cx.listener(Self::on_reveal_in_finder))

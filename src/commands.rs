@@ -30,22 +30,22 @@ use gpui_kit::*;
 use crate::paths::display_path;
 use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, BringAllToFront,
-    CheckForUpdates, ClearRecent, CloseAllFolders, CloseFindPanel, CloseTab, CloseWindow,
-    CloseWorkspace, CommandPalette, ConvertToCamelCase, ConvertToConstantCase, ConvertToKebabCase,
-    ConvertToLowercase, ConvertToPascalCase, ConvertToSnakeCase, ConvertToTitleCase,
-    ConvertToUppercase, CopyFileName, CopyFilePath, CopyLineDown, CopyLineUp, CopyRelativePath,
-    DeleteLine, FindAndReplaceInEditor, FindInEditor, FindInFiles, FindNextField, FindNextInEditor,
-    FindPreviousField, FindPreviousInEditor, GoToLine, Hide, HideOthers, InsertLineAbove,
-    InsertLineBelow, InstallCli, JoinLines, JumpToTab, MinimizeWindow, MoveLineDown, MoveLineUp,
-    MoveTabToNewWindow, NewFile, NewWindow, NextResult, NextTab, OpenDefaultSettings, OpenFile,
-    OpenFolderInNewWindow, OpenKeybindings, OpenPath, OpenRecentPicker, OpenResult, OpenSettings,
-    OpenThemesFolder, OpenWorkspace, PreviousResult, PreviousTab, Print, QuickOpen, Quit, Refresh,
-    ReopenClosedTab, ReplaceAll, RevealInFinder, RunFind, SaveAll, SaveFile, SaveFileAs,
-    SaveWorkspaceAs, SelectLine, SetTheme, ShowAll, ShowChanges, ShowExplorer,
-    SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose, ToggleFolding, ToggleFullScreen,
-    ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers, ToggleMarkdownPreview, ToggleSidebar,
-    ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap, TrimTrailingWhitespace, ZoomIn, ZoomOut,
-    ZoomReset, ZoomWindow,
+    CheckForUpdates, ClearRecent, CloseAllFolders, CloseFindPanel, CloseSettings, CloseTab,
+    CloseWindow, CloseWorkspace, CommandPalette, ConvertToCamelCase, ConvertToConstantCase,
+    ConvertToKebabCase, ConvertToLowercase, ConvertToPascalCase, ConvertToSnakeCase,
+    ConvertToTitleCase, ConvertToUppercase, CopyFileName, CopyFilePath, CopyLineDown, CopyLineUp,
+    CopyRelativePath, DeleteLine, FindAndReplaceInEditor, FindInEditor, FindInFiles, FindNextField,
+    FindNextInEditor, FindPreviousField, FindPreviousInEditor, GoToLine, Hide, HideOthers,
+    InsertLineAbove, InsertLineBelow, InstallCli, JoinLines, JumpToTab, MinimizeWindow,
+    MoveLineDown, MoveLineUp, MoveTabToNewWindow, NewFile, NewWindow, NextResult, NextTab,
+    OpenDefaultSettings, OpenFile, OpenFolderInNewWindow, OpenKeybindings, OpenPath,
+    OpenRecentPicker, OpenResult, OpenSettings, OpenThemesFolder, OpenWorkspace, PreviousResult,
+    PreviousTab, Print, QuickOpen, Quit, Refresh, ReopenClosedTab, ReplaceAll, RevealInFinder,
+    RunFind, SaveAll, SaveFile, SaveFileAs, SaveWorkspaceAs, SelectLine, SetTheme, ShowAll,
+    ShowChanges, ShowExplorer, SplitSelectionIntoLines, THEME_CHOICES, ToggleAutoClose,
+    ToggleFolding, ToggleFullScreen, ToggleIndentGuides, ToggleLineComment, ToggleLineNumbers,
+    ToggleMarkdownPreview, ToggleSidebar, ToggleSmartIndent, ToggleWhitespace, ToggleWordWrap,
+    TrimTrailingWhitespace, ZoomIn, ZoomOut, ZoomReset, ZoomWindow,
 };
 
 /// gpui-kit's editor key context. Its `CONTEXT` constant is private, so the
@@ -82,6 +82,8 @@ pub(crate) enum Scope {
     Editor,
     /// Fires only in a Find panel field.
     FindPanel,
+    /// Fires only inside the Settings overlay.
+    Settings,
     /// Fires only in the Find Results tab's editor.
     FindResults,
 }
@@ -413,6 +415,17 @@ static COMMANDS: &[Command] = &[
         label: "Open Result",
         make: || Box::new(OpenResult),
         bindings: &[("enter", Scope::FindResults)],
+        menu: None,
+        palette: None,
+        keywords: &[],
+    },
+    // Escape dismisses the Settings overlay. Every control writes the moment it
+    // is touched, so this only closes the surface; it is scoped to the overlay
+    // so it cannot pre-empt a Find panel escape.
+    Command {
+        label: "Close Settings",
+        make: || Box::new(CloseSettings),
+        bindings: &[("escape", Scope::Settings)],
         menu: None,
         palette: None,
         keywords: &[],
@@ -1249,6 +1262,20 @@ pub(crate) fn find_bindings_with(
     list
 }
 
+/// Escape inside the Settings overlay, which dismisses it.
+#[cfg(test)]
+pub(crate) fn settings_bindings(cx: &App) -> Vec<KeyBinding> {
+    settings_bindings_with(cx, &crate::keymap::Overrides::default())
+}
+
+/// The Settings overlay's chords with the user's `keybindings.json` applied.
+pub(crate) fn settings_bindings_with(
+    cx: &App,
+    overrides: &crate::keymap::Overrides,
+) -> Vec<KeyBinding> {
+    bindings(Scope::Settings, cx, overrides)
+}
+
 /// The table's chords for one scope, with the user's overrides applied.
 ///
 /// An override replaces every default chord of its command and keeps the scope
@@ -1313,6 +1340,10 @@ fn try_binding(
         Scope::Global => None,
         Scope::Editor => parse(EDITOR),
         Scope::FindPanel => parse(&format!("FindPanel > {EDITOR}")),
+        // The overlay's own context, not its descendants': a field or a popover
+        // inside it handles Escape first and propagates, so this only runs when
+        // nothing in the overlay consumed the key.
+        Scope::Settings => parse("Settings"),
         Scope::FindResults => parse(&format!("FindResults > {EDITOR}")),
     };
     KeyBinding::load(chord, action, predicate, false, None, cx).ok()
@@ -1442,7 +1473,7 @@ mod tests {
 
     use super::{
         COMMANDS, Entry, MenuKind, PALETTE, PaletteGroup, PaletteSlot, Scope, app_bindings,
-        app_bindings_with, binding, editor_bindings, find_bindings,
+        app_bindings_with, binding, editor_bindings, find_bindings, settings_bindings,
     };
 
     /// The palette groups in display order, skipping the hand-written Appearance
@@ -1483,11 +1514,12 @@ mod tests {
 
     #[gpui_kit::test]
     async fn every_binding_parses(cx: &mut TestAppContext) {
-        let (app, editor, find) = cx.read(|cx| {
+        let (app, editor, find, settings) = cx.read(|cx| {
             (
                 app_bindings(cx).len(),
                 editor_bindings(cx).len(),
                 find_bindings(cx).len(),
+                settings_bindings(cx).len(),
             )
         });
         // Building the lists is itself the assertion that every chord in the
@@ -1495,6 +1527,7 @@ mod tests {
         assert_eq!(app, 55);
         assert_eq!(editor, 21);
         assert_eq!(find, 6);
+        assert_eq!(settings, 1);
     }
 
     #[gpui_kit::test]
@@ -1620,6 +1653,26 @@ mod tests {
         );
         assert!(resolve(&keymap, "alt-enter", &["FindPanel", "Input"]).is_empty());
         assert!(resolve(&keymap, "alt-secondary-enter", &["Input"]).is_empty());
+    }
+
+    /// Escape reaches the overlay's own context and nothing outside it. The
+    /// overlay is registered last, but it matches at a shallower depth than an
+    /// `"Input"` field inside it, so the field handles the key first and the
+    /// overlay only sees what the field propagated.
+    #[gpui_kit::test]
+    async fn escape_dismisses_only_the_settings_overlay(cx: &mut TestAppContext) {
+        let keymap = cx.read(|cx| {
+            let mut keymap = Keymap::default();
+            keymap.add_bindings(settings_bindings(cx));
+            keymap
+        });
+
+        assert!(resolve(&keymap, "escape", &["Settings"])[0].ends_with("CloseSettings"));
+        let in_field = resolve(&keymap, "escape", &["Settings", "Input"]);
+        assert!(in_field[0].ends_with("CloseSettings"));
+        // A Find panel keeps its own Escape, and an editor none at all.
+        assert!(resolve(&keymap, "escape", &["Input"]).is_empty());
+        assert!(resolve(&keymap, "escape", &["FindPanel", "Input"]).is_empty());
     }
 
     /// Whether `entries`, or a submenu inside them, shows `cluster`.

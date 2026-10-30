@@ -66,6 +66,7 @@ pub(crate) fn bind_keys_with(cx: &mut App, overrides: &Overrides) {
     cx.bind_keys(commands::app_bindings_with(cx, overrides));
     cx.bind_keys(commands::editor_bindings_with(cx, overrides));
     cx.bind_keys(commands::find_bindings_with(cx, overrides));
+    cx.bind_keys(commands::settings_bindings_with(cx, overrides));
 }
 
 /// What an entry does to its command.

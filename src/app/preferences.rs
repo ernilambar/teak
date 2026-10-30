@@ -35,6 +35,7 @@ use crate::settings::{
 };
 
 use super::TeakApp;
+use crate::CloseSettings;
 
 /// A boolean switch's change handler, given the window it needs to apply.
 type WindowSwitchSetter = Rc<dyn Fn(&mut TeakApp, bool, &mut Window, &mut Context<TeakApp>)>;
@@ -148,20 +149,28 @@ fn window_number_input(
 ///
 /// `values` is `pub(super)` because it is the parsed `settings.json` value
 /// object: five files read it, and there is no invariant a wrapper could
-/// protect. `open` and `error` are private because they have to agree — opening
-/// the overlay discards an error left over from a previous write.
+/// protect. `open`, `error` and the focus bookkeeping are private because they
+/// have to agree — opening the overlay takes focus, and only a close hands it
+/// back.
 pub(super) struct SettingsState {
     pub(super) values: crate::settings::Settings,
     open: bool,
     error: Option<SharedString>,
+    /// The overlay's own handle. Without it nothing inside the overlay can hold
+    /// focus, so Escape would reach the editor behind it instead.
+    focus_handle: FocusHandle,
+    /// What held focus when the overlay opened, restored on close.
+    return_focus: Option<FocusHandle>,
 }
 
 impl SettingsState {
-    pub(super) fn new(values: crate::settings::Settings) -> Self {
+    pub(super) fn new(values: crate::settings::Settings, focus_handle: FocusHandle) -> Self {
         Self {
             values,
             open: false,
             error: None,
+            focus_handle,
+            return_focus: None,
         }
     }
 
@@ -169,15 +178,22 @@ impl SettingsState {
         self.open
     }
 
-    pub(super) fn set_open(&mut self, open: bool) {
-        self.open = open;
+    pub(super) fn focus_handle(&self) -> &FocusHandle {
+        &self.focus_handle
     }
 
-    /// Shows or hides the overlay, dropping any error from a previous write so a
-    /// stale message cannot reappear when it is reopened.
-    pub(super) fn toggle_open(&mut self) {
-        self.open = !self.open;
+    /// Shows the overlay, remembering `return_focus` and dropping any error left
+    /// over from an earlier write so a stale banner cannot reappear.
+    pub(super) fn open(&mut self, return_focus: Option<FocusHandle>) {
+        self.open = true;
         self.error = None;
+        self.return_focus = return_focus;
+    }
+
+    /// Hides the overlay, handing back the focus to restore.
+    pub(super) fn close(&mut self) -> Option<FocusHandle> {
+        self.open = false;
+        self.return_focus.take()
     }
 
     pub(super) fn error(&self) -> Option<&SharedString> {
@@ -190,6 +206,42 @@ impl SettingsState {
 }
 
 impl TeakApp {
+    /// Shows the Settings overlay and gives it focus, remembering what held it
+    /// so the close can hand it back.
+    ///
+    /// The focus can move right away: the handle already exists, and the render
+    /// this notify schedules is what puts `track_focus` in the tree, which is
+    /// where the `"Settings"` context Escape is bound in comes from.
+    pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.open(window.focused(cx));
+        let focus_handle = self.settings.focus_handle().clone();
+        window.focus(&focus_handle, cx);
+        cx.notify();
+    }
+
+    /// Hides the overlay, handing focus back to whatever held it. Nothing is
+    /// discarded: each control writes its value and applies it the moment it is
+    /// touched, so closing only dismisses the surface.
+    pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.settings.is_open() {
+            return;
+        }
+        match self.settings.close() {
+            Some(previous) => window.focus(&previous, cx),
+            None => window.focus(&self.focus_handle, cx),
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_close_settings(
+        &mut self,
+        _: &CloseSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_settings(window, cx);
+    }
+
     /// Builds the full-window settings overlay.
     pub(super) fn render_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let weak = cx.entity().downgrade();
@@ -708,16 +760,15 @@ impl TeakApp {
             .ghost()
             .label("Open settings.json")
             .on_click(cx.listener(|this, _, window, cx| {
-                this.settings.set_open(false);
+                this.close_settings(window, cx);
                 this.open_settings_file(window, cx);
                 cx.notify();
             }));
         let done = Button::new("settings-done")
             .small()
             .label("Done")
-            .on_click(cx.listener(|this, _, _window, cx| {
-                this.settings.set_open(false);
-                cx.notify();
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.close_settings(window, cx);
             }));
 
         let header = div()
@@ -754,6 +805,10 @@ impl TeakApp {
             .absolute()
             .inset_0()
             .occlude()
+            // Escape is bound in this context, so the overlay has to hold the
+            // focus and publish the context while it renders.
+            .key_context("Settings")
+            .track_focus(self.settings.focus_handle())
             .v_flex()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -954,20 +1009,33 @@ mod tests {
     use super::SettingsState;
 
     /// Opening the overlay drops any error left over from an earlier write, so a
-    /// stale banner cannot reappear when it is reopened.
-    #[test]
-    fn toggle_open_clears_a_stale_error() {
-        let mut state = SettingsState::new(Settings::default());
-        assert!(!state.is_open());
-        assert_eq!(state.error(), None);
+    /// stale banner cannot reappear when it is reopened, and closing hands back
+    /// the focus it remembered.
+    #[gpui_kit::test]
+    async fn open_clears_a_stale_error_and_close_returns_focus(cx: &mut TestAppContext) {
+        let state = cx.new(|cx| SettingsState::new(Settings::default(), cx.focus_handle()));
+        let previous = cx.update(|cx| cx.focus_handle());
+        cx.update(|cx| {
+            state.update(cx, |state, _| {
+                assert!(!state.is_open());
+                assert_eq!(state.error(), None);
+                assert!(
+                    state.close().is_none(),
+                    "closing a closed overlay is a no-op"
+                );
 
-        state.set_error(Some("Could not save settings".into()));
-        state.toggle_open();
-        assert!(state.is_open());
-        assert_eq!(state.error(), None, "opening discards the stale error");
+                state.set_error(Some("Could not save settings".into()));
+                state.open(Some(previous.clone()));
+                assert!(state.is_open());
+                assert_eq!(state.error(), None, "opening discards the stale error");
 
-        state.toggle_open();
-        assert!(!state.is_open());
+                assert!(
+                    state.close() == Some(previous.clone()),
+                    "closing hands back the focus the open recorded"
+                );
+                assert!(!state.is_open());
+            });
+        });
     }
 
     /// The overlay builds every field it offers, including the custom number
@@ -981,12 +1049,46 @@ mod tests {
             let focus_handle = app.read(cx).focus_handle.clone();
             window.focus(&focus_handle, cx);
             app.update(cx, |app, cx| {
-                app.settings.set_open(true);
+                app.settings.open(None);
                 cx.notify();
             });
             window.render_frame(cx);
             window.render_frame(cx);
             assert!(app.read(cx).settings.is_open(), "the overlay stays open");
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// Escape closes the overlay instead of doing nothing, and the focus it took
+    /// when it opened goes back to the editor, so typing resumes where it was.
+    /// Nothing is reverted: every control wrote its value when it was touched.
+    #[gpui_kit::test]
+    async fn escape_closes_the_overlay_and_returns_focus(cx: &mut TestAppContext) {
+        let (handle, app) = open_app(cx);
+
+        cx.update_window(handle, |_, window, cx| {
+            let focus_handle = app.read(cx).focus_handle.clone();
+            window.focus(&focus_handle, cx);
+            window.render_frame(cx);
+
+            window.press("secondary-,", cx);
+            window.render_frame(cx);
+            let overlay_focus = app.read(cx).settings.focus_handle().clone();
+            assert!(app.read(cx).settings.is_open(), "`⌘,` opens the overlay");
+            assert!(overlay_focus.is_focused(window), "the overlay takes focus");
+
+            window.press("escape", cx);
+            window.render_frame(cx);
+            assert!(
+                !app.read(cx).settings.is_open(),
+                "Escape closes the overlay"
+            );
+            assert_eq!(
+                window.focused(cx).as_ref(),
+                Some(&focus_handle),
+                "focus goes back to what held it before the overlay opened"
+            );
         })
         .unwrap();
         cx.run_until_parked();
