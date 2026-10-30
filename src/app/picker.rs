@@ -9,17 +9,20 @@
 //! quick open, which ranks files with [`crate::fuzzy`]; the palette and the
 //! recent list list every row and let the widget filter.
 
+use std::path::PathBuf;
+
 use gpui_kit::component::{
     ActiveTheme as _,
     command::{Command, CommandItem, CommandState},
 };
 use gpui_kit::*;
 
-use crate::paths::display_path;
-use crate::{CommandPalette, OpenPath, OpenRecentPicker, QuickOpen};
+use crate::paths::{display_path, file_name};
+use crate::{CommandPalette, OpenRecentPicker, QuickOpen};
 
 use super::TeakApp;
 use super::overlays::PickerKind;
+use super::quick_open::{best_score, quick_open_item};
 
 /// Width of the picker panel.
 const PICKER_WIDTH: Pixels = px(560.);
@@ -43,9 +46,11 @@ impl PickerKind {
         }
     }
 
-    /// Quick open ranks its own rows, so the widget must not filter them again.
+    /// Every kind ranks its own rows, so the widget must not filter them again:
+    /// its filter only keeps rows whose label *contains* the query, which cannot
+    /// match an initialism or reorder by score. `fuzzy` decides here instead.
     fn filterable(self) -> bool {
-        !matches!(self, Self::Files)
+        false
     }
 }
 
@@ -194,7 +199,7 @@ impl TeakApp {
 
         match kind {
             PickerKind::Palette => {
-                for group in crate::commands::palette_groups() {
+                for group in crate::commands::palette_groups(&query) {
                     command = command.group(group);
                 }
             }
@@ -204,7 +209,7 @@ impl TeakApp {
                 }
             }
             PickerKind::Recent => {
-                for item in self.recent_items(cx) {
+                for item in self.recent_items(&query, cx) {
                     command = command.item(item);
                 }
             }
@@ -234,17 +239,35 @@ impl TeakApp {
         )
     }
 
-    /// One row per remembered path, newest first. Opening a row reuses
-    /// [`Self::on_open_path`], so a folder in the list reveals as a root.
-    fn recent_items(&self, cx: &mut Context<Self>) -> Vec<CommandItem> {
-        self.services
+    /// One row per remembered path, ranked by the same scorer as quick open and
+    /// presented the same way: a path fragment matches, but a file name that
+    /// matches outranks it. Opening a row reuses [`Self::on_open_path`], so a
+    /// folder in the list reveals as a root, and a file is opened for keeps
+    /// rather than previewed.
+    fn recent_items(&self, query: &str, cx: &mut Context<Self>) -> Vec<CommandItem> {
+        let icon_style = self.settings.values.ui.icon_style();
+        let query = query.trim();
+        let mut ranked: Vec<(u32, usize, String, PathBuf)> = self
+            .services
             .recent_paths(cx)
             .into_iter()
-            .map(|path| {
-                CommandItem::new()
-                    .label(display_path(&path))
-                    .action(Box::new(OpenPath(path, false)))
+            .enumerate()
+            .filter_map(|(index, path)| {
+                let shown = display_path(&path);
+                let score = if query.is_empty() {
+                    0
+                } else {
+                    best_score(query, &file_name(&path), &shown)?
+                };
+                Some((score, index, shown, path))
             })
+            .collect();
+        // Stable, so equal scores keep the list's recency order.
+        ranked.sort_by_key(|row| std::cmp::Reverse(row.0));
+
+        ranked
+            .into_iter()
+            .map(|(_, _, shown, path)| quick_open_item(shown, path, icon_style, false))
             .collect()
     }
 }
@@ -343,6 +366,75 @@ mod tests {
                     .iter()
                     .any(|tab| tab.document.path.as_deref() == Some(path.as_path())),
                 "the confirmed recent file opens"
+            );
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The recent list is filtered and ranked by the app, not by the widget's
+    /// `contains` filter: a typed query narrows the rows, and a name match
+    /// outranks the newest entry.
+    #[gpui_kit::test]
+    async fn the_recent_list_ranks_a_name_match_over_recency(cx: &mut TestAppContext) {
+        let root = std::env::temp_dir().join(format!("teak-recent-filter-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let alpha = root.join("alpha-note.txt");
+        let beta = root.join("beta-note.txt");
+        for path in [&alpha, &beta] {
+            std::fs::write(path, "hello").unwrap();
+        }
+
+        let (handle, app) = open_app(cx);
+        cx.update(|cx| {
+            app.update(cx, |this, cx| {
+                // `alpha` is the newest, so it leads while the query is empty.
+                this.note_recent(beta.clone(), cx);
+                this.note_recent(alpha.clone(), cx);
+            });
+        });
+        cx.update(|cx| {
+            app.update(cx, |this, cx| {
+                assert_eq!(this.recent_items("", cx).len(), 2);
+                assert!(this.recent_items("zzzz", cx).is_empty());
+            });
+        });
+
+        cx.update_window(handle, |_, window, cx| {
+            let focus_handle = app.read(cx).focus_handle.clone();
+            window.focus(&focus_handle, cx);
+            window.render_frame(cx);
+            window.press("ctrl-r", cx);
+            window.render_frame(cx);
+            if let Some(picker) = app.read(cx).overlays.picker().map(|p| p.state.clone()) {
+                picker.update(cx, |state, cx| state.focus(window, cx));
+            }
+            window.render_frame(cx);
+            // An initialism of `beta`'s name: the widget's substring filter
+            // could not find it at all.
+            window.input("btn", cx);
+            window.render_frame(cx);
+            window.click(IndexPath::new(0).section(0), cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, _, cx| {
+            let this = app.read(cx);
+            assert!(
+                this.tabs
+                    .iter()
+                    .any(|tab| tab.document.path.as_deref() == Some(beta.as_path())),
+                "the row whose name matches the query wins"
+            );
+            assert!(
+                !this
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.document.path.as_deref() == Some(alpha.as_path())),
+                "the newer, weaker match is not the one opened"
             );
         })
         .unwrap();

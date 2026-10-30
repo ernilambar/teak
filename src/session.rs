@@ -150,8 +150,9 @@ impl LegacySession {
     }
 }
 
-/// How many entries File > Open Recent keeps.
-pub(crate) const MAX_RECENT: usize = 10;
+/// How many entries File > Open Recent keeps. Long enough that the Open Recent
+/// picker is worth searching: a filter over a handful of rows is decoration.
+pub(crate) const MAX_RECENT: usize = 50;
 
 /// Moves `path` to the front of `recent`, dropping its older entry and any
 /// beyond [`MAX_RECENT`].

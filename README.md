@@ -14,8 +14,8 @@ A fast, lightweight text editor.
 - Git branch, with ahead/behind counts, in the status bar
 - Watches open folders, so changes made by other programs show up on their own
 - Drag files and folders in from Finder; hold Option to open them in a new window
-- Command palette (`Cmd+Shift+P`)
-- Quick Open (`Cmd+P`) to fuzzy-find files
+- Command palette (`Cmd+Shift+P`), ranked the same way as Quick Open
+- Quick Open (`Cmd+P`) to fuzzy-find files, by file name or by path
 - Open Recent (`Ctrl+R`) to jump back to a recent folder or file
 - Custom keybindings in `keybindings.json`, in VS Code's format
 - Find and Replace in Files (`Cmd+Shift+F`), with regex and globs

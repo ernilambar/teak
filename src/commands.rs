@@ -27,6 +27,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
+use crate::fuzzy;
 use crate::paths::display_path;
 use crate::{
     About, AddCursorAbove, AddCursorBelow, AddFolder, AddNextOccurrence, BringAllToFront,
@@ -122,7 +123,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-n", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 0)),
-        keywords: &[],
+        keywords: &["create", "document"],
     },
     Command {
         label: "New Window",
@@ -138,7 +139,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-o", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 2)),
-        keywords: &[],
+        keywords: &["file", "load", "browse"],
     },
     Command {
         label: "Quick Open…",
@@ -146,7 +147,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-p", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 3)),
-        keywords: &[],
+        keywords: &["file", "finder", "search files", "go to"],
     },
     Command {
         label: "Open Recent…",
@@ -165,7 +166,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("ctrl-secondary-o", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 5)),
-        keywords: &[],
+        keywords: &["workspace", "root", "project"],
     },
     Command {
         label: "Open Folder in New Window…",
@@ -206,7 +207,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("ctrl-secondary-w", Scope::Global)],
         menu: Some((MenuKind::File, 0)),
         palette: Some((PaletteGroup::File, 7)),
-        keywords: &[],
+        keywords: &["workspace", "root"],
     },
     Command {
         label: "Save",
@@ -214,7 +215,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
         palette: Some((PaletteGroup::File, 8)),
-        keywords: &[],
+        keywords: &["write", "disk"],
     },
     Command {
         label: "Save As…",
@@ -222,7 +223,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-shift-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
         palette: Some((PaletteGroup::File, 9)),
-        keywords: &[],
+        keywords: &["write", "disk"],
     },
     Command {
         label: "Save All",
@@ -230,7 +231,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("alt-secondary-s", Scope::Global)],
         menu: Some((MenuKind::File, 1)),
         palette: Some((PaletteGroup::File, 10)),
-        keywords: &[],
+        keywords: &["write", "disk"],
     },
     Command {
         label: "Print…",
@@ -247,7 +248,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-w", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
         palette: Some((PaletteGroup::File, 11)),
-        keywords: &[],
+        keywords: &["dismiss", "tab"],
     },
     Command {
         label: "Close Window",
@@ -273,7 +274,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-shift-t", Scope::Global)],
         menu: Some((MenuKind::File, 2)),
         palette: Some((PaletteGroup::File, 14)),
-        keywords: &[],
+        keywords: &["restore", "undo close"],
     },
     Command {
         label: "Reveal in Finder",
@@ -281,7 +282,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("alt-secondary-r", Scope::Global)],
         menu: Some((MenuKind::File, 3)),
         palette: Some((PaletteGroup::File, 15)),
-        keywords: &[],
+        keywords: &["show", "file manager"],
     },
     Command {
         // The Open Recent submenu shows this as "Clear Menu", the macOS name.
@@ -436,7 +437,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("alt-secondary-c", Scope::Global)],
         menu: Some((MenuKind::File, 3)),
         palette: Some((PaletteGroup::Edit, 14)),
-        keywords: &[],
+        keywords: &["clipboard", "absolute"],
     },
     Command {
         label: "Copy Relative Path",
@@ -444,7 +445,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("alt-secondary-shift-c", Scope::Global)],
         menu: Some((MenuKind::File, 3)),
         palette: Some((PaletteGroup::Edit, 15)),
-        keywords: &[],
+        keywords: &["clipboard", "workspace"],
     },
     Command {
         label: "Copy File Name",
@@ -452,7 +453,7 @@ static COMMANDS: &[Command] = &[
         bindings: NO_KEYS,
         menu: Some((MenuKind::File, 3)),
         palette: Some((PaletteGroup::Edit, 19)),
-        keywords: &[],
+        keywords: &["clipboard", "basename"],
     },
     Command {
         label: "Toggle Line Comment",
@@ -460,7 +461,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-/", Scope::Editor)],
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 0)),
-        keywords: &[],
+        keywords: &["uncomment", "slash"],
     },
     Command {
         label: "Delete Line",
@@ -468,7 +469,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-shift-k", Scope::Editor)],
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 1)),
-        keywords: &[],
+        keywords: &["remove", "cut"],
     },
     Command {
         label: "Select Line",
@@ -476,7 +477,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-l", Scope::Editor)],
         menu: Some((MenuKind::Selection, 0)),
         palette: Some((PaletteGroup::Edit, 2)),
-        keywords: &[],
+        keywords: &["selection"],
     },
     Command {
         label: "Join Lines",
@@ -484,7 +485,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-j", Scope::Editor)],
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 20)),
-        keywords: &[],
+        keywords: &["merge", "concatenate"],
     },
     Command {
         label: "Trim Trailing Whitespace",
@@ -492,7 +493,7 @@ static COMMANDS: &[Command] = &[
         bindings: NO_KEYS,
         menu: Some((MenuKind::Edit, 2)),
         palette: Some((PaletteGroup::Edit, 21)),
-        keywords: &[],
+        keywords: &["clean", "spaces", "eol"],
     },
     // Convert Case: the submenu's rows come from cluster 3 of the Edit menu.
     Command {
@@ -565,7 +566,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("alt-up", Scope::Editor)],
         menu: Some((MenuKind::Selection, 2)),
         palette: Some((PaletteGroup::Edit, 3)),
-        keywords: &[],
+        keywords: &["reorder", "swap"],
     },
     Command {
         label: "Move Line Down",
@@ -573,7 +574,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("alt-down", Scope::Editor)],
         menu: Some((MenuKind::Selection, 2)),
         palette: Some((PaletteGroup::Edit, 4)),
-        keywords: &[],
+        keywords: &["reorder", "swap"],
     },
     Command {
         label: "Copy Line Up",
@@ -581,7 +582,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("shift-alt-up", Scope::Editor)],
         menu: Some((MenuKind::Selection, 2)),
         palette: Some((PaletteGroup::Edit, 5)),
-        keywords: &[],
+        keywords: &["duplicate"],
     },
     Command {
         label: "Copy Line Down",
@@ -589,7 +590,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("shift-alt-down", Scope::Editor)],
         menu: Some((MenuKind::Selection, 2)),
         palette: Some((PaletteGroup::Edit, 6)),
-        keywords: &[],
+        keywords: &["duplicate"],
     },
     Command {
         label: "Insert Line Above",
@@ -597,7 +598,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-shift-enter", Scope::Editor)],
         menu: Some((MenuKind::Edit, 4)),
         palette: Some((PaletteGroup::Edit, 7)),
-        keywords: &[],
+        keywords: &["new line", "blank line"],
     },
     Command {
         label: "Insert Line Below",
@@ -605,7 +606,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-enter", Scope::Editor)],
         menu: Some((MenuKind::Edit, 4)),
         palette: Some((PaletteGroup::Edit, 8)),
-        keywords: &[],
+        keywords: &["new line", "blank line"],
     },
     Command {
         label: "Go to Line…",
@@ -627,7 +628,7 @@ static COMMANDS: &[Command] = &[
         ],
         menu: Some((MenuKind::Selection, 1)),
         palette: Some((PaletteGroup::Edit, 10)),
-        keywords: &[],
+        keywords: &["multi cursor", "column"],
     },
     Command {
         label: "Add Cursor Below",
@@ -638,7 +639,7 @@ static COMMANDS: &[Command] = &[
         ],
         menu: Some((MenuKind::Selection, 1)),
         palette: Some((PaletteGroup::Edit, 11)),
-        keywords: &[],
+        keywords: &["multi cursor", "column"],
     },
     Command {
         label: "Split into Lines",
@@ -646,7 +647,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-shift-l", Scope::Editor)],
         menu: Some((MenuKind::Selection, 0)),
         palette: Some((PaletteGroup::Edit, 12)),
-        keywords: &[],
+        keywords: &["explode", "selection"],
     },
     Command {
         label: "Add Next Occurrence",
@@ -654,7 +655,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-d", Scope::Editor)],
         menu: Some((MenuKind::Selection, 1)),
         palette: Some((PaletteGroup::Edit, 13)),
-        keywords: &[],
+        keywords: &["multi cursor", "select all"],
     },
     // View
     Command {
@@ -671,7 +672,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-b", Scope::Global)],
         menu: Some((MenuKind::View, 1)),
         palette: Some((PaletteGroup::View, 0)),
-        keywords: &[],
+        keywords: &["panel", "hide", "explorer"],
     },
     Command {
         label: "Show Explorer",
@@ -695,7 +696,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-r", Scope::Global)],
         menu: Some((MenuKind::View, 1)),
         palette: Some((PaletteGroup::View, 1)),
-        keywords: &[],
+        keywords: &["reload", "rescan"],
     },
     Command {
         label: "Zoom In",
@@ -706,7 +707,7 @@ static COMMANDS: &[Command] = &[
         ],
         menu: Some((MenuKind::View, 2)),
         palette: Some((PaletteGroup::View, 2)),
-        keywords: &[],
+        keywords: &["font size", "bigger"],
     },
     Command {
         label: "Zoom Out",
@@ -714,7 +715,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary--", Scope::Global)],
         menu: Some((MenuKind::View, 2)),
         palette: Some((PaletteGroup::View, 3)),
-        keywords: &[],
+        keywords: &["font size", "smaller"],
     },
     Command {
         label: "Actual Size",
@@ -722,7 +723,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("secondary-0", Scope::Global)],
         menu: Some((MenuKind::View, 2)),
         palette: Some((PaletteGroup::View, 4)),
-        keywords: &[],
+        keywords: &["reset zoom", "font size"],
     },
     Command {
         label: "Toggle Word Wrap",
@@ -730,7 +731,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("alt-z", Scope::Editor)],
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 5)),
-        keywords: &[],
+        keywords: &["wrap", "column", "line length"],
     },
     Command {
         label: "Toggle Invisible Characters",
@@ -738,7 +739,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("alt-secondary-i", Scope::Global)],
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 6)),
-        keywords: &[],
+        keywords: &["whitespace", "spaces", "eol"],
     },
     Command {
         label: "Toggle Line Numbers",
@@ -746,7 +747,7 @@ static COMMANDS: &[Command] = &[
         bindings: NO_KEYS,
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 7)),
-        keywords: &[],
+        keywords: &["gutter"],
     },
     Command {
         label: "Toggle Indent Guides",
@@ -754,7 +755,7 @@ static COMMANDS: &[Command] = &[
         bindings: NO_KEYS,
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 8)),
-        keywords: &[],
+        keywords: &["indentation", "tab size"],
     },
     Command {
         label: "Toggle Code Folding",
@@ -762,7 +763,7 @@ static COMMANDS: &[Command] = &[
         bindings: NO_KEYS,
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 9)),
-        keywords: &[],
+        keywords: &["collapse", "fold", "outline"],
     },
     Command {
         label: "Toggle Preview",
@@ -771,7 +772,7 @@ static COMMANDS: &[Command] = &[
         bindings: &[("ctrl-secondary-v", Scope::Global)],
         menu: Some((MenuKind::View, 3)),
         palette: Some((PaletteGroup::View, 10)),
-        keywords: &[],
+        keywords: &["markdown", "render"],
     },
     Command {
         label: "Toggle Auto Close Brackets",
@@ -779,7 +780,7 @@ static COMMANDS: &[Command] = &[
         bindings: NO_KEYS,
         menu: None,
         palette: Some((PaletteGroup::View, 11)),
-        keywords: &[],
+        keywords: &["pairs", "parens"],
     },
     Command {
         label: "Toggle Smart Indent",
@@ -787,7 +788,7 @@ static COMMANDS: &[Command] = &[
         bindings: NO_KEYS,
         menu: None,
         palette: Some((PaletteGroup::View, 12)),
-        keywords: &[],
+        keywords: &["indentation", "auto indent"],
     },
     Command {
         label: "Next Tab",
@@ -798,7 +799,7 @@ static COMMANDS: &[Command] = &[
         ],
         menu: Some((MenuKind::View, 4)),
         palette: Some((PaletteGroup::View, 13)),
-        keywords: &[],
+        keywords: &["switch", "cycle"],
     },
     Command {
         label: "Previous Tab",
@@ -809,7 +810,7 @@ static COMMANDS: &[Command] = &[
         ],
         menu: Some((MenuKind::View, 4)),
         palette: Some((PaletteGroup::View, 14)),
-        keywords: &[],
+        keywords: &["switch", "cycle"],
     },
     // Window
     Command {
@@ -875,7 +876,7 @@ static COMMANDS: &[Command] = &[
         bindings: NO_KEYS,
         menu: Some((MenuKind::Teak, 0)),
         palette: Some((PaletteGroup::Teak, 3)),
-        keywords: &[],
+        keywords: &["version", "build"],
     },
     Command {
         label: "Check for Updates…",
@@ -883,7 +884,7 @@ static COMMANDS: &[Command] = &[
         bindings: NO_KEYS,
         menu: Some((MenuKind::Teak, 0)),
         palette: Some((PaletteGroup::Teak, 2)),
-        keywords: &[],
+        keywords: &["version", "upgrade"],
     },
     Command {
         label: "Open Themes Folder",
@@ -1399,38 +1400,96 @@ fn menu_item(command: &Command) -> MenuItem {
     }
 }
 
-pub(crate) fn palette_groups() -> Vec<CommandGroup> {
-    PALETTE
+/// The palette's groups for `query`, best match first in both senses: rows are
+/// scored inside their group and groups are ordered by their strongest row.
+///
+/// The palette filters and ranks here rather than in the widget, which only
+/// knows how to keep rows whose label contains the query (`filterable(false)`
+/// at the call site). That is what lets an initialism like `tgsb` find "Toggle
+/// Sidebar", and what turns the first row into the best match instead of the
+/// first one the table happens to declare. [`alias_score`] covers the keywords,
+/// which the widget would otherwise be the only reader of.
+pub(crate) fn palette_groups(query: &str) -> Vec<CommandGroup> {
+    let query = query.trim();
+    let mut groups: Vec<(u32, CommandGroup)> = PALETTE
         .iter()
-        .map(|slot| match slot {
-            PaletteSlot::Group(group) => CommandGroup::new().label(group.label()).items(
-                ranked(
-                    |command| matches!(command.palette, Some((slot, _)) if slot == *group),
-                    |command| command.palette.map_or(u8::MAX, |(_, rank)| rank),
-                )
-                .into_iter()
-                .map(|command| {
-                    let mut item = CommandItem::new()
-                        .label(command.label)
-                        .action((command.make)());
-                    if !command.keywords.is_empty() {
-                        item = item.keywords(command.keywords.iter().copied());
-                    }
-                    item
-                }),
-            ),
-            PaletteSlot::Appearance => {
-                CommandGroup::new()
-                    .label("Appearance")
-                    .items(THEME_CHOICES.iter().map(|(value, label)| {
-                        CommandItem::new()
-                            .label(*label)
-                            .keywords(["theme", "appearance"])
-                            .action(Box::new(SetTheme((*value).to_string())))
-                    }))
-            }
+        .filter_map(|slot| match slot {
+            PaletteSlot::Group(group) => command_group(*group, query),
+            PaletteSlot::Appearance => appearance_group(query),
         })
-        .collect()
+        .collect();
+    // Stable, so groups at the same score keep their declared order — and with
+    // an empty query every score is 0, which leaves the palette as it was.
+    groups.sort_by_key(|row| std::cmp::Reverse(row.0));
+    groups.into_iter().map(|(_, group)| group).collect()
+}
+
+/// One palette group's matching commands, best first, with the group's best
+/// score. `None` when nothing in it matches, so a heading never stands alone.
+fn command_group(group: PaletteGroup, query: &str) -> Option<(u32, CommandGroup)> {
+    let rows = scored_rows(group, query);
+    let best = rows.first()?.0;
+    let items = rows.into_iter().map(|(_, command)| {
+        let mut item = CommandItem::new()
+            .label(command.label)
+            .action((command.make)());
+        if !command.keywords.is_empty() {
+            item = item.keywords(command.keywords.iter().copied());
+        }
+        item
+    });
+    Some((best, CommandGroup::new().label(group.label()).items(items)))
+}
+
+/// A group's commands that match `query`, best first. Stable, so equal scores
+/// keep the declared rank order — and with an empty query every score is 0,
+/// which leaves the palette exactly as declared.
+fn scored_rows(group: PaletteGroup, query: &str) -> Vec<(u32, &'static Command)> {
+    let mut rows: Vec<(u32, &'static Command)> = ranked(
+        |command| matches!(command.palette, Some((slot, _)) if slot == group),
+        |command| command.palette.map_or(u8::MAX, |(_, rank)| rank),
+    )
+    .into_iter()
+    .filter_map(|command| {
+        Some((
+            alias_score(query, command.label, command.keywords)?,
+            command,
+        ))
+    })
+    .collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.0));
+    rows
+}
+
+/// The Appearance group, filtered and scored like the table's groups.
+fn appearance_group(query: &str) -> Option<(u32, CommandGroup)> {
+    let keywords = ["theme", "appearance"];
+    let mut rows: Vec<(u32, &str, &str)> = THEME_CHOICES
+        .iter()
+        .filter_map(|(value, label)| Some((alias_score(query, label, &keywords)?, *value, *label)))
+        .collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.0));
+    let best = rows.first()?.0;
+    let items = rows.into_iter().map(|(_, value, label)| {
+        CommandItem::new()
+            .label(label)
+            .keywords(keywords)
+            .action(Box::new(SetTheme(value.to_string())))
+    });
+    Some((best, CommandGroup::new().label("Appearance").items(items)))
+}
+
+/// How well `query` matches a row: the best score across its label and its
+/// aliases. An empty query scores every row 0.
+fn alias_score(query: &str, label: &str, keywords: &[&str]) -> Option<u32> {
+    fuzzy::score(query, label)
+        .into_iter()
+        .chain(
+            keywords
+                .iter()
+                .filter_map(|keyword| fuzzy::score(query, keyword)),
+        )
+        .max()
 }
 
 /// The commands matching `keep`, sorted by `rank`.
@@ -1473,7 +1532,8 @@ mod tests {
 
     use super::{
         COMMANDS, Entry, MenuKind, PALETTE, PaletteGroup, PaletteSlot, Scope, app_bindings,
-        app_bindings_with, binding, editor_bindings, find_bindings, settings_bindings,
+        app_bindings_with, binding, editor_bindings, find_bindings, palette_groups, scored_rows,
+        settings_bindings,
     };
 
     /// The palette groups in display order, skipping the hand-written Appearance
@@ -1981,5 +2041,74 @@ mod tests {
     fn surface_sizes_are_pinned() {
         assert_eq!(COMMANDS.iter().filter(|c| c.menu.is_some()).count(), 83);
         assert_eq!(COMMANDS.iter().filter(|c| c.palette.is_some()).count(), 81);
+    }
+
+    /// The palette ranks its own rows, so an initialism has to work: the
+    /// widget's `contains` filter could never find this one. Several rows match
+    /// it — that is what scoring is for — but the best one comes first.
+    #[test]
+    fn an_initialism_finds_its_command() {
+        let rows = scored_rows(PaletteGroup::View, "tgsb");
+        assert_eq!(rows[0].1.label, "Toggle Sidebar");
+        assert!(!palette_groups("tgsb").is_empty());
+    }
+
+    /// Matching moved out of the widget, which was the only reader of the
+    /// table's keywords: the aliases have to be scored here or they silently
+    /// stop working.
+    #[test]
+    fn keywords_still_match_after_the_move() {
+        let rows = scored_rows(PaletteGroup::Teak, "shortcuts");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.label, "Open Keybindings…");
+        assert!(scored_rows(PaletteGroup::Teak, "zzzz").is_empty());
+    }
+
+    /// Rows come back best first, and the groups that hold them are ordered by
+    /// their strongest row rather than by declaration order.
+    #[test]
+    fn palette_rows_and_groups_come_back_best_first() {
+        for (group, query) in [
+            (PaletteGroup::File, "open"),
+            (PaletteGroup::Edit, "find"),
+            (PaletteGroup::View, "toggle"),
+        ] {
+            let scores: Vec<u32> = scored_rows(group, query)
+                .iter()
+                .map(|(score, _)| *score)
+                .collect();
+            assert!(
+                scores.windows(2).all(|pair| pair[0] >= pair[1]),
+                "{query} came back out of order: {scores:?}"
+            );
+        }
+
+        // A group with no matching row is dropped, so no heading stands alone.
+        let groups = palette_groups("tgsb");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].heading().map(|label| label.as_ref()),
+            Some("View")
+        );
+        assert!(palette_groups("zzzz").is_empty());
+    }
+
+    /// An empty query keeps every group in its declared order, which is what the
+    /// palette showed before it ranked anything.
+    #[test]
+    fn an_empty_query_keeps_the_declared_order() {
+        let groups = palette_groups("");
+        let headings: Vec<Option<&str>> = groups
+            .iter()
+            .map(|group| group.heading().map(|label| label.as_ref()))
+            .collect();
+        let expected: Vec<Option<&str>> = PALETTE
+            .iter()
+            .map(|slot| match slot {
+                PaletteSlot::Group(group) => Some(group.label()),
+                PaletteSlot::Appearance => Some("Appearance"),
+            })
+            .collect();
+        assert_eq!(headings, expected);
     }
 }

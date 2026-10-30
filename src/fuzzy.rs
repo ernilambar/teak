@@ -10,7 +10,7 @@
 /// `None` means the query is not a subsequence of the candidate. An empty
 /// query matches anything.
 pub(crate) fn score(query: &str, candidate: &str) -> Option<u32> {
-    let query: Vec<char> = query.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let query: Vec<char> = query.chars().map(fold).collect();
     if query.is_empty() {
         return Some(0);
     }
@@ -22,13 +22,15 @@ pub(crate) fn score(query: &str, candidate: &str) -> Option<u32> {
     let mut first: Option<usize> = None;
     let mut previous: Option<usize> = None;
     let mut matched = 0usize;
+    // The original character, not the folded one: a camelCase step needs both
+    // sides' case, and [`is_boundary`] only ever looks at punctuation.
     let mut preceding: Option<char> = None;
 
     for (position, raw) in candidate.chars().enumerate() {
         if matched == query.len() {
             break;
         }
-        let ch = raw.to_ascii_lowercase();
+        let ch = fold(raw);
         if ch == query[matched] {
             let mut points = 10;
             if previous == Some(position.wrapping_sub(1)) {
@@ -36,7 +38,7 @@ pub(crate) fn score(query: &str, candidate: &str) -> Option<u32> {
             }
             if position == 0 {
                 points += 6;
-            } else if preceding.is_some_and(is_boundary) {
+            } else if preceding.is_some_and(|before| is_boundary(before, raw)) {
                 points += 14;
             }
             first = first.or(Some(position));
@@ -44,7 +46,7 @@ pub(crate) fn score(query: &str, candidate: &str) -> Option<u32> {
             matched += 1;
             total += points;
         }
-        preceding = Some(ch);
+        preceding = Some(raw);
     }
 
     if matched < query.len() {
@@ -57,9 +59,23 @@ pub(crate) fn score(query: &str, candidate: &str) -> Option<u32> {
     Some(total.saturating_sub(spread * 2))
 }
 
-/// Characters a useful match usually starts a component after.
-fn is_boundary(previous: char) -> bool {
+/// Lowercases one character without allocating. `char::to_lowercase` can yield
+/// two chars (`İ`), and the first is the one that matches a keystroke. The ASCII
+/// fast path keeps the common case — every keystroke scores thousands of
+/// candidates — a table lookup.
+fn fold(ch: char) -> char {
+    if ch.is_ascii() {
+        ch.to_ascii_lowercase()
+    } else {
+        ch.to_lowercase().next().unwrap_or(ch)
+    }
+}
+
+/// Whether a match at `current` starts a component: after punctuation or a
+/// space, or at a camelCase step (`quickOpen` for `qO`).
+fn is_boundary(previous: char, current: char) -> bool {
     matches!(previous, '/' | '\\' | '_' | '-' | '.' | ' ')
+        || (previous.is_lowercase() && current.is_uppercase())
 }
 
 #[cfg(test)]
@@ -83,6 +99,17 @@ mod tests {
     fn matching_is_case_insensitive() {
         assert!(score("MP", "MyPath.rs").is_some());
         assert!(score("mypath", "MYPATH").is_some());
+        // Non-ASCII folds too: `to_ascii_lowercase` would leave `É` alone.
+        assert_eq!(score("café", "CAFÉ.rs"), score("CAFÉ", "café.rs"));
+    }
+
+    #[test]
+    fn camel_case_steps_count_as_boundaries() {
+        // `qO` starts a component at `O`; the same letters mid-word do not.
+        assert!(score("qO", "quickOpen.rs").unwrap() > score("qO", "quickxopen.rs").unwrap());
+        // The bonus follows the candidate's case, so it holds for a lowercase
+        // query too, and it is absent when nothing capitalizes.
+        assert!(score("qo", "quickOpen.rs").unwrap() > score("qo", "quickxopen.rs").unwrap());
     }
 
     #[test]

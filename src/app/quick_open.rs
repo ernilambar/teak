@@ -27,12 +27,32 @@ pub(super) const MAX_INDEX_FILES: usize = 20_000;
 const MAX_RESULTS: usize = 100;
 /// Extra credit for a query fully matching inside the file name.
 const NAME_BONUS: u32 = 30;
+/// More, on top of [`NAME_BONUS`], when the file name *starts* with the query:
+/// `lib` belongs above `src/lib/helper.rs` for the file `lib.rs`.
+const NAME_PREFIX_BONUS: u32 = 25;
 /// Rank files with a tab above files that are not open.
 const NOT_OPEN: usize = usize::MAX;
 
+/// True when `name` begins with `query`, ignoring ASCII case. A non-ASCII
+/// capital does not count as its lowercase here; the score below still matches
+/// it, only without the prefix bonus.
+fn starts_with(name: &str, query: &str) -> bool {
+    let mut name = name.chars();
+    query.chars().all(|query| {
+        name.next()
+            .is_some_and(|name| name.eq_ignore_ascii_case(&query))
+    })
+}
+
 /// The best score across the two views of the file.
-fn best_score(query: &str, name: &str, rel: &str) -> Option<u32> {
-    let on_name = fuzzy::score(query, name).map(|score| score + NAME_BONUS);
+pub(super) fn best_score(query: &str, name: &str, rel: &str) -> Option<u32> {
+    let name_bonus = NAME_BONUS
+        + if starts_with(name, query) {
+            NAME_PREFIX_BONUS
+        } else {
+            0
+        };
+    let on_name = fuzzy::score(query, name).map(|score| score + name_bonus);
     let on_path = fuzzy::score(query, rel);
     match (on_name, on_path) {
         (Some(name), Some(path)) => Some(name.max(path)),
@@ -96,6 +116,8 @@ impl TeakApp {
 
     /// The rows for the current query: fuzzy matches ranked best first, or with
     /// an empty query the open tabs ahead of the remaining index in path order.
+    /// Open tabs break ties at equal scores in both cases, so the file you were
+    /// just in wins over a same-quality match you never opened.
     pub(super) fn quick_open_items(&self, query: &str) -> Vec<CommandItem> {
         let icon_style = self.settings.values.ui.icon_style();
         let query = query.trim();
@@ -115,25 +137,27 @@ impl TeakApp {
                     Some(root) => relative_display(path, root),
                     None => path.display().to_string(),
                 };
-                let (score, tab_order) = if query.is_empty() {
-                    (0, opened.get(path.as_path()).copied().unwrap_or(NOT_OPEN))
+                // A query that matches neither the name nor the path is not a
+                // row at all; an empty query matches everything.
+                let score = if query.is_empty() {
+                    0
                 } else {
-                    (best_score(query, &file_name(path), &rel)?, NOT_OPEN)
+                    best_score(query, &file_name(path), &rel)?
                 };
+                let tab_order = opened.get(path.as_path()).copied().unwrap_or(NOT_OPEN);
                 Some((score, tab_order, rel, path.clone()))
             })
             .collect();
-
-        if query.is_empty() {
-            ranked.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.2.cmp(&b.2)));
-        } else {
-            ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
-        }
+        ranked.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
         ranked.truncate(MAX_RESULTS);
 
         ranked
             .into_iter()
-            .map(|(_, _, rel, path)| quick_open_item(rel, path, icon_style))
+            .map(|(_, _, rel, path)| quick_open_item(rel, path, icon_style, true))
             .collect()
     }
 }
@@ -141,7 +165,19 @@ impl TeakApp {
 /// A finder row: the file's icon, its name, and its directory, muted, on the
 /// right. The custom content owns the full row presentation, including which
 /// parts the ellipsis can drop.
-fn quick_open_item(rel: String, path: PathBuf, icon_style: IconStyle) -> CommandItem {
+/// A path row: the file's icon, its name, and its directory, muted, on the
+/// right. The custom content owns the full row presentation, including which
+/// parts the ellipsis can drop.
+///
+/// `preview` decides what confirming the row does: quick open previews the file
+/// in a transient tab, while Open Recent and the Explorer keep it. The row is
+/// otherwise identical, so both lists share this one builder.
+pub(super) fn quick_open_item(
+    rel: String,
+    path: PathBuf,
+    icon_style: IconStyle,
+    preview: bool,
+) -> CommandItem {
     let name: SharedString = file_name(&path).into();
     let directory: SharedString = match Path::new(&rel).parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.display().to_string().into(),
@@ -149,7 +185,7 @@ fn quick_open_item(rel: String, path: PathBuf, icon_style: IconStyle) -> Command
     };
 
     CommandItem::new()
-        .action(Box::new(OpenPath(path.clone(), true)))
+        .action(Box::new(OpenPath(path.clone(), preview)))
         .child(move |_window, cx| {
             let mut row = div()
                 .h_flex()
