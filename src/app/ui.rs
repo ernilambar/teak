@@ -136,6 +136,21 @@ const FILE_ICON_SIZE: f32 = 14.;
 /// sharp on Retina displays; the image element downsamples it to fit.
 const COLOR_ICON_PIXELS: i32 = 28;
 
+/// The OpenType features the editor asks of its font: the three that draw one
+/// glyph for several characters. "Off" sends explicit `0`s rather than leaving
+/// the font alone, because a face may join pairs by itself; "on" asks for the
+/// same three, which is how Fira Code knows to draw its code sequences. The
+/// default is off — see `EditorSettings::ligatures`.
+fn ligature_features(enabled: bool) -> FontFeatures {
+    let value = u32::from(enabled);
+    FontFeatures(Arc::new(
+        ["liga", "clig", "calt"]
+            .into_iter()
+            .map(|tag| (tag.to_string(), value))
+            .collect(),
+    ))
+}
+
 /// The status bar's totals: `1,234 words · 5,678 chars`. Above the word-count
 /// limit only the character count is shown.
 fn count_label(words: usize, chars: usize) -> String {
@@ -1263,6 +1278,9 @@ impl TeakApp {
                                 self.settings.values.editor.font_weight(),
                                 |editor, weight| editor.font_weight(FontWeight::from(weight)),
                             )
+                            .font_features(ligature_features(
+                                self.settings.values.editor.ligatures(),
+                            ))
                             .context_menu(move |menu, _, _| {
                                 // Built while the editor state is mid-update, so it must not
                                 // read that state. Cut and Copy no-op without a selection.
@@ -1511,6 +1529,7 @@ mod tests {
     use crate::git::Branch;
 
     use super::COLOR_ICON_PIXELS;
+    use super::ligature_features;
     use super::{GIT_BRANCH_ICON, branch_label, change_tint, count_label, grouped};
 
     /// A workspace with one source file, for the scenes that need an editor.
@@ -1637,6 +1656,20 @@ mod tests {
         .unwrap();
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The setting is a three-tag answer in both directions: `0` silences the
+    /// ligature features a font may turn on by itself, and `1` asks for them.
+    #[test]
+    fn ligature_features_silence_or_ask_for_every_joining_tag() {
+        let expected = |value| {
+            ["liga", "clig", "calt"]
+                .map(|tag| (tag.to_string(), value))
+                .to_vec()
+        };
+
+        assert_eq!(ligature_features(false).tag_value_list(), expected(0));
+        assert_eq!(ligature_features(true).tag_value_list(), expected(1));
     }
 
     #[test]

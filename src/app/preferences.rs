@@ -399,6 +399,16 @@ impl TeakApp {
             editor.scroll_beyond_last_line(),
             |e| &mut e.scroll_beyond_last_line,
         );
+        // A ligature is one glyph for several characters, and the caret has no
+        // position inside it, so this stays off unless asked for.
+        let ligatures_item = flag_item(
+            "Ligatures",
+            "Show the font's ligatures. Off by default: the caret cannot sit inside a joined pair.",
+            "ligatures-switch",
+            "ligatures",
+            editor.ligatures(),
+            |e| &mut e.ligatures,
+        );
         let cursor_lines_is_set = editor.cursor_surrounding_lines.is_some();
         let cursor_lines = editor
             .cursor_surrounding_lines
@@ -650,6 +660,7 @@ impl TeakApp {
                         font_family_item,
                         font_size_item,
                         font_weight_item,
+                        ligatures_item,
                     ]),
                     SettingGroup::new().title("Indentation").items(vec![
                         tab_size_item,

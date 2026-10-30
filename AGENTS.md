@@ -114,7 +114,16 @@ in headless environments.
   search-only patterns on top. An empty `files.exclude` shows everything.
   `files.auto_reveal` (on by default) expands and selects the active tab's file in the tree
   when tab focus changes, scrolling only when its row is off screen; a hidden sidebar stays
-  hidden.
+  hidden. `editor.ligatures` is off by default and must stay that way until
+  `gpui-fast`'s `LineLayout` carries a cluster map: the layout keeps one byte index per
+  glyph, so a pair the font joins into one glyph leaves the caret nowhere to sit between
+  its two characters. The setting is applied as `liga`/`clig`/`calt`, and "off" sends
+  `0` for all three rather than leaving the font alone, because fonts such as Helvetica
+  ligate `fi` by themselves. CoreText honours `liga`/`clig` there but ignores the `calt`
+  tag, and every programming font (Fira Code, JetBrains Mono) draws its programming
+  ligatures from `calt`, so "off" cannot unjoin them: only the AAT pair (type 36,
+  selector 1) does, and `FontFeatures` cannot express an AAT pair. A real off switch for
+  those faces therefore needs a `gpui-fast-apple` change, not a teak one.
 - `vendor/gpui-base` is gpui-base with `patches/gpui-base.patch` applied, wired in through
   `[patch.crates-io]`. It adds `selected_ranges()` (read every selection); upstream
   `add_selection` covers adding them. It also adds the gutter-mark API

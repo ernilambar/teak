@@ -189,6 +189,9 @@ pub(crate) struct EditorSettings {
     pub(crate) font_family: Option<String>,
     pub(crate) font_size: Option<f32>,
     pub(crate) font_weight: Option<f32>,
+    /// Draw the font's ligatures. Off by default: a joined pair is one glyph,
+    /// and the caret has nowhere to sit inside it.
+    pub(crate) ligatures: Option<bool>,
     pub(crate) soft_wrap: Option<bool>,
     pub(crate) show_whitespace: Option<bool>,
     pub(crate) tab_size: Option<usize>,
@@ -215,6 +218,13 @@ impl EditorSettings {
     pub(crate) fn font_weight(&self) -> Option<f32> {
         self.font_weight
             .map(|weight| weight.clamp(MIN_FONT_WEIGHT, MAX_FONT_WEIGHT))
+    }
+
+    /// Whether the editor asks its font for ligatures. Off unless chosen: the
+    /// layout keeps one byte index per glyph and no cluster map, so a pair the
+    /// font joins into one glyph has no caret position between its characters.
+    pub(crate) fn ligatures(&self) -> bool {
+        self.ligatures.unwrap_or(false)
     }
 
     pub(crate) fn soft_wrap(&self) -> bool {
@@ -390,6 +400,7 @@ pub(crate) fn defaults_document(
             font_family: Some(mono_family.to_string()),
             font_size: Some(mono_size),
             font_weight: Some(DEFAULT_FONT_WEIGHT),
+            ligatures: Some(editor.ligatures()),
             soft_wrap: Some(editor.soft_wrap()),
             show_whitespace: Some(editor.show_whitespace()),
             tab_size: Some(editor.tab_size()),
@@ -782,7 +793,7 @@ mod tests {
     #[test]
     fn parses_editor_options() {
         let settings = parse_settings(
-            r#"{"editor": {"soft_wrap": true, "show_whitespace": true, "tab_size": 8, "hard_tabs": true}}"#,
+            r#"{"editor": {"soft_wrap": true, "show_whitespace": true, "tab_size": 8, "hard_tabs": true, "ligatures": true}}"#,
         )
         .unwrap();
 
@@ -790,6 +801,19 @@ mod tests {
         assert!(settings.editor.show_whitespace());
         assert_eq!(settings.editor.tab_size(), 8);
         assert!(settings.editor.hard_tabs());
+        assert!(settings.editor.ligatures());
+    }
+
+    #[test]
+    fn ligatures_default_off_and_honor_an_override() {
+        assert!(!Settings::default().editor.ligatures());
+        assert!(!parse_settings("{}").unwrap().editor.ligatures());
+
+        let settings = parse_settings(r#"{"editor": {"ligatures": true}}"#).unwrap();
+        assert!(settings.editor.ligatures());
+
+        let settings = parse_settings(r#"{"editor": {"ligatures": false}}"#).unwrap();
+        assert!(!settings.editor.ligatures());
     }
 
     #[test]
@@ -798,6 +822,7 @@ mod tests {
 
         assert!(!settings.editor.soft_wrap());
         assert!(!settings.editor.show_whitespace());
+        assert!(!settings.editor.ligatures());
         assert_eq!(settings.editor.tab_size(), DEFAULT_TAB_SIZE);
         assert!(!settings.editor.hard_tabs());
         assert!(settings.editor.line_numbers());
@@ -847,6 +872,7 @@ mod tests {
         assert_eq!(parsed.editor.font_weight(), Some(DEFAULT_FONT_WEIGHT));
         assert_eq!(parsed.editor.soft_wrap(), editor.soft_wrap());
         assert_eq!(parsed.editor.show_whitespace(), editor.show_whitespace());
+        assert_eq!(parsed.editor.ligatures(), editor.ligatures());
         assert_eq!(parsed.editor.tab_size(), editor.tab_size());
         assert_eq!(parsed.editor.hard_tabs(), editor.hard_tabs());
         assert_eq!(parsed.editor.line_numbers(), editor.line_numbers());
