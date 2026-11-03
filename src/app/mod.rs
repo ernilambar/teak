@@ -1761,7 +1761,7 @@ pub(super) mod test_support {
             keymap::bind_keys(cx);
         });
         cx.update(|cx| {
-            let services = AppServices::new(cx, Vec::new());
+            let services = AppServices::new(cx, Vec::new(), Default::default());
             open_window(WindowOptions::default(), cx, |_window, cx| {
                 cx.new(|cx| TeakApp::new(roots, None, Settings::default(), services, 0, None, cx))
             })

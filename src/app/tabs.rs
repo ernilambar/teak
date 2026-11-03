@@ -282,11 +282,20 @@ impl TabSet {
         self.tabs.iter().find(|tab| tab.document.editor_id() == id)
     }
 
-    /// The index of the tab showing `path`, if any.
+    /// The index of the tab showing `path`, if any. A path spelled
+    /// differently from the tab's — through a symlink, or in another case on a
+    /// case-insensitive volume — still finds it, so one file never gets two
+    /// buffers that overwrite each other.
     pub(super) fn index_of_path(&self, path: &Path) -> Option<usize> {
         self.tabs
             .iter()
-            .position(|tab| tab.document.path.as_deref() == Some(path))
+            .position(|tab| tab.document.path() == Some(path))
+            .or_else(|| {
+                let id = crate::paths::file_id(path)?;
+                self.tabs
+                    .iter()
+                    .position(|tab| tab.document.file_id() == Some(id))
+            })
     }
 
     /// True when `path` already has a tab, so opening it again must only
@@ -555,7 +564,11 @@ impl TeakApp {
         cx: &mut Context<Self>,
     ) {
         match content {
-            FileContent::Text { text, format } => {
+            FileContent::Text {
+                text,
+                format,
+                modified,
+            } => {
                 let name = file_name(&path);
                 let large = text.len() > LARGE_FILE_BYTES;
                 let language = if large {
@@ -578,6 +591,7 @@ impl TeakApp {
                     && let Some(tab) = self.tabs.get_mut(ix)
                 {
                     tab.document.format = format;
+                    tab.document.disk_modified = modified;
                     // Keeps a save from turning highlighting back on.
                     tab.document.language_override = large;
                 }

@@ -42,6 +42,27 @@ for arg in "$@"; do
     esac
 done
 
+# `open` starts the app with `/` as its working directory, so a relative path
+# is resolved here, against the directory the command was run from.
+absolute() {
+    case "$1" in
+        /*) printf '%s\n' "$1" ;;
+        *)
+            local dir
+            if dir=$(CDPATH= cd -- "$(dirname -- "$1")" 2>/dev/null && pwd); then
+                printf '%s/%s\n' "$dir" "$(basename -- "$1")"
+            else
+                printf '%s/%s\n' "$PWD" "$1"
+            fi
+            ;;
+    esac
+}
+if [ "${#paths[@]}" -gt 0 ]; then
+    for i in "${!paths[@]}"; do
+        paths[i]=$(absolute "${paths[i]}")
+    done
+fi
+
 # A running app cannot see argv, so a URL carries the paths through
 # LaunchServices. A cold launch uses argv, which also skips nothing: the new
 # window joins the restored layout just as it does while running.
@@ -240,6 +261,101 @@ mod tests {
             parse(&["-psn_0_12345"]),
             CliCommand::Run { new_window: false }
         );
+    }
+
+    /// Runs the launcher with a stand-in `open` that records its arguments, from
+    /// `cwd`, and returns what `open` was given.
+    fn run_launcher(cwd: &Path, args: &[&str]) -> Vec<String> {
+        run_launcher_with(cwd, args, &[])
+    }
+
+    /// [`run_launcher`] with extra environment variables.
+    fn run_launcher_with(cwd: &Path, args: &[&str], env: &[(&str, &Path)]) -> Vec<String> {
+        let bin = cwd.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = cwd.join("open.log");
+        let open = bin.join("open");
+        std::fs::write(
+            &open,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n", log.display()),
+        )
+        .unwrap();
+        std::fs::write(bin.join("pgrep"), "#!/bin/sh\nexit 1\n").unwrap();
+        for tool in ["open", "pgrep"] {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(bin.join(tool), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        let script = cwd.join("teak.sh");
+        std::fs::write(
+            &script,
+            mac_launcher_script(Path::new("/Applications/Example.app")),
+        )
+        .unwrap();
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let status = std::process::Command::new("bash")
+            .arg(&script)
+            .args(args)
+            .current_dir(cwd)
+            .env("PATH", path)
+            .env_remove("PWD")
+            .envs(env.iter().copied())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::read_to_string(log)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// `open` starts the app in `/`, so the launcher hands it absolute paths,
+    /// resolved against the directory the command ran in.
+    #[test]
+    fn the_launcher_makes_relative_paths_absolute() {
+        let dir = std::env::temp_dir().join(format!("teak-launcher-rel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("notes")).unwrap();
+        std::fs::write(dir.join("notes/a.txt"), "").unwrap();
+
+        let given = run_launcher(&dir, &["-n", "notes/a.txt", "/abs/b.txt", "new.txt"]);
+
+        assert_eq!(&given[..3], ["-a", "/Applications/Example.app", "--args"]);
+        assert_eq!(given[3], "--new-window");
+        let real = dir.canonicalize().unwrap();
+        assert_eq!(
+            PathBuf::from(&given[4]).canonicalize().unwrap(),
+            real.join("notes/a.txt")
+        );
+        assert_eq!(given[5], "/abs/b.txt", "an absolute path is left alone");
+        assert!(Path::new(&given[6]).is_absolute(), "a file not made yet");
+        assert!(given[6].ends_with("/new.txt"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A `CDPATH` in the user's shell never redirects a relative path to
+    /// another folder of the same name.
+    #[test]
+    fn the_launcher_ignores_cdpath() {
+        let dir = std::env::temp_dir().join(format!("teak-launcher-cdpath-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("work/notes")).unwrap();
+        std::fs::create_dir_all(dir.join("elsewhere/notes")).unwrap();
+        std::fs::write(dir.join("work/notes/a.txt"), "").unwrap();
+
+        let given = run_launcher_with(
+            &dir.join("work"),
+            &["-n", "notes/a.txt"],
+            &[("CDPATH", &dir.join("elsewhere"))],
+        );
+
+        assert_eq!(given.len(), 5, "one path, on one line: {given:?}");
+        assert_eq!(
+            PathBuf::from(&given[4]).canonicalize().unwrap(),
+            dir.join("work/notes/a.txt").canonicalize().unwrap()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

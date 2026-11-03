@@ -242,7 +242,11 @@ fn main() {
             .as_ref()
             .map(|session| session.recent.clone())
             .unwrap_or_default();
-        let services = AppServices::new(cx, recent.clone());
+        let workspaces = saved
+            .as_ref()
+            .map(|session| session.workspaces.clone())
+            .unwrap_or_default();
+        let services = AppServices::new(cx, recent.clone(), workspaces);
 
         keymap::bind_keys_with(cx, &keymap::Overrides::load());
         cx.on_action(|_: &Hide, cx| cx.hide());

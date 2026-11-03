@@ -46,6 +46,9 @@ pub(super) struct Document {
     /// True when the file is gone from disk while the buffer still holds its
     /// text. The tab marks itself and saving asks before writing it back.
     pub(super) deleted_on_disk: bool,
+    /// The device and inode of the file when last read or written, so a path
+    /// spelled another way (a symlink, another case) finds this document.
+    file_id: Option<(u64, u64)>,
     pub(super) format: TextFormat,
     /// The buffer and its undo history. A view renders this entity; it does not
     /// own it.
@@ -66,6 +69,7 @@ impl Document {
         editor: Entity<EditorState>,
     ) -> Self {
         let disk_modified = path.as_deref().and_then(super::files::modified_time);
+        let file_id = path.as_deref().and_then(crate::paths::file_id);
         Self {
             path,
             title,
@@ -75,6 +79,7 @@ impl Document {
             disk_modified,
             dismissed_disk_change: None,
             deleted_on_disk: false,
+            file_id,
             format,
             editor,
             gutter: None,
@@ -108,6 +113,11 @@ impl Document {
         self.editor.entity_id()
     }
 
+    /// The identity recorded for the file, for matching other spellings of it.
+    pub(super) fn file_id(&self) -> Option<(u64, u64)> {
+        self.file_id
+    }
+
     /// The path as a plain `&Path`, for the many places that only compare it.
     pub(super) fn path(&self) -> Option<&Path> {
         self.path.as_deref()
@@ -128,16 +138,11 @@ impl Document {
     /// now what the disk holds.
     pub(super) fn synced_with_disk(&mut self, modified: Option<SystemTime>, format: TextFormat) {
         self.disk_modified = modified;
+        // A save renames a new file into place, so the inode changes with it.
+        self.file_id = self.path().and_then(crate::paths::file_id);
         self.dismissed_disk_change = None;
         self.deleted_on_disk = false;
         self.format = format;
-    }
-
-    /// True when `current` is a later version than the one last read, and the
-    /// user has not already waved that version away.
-    pub(super) fn moved_on_disk(&self, current: Option<SystemTime>) -> bool {
-        super::files::disk_moved_on(self.disk_modified, current)
-            && self.dismissed_disk_change != current
     }
 
     /// True when saving this document would overwrite bytes the editor could
@@ -150,7 +155,7 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::time::{Duration, SystemTime};
+    use std::time::SystemTime;
 
     use gpui_kit::component::input::EditorState;
     use gpui_kit::{AppContext as _, TestAppContext};
@@ -173,24 +178,6 @@ mod tests {
             TextFormat::default(),
             editor,
         )
-    }
-
-    /// A newer on-disk version asks once; the dismissal silences only that one.
-    #[gpui_kit::test]
-    async fn moved_on_disk_reports_a_newer_version_once(cx: &mut TestAppContext) {
-        let mut doc = document(cx, None);
-        doc.disk_modified = Some(SystemTime::UNIX_EPOCH);
-        let newer = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
-
-        assert!(!doc.moved_on_disk(Some(SystemTime::UNIX_EPOCH)));
-        assert!(doc.moved_on_disk(Some(newer)));
-
-        doc.dismissed_disk_change = Some(newer);
-        assert!(!doc.moved_on_disk(Some(newer)), "the same change asks once");
-        assert!(
-            doc.moved_on_disk(Some(newer + Duration::from_secs(60))),
-            "a later change asks again"
-        );
     }
 
     /// A synced document forgets the deletion and dismissal of the version it

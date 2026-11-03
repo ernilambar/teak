@@ -108,6 +108,15 @@ pub(crate) struct SessionStore {
 }
 
 impl SessionStore {
+    /// A store that starts from the tab sets the last session parked, so the
+    /// first write after launch does not drop them.
+    fn new(workspaces: BTreeMap<PathBuf, WorkspaceSession>) -> Self {
+        Self {
+            workspaces,
+            ..Self::default()
+        }
+    }
+
     fn set_window(&mut self, id: u64, window: WindowSession) {
         self.windows.insert(id, window);
     }
@@ -188,13 +197,17 @@ pub(crate) struct AppServices {
 }
 
 impl AppServices {
-    /// Creates the shared entities. `recent` seeds the Open Recent menu from
-    /// the session that was just loaded.
-    pub(crate) fn new(cx: &mut App, recent: Vec<PathBuf>) -> Self {
+    /// Creates the shared entities. `recent` seeds the Open Recent menu and
+    /// `workspaces` the parked tab sets, both from the session just loaded.
+    pub(crate) fn new(
+        cx: &mut App,
+        recent: Vec<PathBuf>,
+        workspaces: BTreeMap<PathBuf, WorkspaceSession>,
+    ) -> Self {
         Self {
             registry: cx.new(|_| WindowRegistry::default()),
             recent: cx.new(|_| RecentFiles::new(recent)),
-            session: cx.new(|_| SessionStore::default()),
+            session: cx.new(|_| SessionStore::new(workspaces)),
         }
     }
 
@@ -494,7 +507,10 @@ impl WindowSeed {
     /// Re-reads the workspace file a restored window was bound to, so folders
     /// edited outside teak are what the file says now. A file that has gone
     /// drops the binding silently: the window reopens as a plain folder window
-    /// with the folders and tabs the session had.
+    /// with the folders and tabs the session had. A file that is still there
+    /// but cannot be read or parsed keeps the binding and the session's
+    /// folders, and reports why, so a typo in a hand edit is not taken for a
+    /// deleted workspace.
     fn refresh_workspace_folders(&mut self) {
         let Some(path) = self.workspace.clone() else {
             return;
@@ -505,6 +521,9 @@ impl WindowSeed {
                     session.roots = folders.clone();
                 }
                 self.roots = folders;
+            }
+            Err(message) if !matches!(path.try_exists(), Ok(false)) => {
+                self.workspace_error = Some(message);
             }
             Err(_) => {
                 self.workspace = None;
@@ -694,6 +713,7 @@ pub(crate) fn open_app_window(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
     use gpui_kit::{AppContext as _, Bounds, TestAppContext, WindowBounds, point, px, size};
@@ -919,6 +939,29 @@ mod tests {
         assert_eq!(store.parked(Path::new("/w/other.teak-workspace")), None);
     }
 
+    /// The tab sets a previous launch parked come back with the services, so
+    /// switching to that workspace restores them and the next write keeps them.
+    #[gpui_kit::test]
+    async fn parked_sets_from_the_last_session_survive_a_relaunch(cx: &mut TestAppContext) {
+        let workspace = PathBuf::from("/w/work.teak-workspace");
+        let parked = WorkspaceSession {
+            tabs: vec![PathBuf::from("/w/work/a.rs")],
+            active_tab: None,
+            expanded: Vec::new(),
+        };
+        let saved = BTreeMap::from([(workspace.clone(), parked.clone())]);
+        let services = cx.update(|cx| AppServices::new(cx, Vec::new(), saved));
+
+        cx.update(|cx| {
+            assert_eq!(services.parked_workspace(&workspace, cx), Some(parked));
+            assert_eq!(
+                services.session.read(cx).state().workspaces.len(),
+                1,
+                "the next write carries the parked set"
+            );
+        });
+    }
+
     #[test]
     fn a_restored_window_reloads_the_folders_its_workspace_file_declares() {
         let dir =
@@ -977,6 +1020,38 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn a_restored_window_keeps_a_binding_whose_file_does_not_parse() {
+        let dir = std::env::temp_dir().join(format!("teak-restore-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("saved")).unwrap();
+        let file = dir.join("work.teak-workspace");
+        std::fs::write(&file, r#"{ "folders": ["#).unwrap();
+
+        let seed = WindowSeed::restored(
+            Settings::default(),
+            WindowSession {
+                workspace: Some(file.clone()),
+                roots: vec![dir.join("saved")],
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(seed.workspace, Some(file.clone()), "the binding stays");
+        assert_eq!(seed.session.as_ref().unwrap().workspace, Some(file));
+        assert_eq!(
+            seed.roots,
+            [dir.join("saved")],
+            "the session's folders stay"
+        );
+        assert!(
+            seed.workspace_error.is_some(),
+            "the parse error is reported"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// Closing one of two windows removes only it from the registry; closing
     /// the last one leaves the app running with no windows.
     #[gpui_kit::test]
@@ -985,7 +1060,7 @@ mod tests {
             gpui_kit::init(cx);
             crate::keymap::bind_keys(cx);
         });
-        let services = cx.update(|cx| AppServices::new(cx, Vec::new()));
+        let services = cx.update(|cx| AppServices::new(cx, Vec::new(), BTreeMap::new()));
         let (first, first_app) = cx
             .update(|cx| open_app_window(cx, &services, WindowSeed::blank(Settings::default())))
             .unwrap();
