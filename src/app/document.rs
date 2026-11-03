@@ -21,8 +21,9 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use gpui_kit::base::input::{GutterDecoration, GutterDecorationCollection};
 use gpui_kit::component::input::EditorState;
-use gpui_kit::{Entity, SharedString};
+use gpui_kit::{App, Entity, SharedString};
 
 use super::files::TextFormat;
 
@@ -49,6 +50,11 @@ pub(super) struct Document {
     /// The buffer and its undo history. A view renders this entity; it does not
     /// own it.
     pub(super) editor: Entity<EditorState>,
+    /// The changed-line marks under the gutter, created the first time git has
+    /// something to say about this file. The editor reserves the gutter strip
+    /// while a collection exists, so every file git has looked at keeps the
+    /// same gutter width, marked or not.
+    gutter: Option<GutterDecorationCollection>,
 }
 
 impl Document {
@@ -71,7 +77,31 @@ impl Document {
             deleted_on_disk: false,
             format,
             editor,
+            gutter: None,
         }
+    }
+
+    /// The changed-line ranges the gutter currently marks, for tests.
+    #[cfg(test)]
+    pub(super) fn gutter_ranges(&self, cx: &App) -> Vec<std::ops::Range<usize>> {
+        self.gutter
+            .as_ref()
+            .map(|gutter| gutter.get_ranges(cx))
+            .unwrap_or_default()
+    }
+
+    /// Replaces the changed-line marks under the gutter, creating its collection
+    /// on first use. An empty list empties the marks and keeps the strip, so
+    /// line numbers do not shift when a file is saved back to `HEAD`.
+    pub(super) fn set_gutter(&mut self, marks: Vec<GutterDecoration>, cx: &mut App) {
+        if let Some(gutter) = self.gutter.clone() {
+            gutter.set(marks, cx);
+            return;
+        }
+        let gutter = self.editor.update(cx, |state, cx| {
+            state.create_gutter_decorations_collection(marks, cx)
+        });
+        self.gutter = Some(gutter);
     }
 
     pub(super) fn editor_id(&self) -> gpui_kit::EntityId {

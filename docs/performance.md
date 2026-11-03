@@ -36,7 +36,7 @@ with the machine; the ceiling is what the test enforces.
 | `keystroke_100k_lines` | One character inserted, then the line index and full text rebuilt as a line command does | ~3.0 ms | 20 ms |
 | `quick_open_index` | Fuzzy score for every indexed path, against both the file name and the relative path, at the 20,000-file index cap | ~5.0 ms | 30 ms |
 | `find_regex_100k_lines` | Compile a regex and scan a 100,000-line buffer, capped at 1,000 matches | ~3.7 ms | 30 ms |
-| `git_gutter_100k_lines` | Changed-line read after one edit: `git show` of HEAD plus `git diff --no-index` against the buffer | ~70 ms | 300 ms |
+| `git_gutter_100k_lines` | Changed-line read after one edit: `git show` of HEAD plus `git diff --no-index` against the buffer, then the lines mapped to the gutter's byte ranges | ~80 ms | 300 ms |
 
 ## What the budgets do not cover
 

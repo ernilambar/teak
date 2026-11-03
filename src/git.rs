@@ -11,6 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
+use std::ops::Range;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -471,6 +472,51 @@ pub(crate) fn gutter_lines(changes: &[LineChange], text: &str) -> Vec<(u32, Line
         }
     }
     lines
+}
+
+/// The byte ranges of [`gutter_lines`], in the same order, for the editor's
+/// gutter decorations. A changed line covers its own bytes, newline included;
+/// a deletion is an empty range at the start of the line it precedes, which the
+/// editor paints on that line's top edge. Lines of one kind that meet become
+/// one range, so a rewritten file costs one mark per run rather than one per
+/// line.
+pub(crate) fn gutter_ranges(
+    lines: &[(u32, LineKind)],
+    text: &str,
+) -> Vec<(Range<usize>, LineKind)> {
+    let mut ranges: Vec<(Range<usize>, LineKind)> = Vec::with_capacity(lines.len());
+    let mut line = 1u32;
+    let mut start = 0usize;
+    for &(target, kind) in lines {
+        while line < target {
+            match text[start..].find('\n') {
+                Some(ix) => {
+                    start += ix + 1;
+                    line += 1;
+                }
+                None => break,
+            }
+        }
+        let end = if kind == LineKind::Deleted {
+            start
+        } else {
+            // Past the newline, so an empty line still gets a range the editor
+            // draws as a bar instead of a boundary.
+            match text[start..].find('\n') {
+                Some(ix) => start + ix + 1,
+                None => text.len(),
+            }
+        };
+        match ranges.last_mut() {
+            Some((last, last_kind))
+                if *last_kind == kind && kind != LineKind::Deleted && last.end == start =>
+            {
+                last.end = end;
+            }
+            _ => ranges.push((start..end, kind)),
+        }
+    }
+    ranges
 }
 
 /// Records one mark per line in buffer order. A later mark on a line already
@@ -973,6 +1019,40 @@ index aaa..bbb 100644
                 (4, LineKind::Modified),
             ],
             "the removal shares line three with the change, and one mark wins"
+        );
+    }
+
+    #[test]
+    fn gutter_ranges_cover_each_mark_in_bytes() {
+        let text = "one\ntwo\nthree\nfour";
+
+        // Runs of one kind merge; a deletion stays an empty range on the line
+        // it precedes, which is the byte its line starts at.
+        assert_eq!(
+            gutter_ranges(
+                &[
+                    (2, LineKind::Modified),
+                    (3, LineKind::Modified),
+                    (4, LineKind::Added),
+                ],
+                text,
+            ),
+            vec![(4..14, LineKind::Modified), (14..18, LineKind::Added)]
+        );
+        assert_eq!(
+            gutter_ranges(&[(3, LineKind::Deleted)], text),
+            vec![(8..8, LineKind::Deleted)],
+            "a removal marks the top edge of the line it precedes"
+        );
+    }
+
+    #[test]
+    fn gutter_ranges_give_an_empty_line_a_bar() {
+        // An empty line's bytes are just its newline, which the range takes, so
+        // the editor draws a bar there instead of a boundary mark.
+        assert_eq!(
+            gutter_ranges(&[(2, LineKind::Added)], "a\n\nc\n"),
+            vec![(2..3, LineKind::Added)]
         );
     }
 

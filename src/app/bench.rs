@@ -189,7 +189,11 @@ fn bench_git_gutter_100k_lines() {
     let path = repo.dir.join("large.rs");
     let took = best_of(RUNS, || {
         let changes = crate::git::line_changes(&path, &edited, Some(crate::git::Status::Modified));
-        black_box(changes.len());
+        let lines = crate::git::gutter_lines(&changes, &edited);
+        // The marks reach the editor as byte ranges, so the mapping is part of
+        // the read this budget covers.
+        let ranges = crate::git::gutter_ranges(&lines, &edited);
+        black_box(ranges.len());
     });
     report("git_gutter_100k_lines", took, Duration::from_millis(300));
 }

@@ -16,6 +16,7 @@ mod ui;
 mod workspace;
 
 use self::chrome::Chrome;
+use self::document::Document;
 use self::files::{LARGE_FILE_BYTES, option_held};
 use self::overlays::{FindText, Overlays};
 use self::preferences::SettingsState;
@@ -23,14 +24,15 @@ use self::tabs::{OpenTab, Preview, TabSet};
 use self::workspace::Workspace;
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::base::input::GutterMark;
+use gpui_kit::base::input::GutterDecoration;
 use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _,
-    input::{EditorState, TabSize, WrappingIndent},
+    input::{TabSize, WrappingIndent},
     link::Link,
     notification::Notification,
     resizable::ResizableState,
@@ -116,9 +118,10 @@ fn line_change_color(kind: git::LineKind, cx: &App) -> Hsla {
     }
 }
 
-/// Drops a tab's gutter marks, for a file git cannot describe.
-fn clear_gutter_marks(editor: &Entity<EditorState>, cx: &mut App) {
-    editor.update(cx, |state, cx| state.set_gutter_marks(Vec::new(), cx));
+/// Drops a tab's gutter marks, for a file git cannot describe. The strip stays
+/// reserved, so the line numbers keep their place.
+fn clear_gutter_marks(document: &mut Document, cx: &mut App) {
+    document.set_gutter(Vec::new(), cx);
 }
 
 /// The native window title: the app name, the active workspace when one is
@@ -518,6 +521,7 @@ impl TeakApp {
     fn read_git_marks(&mut self, editor: Option<EntityId>, cx: &mut Context<Self>) {
         let generation = self.bump_git_marks();
         let mut jobs = Vec::new();
+        let mut clears = Vec::new();
         for ix in 0..self.tabs.len() {
             let Some(tab) = self.tabs.get(ix) else {
                 continue;
@@ -529,18 +533,23 @@ impl TeakApp {
                 continue;
             };
             if !self.in_repository(&path) {
-                clear_gutter_marks(&tab.document.editor, cx);
+                clears.push(ix);
                 continue;
             }
             // A huge file is opened as Plain Text for speed; marking it would
             // copy the whole buffer on every pause in typing.
             let text = tab.document.editor.read(cx).text().to_string();
             if text.len() > LARGE_FILE_BYTES {
-                clear_gutter_marks(&tab.document.editor, cx);
+                clears.push(ix);
                 continue;
             }
             let status = self.workspace.git().status(&path);
             jobs.push((ix, path, text, status));
+        }
+        for ix in clears {
+            if let Some(tab) = self.tabs.get_mut(ix) {
+                clear_gutter_marks(&mut tab.document, cx);
+            }
         }
         if jobs.is_empty() {
             return;
@@ -553,7 +562,8 @@ impl TeakApp {
                     jobs.into_iter()
                         .map(|(ix, path, text, status)| {
                             let changes = git::line_changes(&path, &text, status);
-                            (ix, git::gutter_lines(&changes, &text))
+                            let lines = git::gutter_lines(&changes, &text);
+                            (ix, git::gutter_ranges(&lines, &text))
                         })
                         .collect::<Vec<_>>()
                 })
@@ -562,8 +572,8 @@ impl TeakApp {
                 if this.git_marks_generation != generation {
                     return;
                 }
-                for (ix, lines) in spans {
-                    this.paint_git_marks(ix, lines, cx);
+                for (ix, ranges) in spans {
+                    this.paint_git_marks(ix, ranges, cx);
                 }
             });
         })
@@ -613,22 +623,21 @@ impl TeakApp {
     fn paint_git_marks(
         &mut self,
         ix: usize,
-        lines: Vec<(u32, git::LineKind)>,
+        ranges: Vec<(Range<usize>, git::LineKind)>,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.get(ix) else {
+        let marks: Vec<(Range<usize>, Hsla)> = ranges
+            .into_iter()
+            .map(|(range, kind)| (range, line_change_color(kind, cx)))
+            .collect();
+        let Some(tab) = self.tabs.get_mut(ix) else {
             return;
         };
-        let marks = lines
+        let marks = marks
             .into_iter()
-            .map(|(line, kind)| match kind {
-                git::LineKind::Deleted => GutterMark::deleted(line, line_change_color(kind, cx)),
-                _ => GutterMark::changed(line, line_change_color(kind, cx)),
-            })
+            .map(|(range, color)| GutterDecoration::new(range).with_color(color))
             .collect();
-        tab.document
-            .editor
-            .update(cx, |state, cx| state.set_gutter_marks(marks, cx));
+        tab.document.set_gutter(marks, cx);
     }
 
     fn active(&self) -> Option<&OpenTab> {
@@ -1846,14 +1855,12 @@ mod tests {
 
         let marks = |cx: &mut TestAppContext| {
             cx.update(|cx| {
-                let this = app.read(cx);
-                let editor = &this.tabs.active().unwrap().document.editor;
-                editor
-                    .read(cx)
-                    .gutter_marks()
-                    .iter()
-                    .map(|mark| mark.line)
-                    .collect::<Vec<_>>()
+                app.read(cx)
+                    .tabs
+                    .active()
+                    .unwrap()
+                    .document
+                    .gutter_ranges(cx)
             })
         };
         assert!(marks(cx).is_empty(), "a clean file has no marks");
@@ -1877,7 +1884,11 @@ mod tests {
         cx.update_window(handle, |_, window, cx| window.render_frame(cx))
             .unwrap();
 
-        assert_eq!(marks(cx), vec![2, 4], "the changed line and the added one");
+        assert_eq!(
+            marks(cx),
+            vec![4..12, 18..23],
+            "the changed line and the added one, in bytes"
+        );
 
         cx.update_window(handle, |_, window, cx| {
             editor.update(cx, |state, cx| {
