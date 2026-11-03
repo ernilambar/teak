@@ -885,7 +885,9 @@ impl<M: InputModeKind> TextElement<M> {
             )
         };
 
-        let cursor_height = 0.85 * line_height;
+        // The caret spans the whole line box, as VS Code's does: at 85% of it the
+        // bar reads as short next to the same font size in a browser editor.
+        let cursor_height = line_height;
 
         for selection in state.selections.iter() {
             let is_active = selection.id == active_id;

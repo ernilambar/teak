@@ -41,7 +41,7 @@ index 2929754..734d37f 100644
  ///
  /// The default blinks every 500 ms without an idle timeout.
 diff --git a/src/input/base/element.rs b/src/input/base/element.rs
-index 975bafe..b3a0c6c 100644
+index 975bafe..fb4e961 100644
 --- a/src/input/base/element.rs
 +++ b/src/input/base/element.rs
 @@ -808,6 +808,9 @@ impl<M: InputModeKind> TextElement<M> {
@@ -54,7 +54,18 @@ index 975bafe..b3a0c6c 100644
  
          let line_height = last_layout.line_height;
          let visible_range = &last_layout.visible_range;
-@@ -934,7 +937,7 @@ impl<M: InputModeKind> TextElement<M> {
+@@ -882,7 +885,9 @@ impl<M: InputModeKind> TextElement<M> {
+             )
+         };
+ 
+-        let cursor_height = 0.85 * line_height;
++        // The caret spans the whole line box, as VS Code's does: at 85% of it the
++        // bar reads as short next to the same font size in a browser editor.
++        let cursor_height = line_height;
+ 
+         for selection in state.selections.iter() {
+             let is_active = selection.id == active_id;
+@@ -934,7 +939,7 @@ impl<M: InputModeKind> TextElement<M> {
                          let safety_margin = match last_layout.text_align {
                              TextAlign::Left => RIGHT_MARGIN,
                              TextAlign::Right => px(0.),
@@ -63,7 +74,7 @@ index 975bafe..b3a0c6c 100644
                          };
                          scroll_offset.x = if scroll_offset.x + cursor_pos.x
                              > (bounds.size.width - line_number_width - safety_margin)
-@@ -994,7 +997,7 @@ impl<M: InputModeKind> TextElement<M> {
+@@ -994,7 +999,7 @@ impl<M: InputModeKind> TextElement<M> {
                          cursor_x,
                          bounds.top() + cursor_pos.y + ((line_height - cursor_height) / 2.),
                      ),
@@ -72,7 +83,7 @@ index 975bafe..b3a0c6c 100644
                  ),
                  is_active,
              });
-@@ -1013,7 +1016,7 @@ impl<M: InputModeKind> TextElement<M> {
+@@ -1013,7 +1018,7 @@ impl<M: InputModeKind> TextElement<M> {
              info.bounds.origin.x += scroll_offset.x;
              // Right-aligned text keeps the caret inside the viewport edge.
              if last_layout.text_align == TextAlign::Right {

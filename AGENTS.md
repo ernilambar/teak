@@ -130,13 +130,15 @@ in headless environments.
   and the search field. Both are applied by `theme::apply_cursor`, from startup, from
   every theme apply, and from `apply_editor_options_to_all` when the overlay changes one.
 - `vendor/gpui-base` is gpui-base with `patches/gpui-base.patch` applied, wired in through
-  `[patch.crates-io]`. The patch is two things and nothing else: `selected_ranges()` (read
-  every selection; upstream `add_selection` covers adding them), and the application-wide
-  caret width (`input::cursor_width` / `set_cursor_width`), which upstream hardcodes at one
-  pixel. Changed-line bars come from gpui-base's own `GutterDecorationCollection`, created
-  per document and fed byte ranges from `git::gutter_ranges` by `app/mod.rs`, which also
-  supplies the colors. The caret width is a global of its own rather than a `Theme` field,
-  because the styled layer replaces that theme wholesale on every projection;
+  `[patch.crates-io]`. The patch is three things and nothing else: `selected_ranges()`
+  (read every selection; upstream `add_selection` covers adding them), the
+  application-wide caret width (`input::cursor_width` / `set_cursor_width`), which
+  upstream hardcodes at one pixel, and the caret height, which upstream keeps at 85% of
+  the line box and this makes the full line box, as VS Code draws it. Changed-line bars
+  come from gpui-base's own `GutterDecorationCollection`, created per document and fed
+  byte ranges from `git::gutter_ranges` by `app/mod.rs`, which also supplies the colors.
+  The caret width is a global of its own rather than a `Theme` field, because the styled
+  layer replaces that theme wholesale on every projection;
   `theme::apply_cursor` is what sets it, from `editor.cursor_width`.
   Never edit `vendor/` without regenerating the patch: `./scripts/vendor-gpui-base.sh
   --diff`. After bumping `gpui-kit`, run `cargo fetch`, then
