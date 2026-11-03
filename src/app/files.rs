@@ -15,6 +15,7 @@ use gpui_kit::*;
 use crate::language::{editor_language_id, language_for};
 use crate::paths::{
     copy_entry, duplicate_name, file_name, is_valid_entry_name, move_to_trash, remap_prefix,
+    same_file,
 };
 use crate::watcher::Change;
 use crate::windows::{WindowSeed, cascaded_frame};
@@ -40,7 +41,13 @@ type SaveDone = Rc<dyn Fn(bool, &mut TeakApp, &mut Window, &mut Context<TeakApp>
 
 /// A file read for a new tab: text for the editor, or a raster image to view.
 pub(super) enum FileContent {
-    Text { text: String, format: TextFormat },
+    /// `modified` is the file's mtime taken before its bytes were read, so a
+    /// write landing during the read shows up as a later version.
+    Text {
+        text: String,
+        format: TextFormat,
+        modified: Option<SystemTime>,
+    },
     Image(Arc<Image>),
 }
 
@@ -156,6 +163,7 @@ pub(super) const ONE_PIXEL_PNG: &[u8] = &[
 /// Reads `path` for a new tab. Raster images load as raw bytes; everything
 /// else is decoded as text.
 pub(super) fn read_file(path: &Path) -> std::io::Result<FileContent> {
+    let modified = modified_time(path);
     let bytes = std::fs::read(path)?;
     match raster_format(path) {
         Some(format) => Ok(FileContent::Image(Arc::new(Image::from_bytes(
@@ -163,7 +171,11 @@ pub(super) fn read_file(path: &Path) -> std::io::Result<FileContent> {
         )))),
         None => {
             let (text, format) = TextFormat::decode(&bytes)?;
-            Ok(FileContent::Text { text, format })
+            Ok(FileContent::Text {
+                text,
+                format,
+                modified,
+            })
         }
     }
 }
@@ -939,13 +951,34 @@ impl TeakApp {
 
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(path))) = receiver.await {
-                this.update_in(cx, |this, window, cx| {
-                    this.save_editor(id, path, window, cx)
-                })
-                .ok();
+                this.update_in(cx, |this, window, cx| this.save_as(id, path, window, cx))
+                    .ok();
             }
         })
         .detach();
+    }
+
+    /// Saves tab `id` under `path`, unless another tab already shows that
+    /// file: two documents on one path would each overwrite the other's
+    /// edits, so that tab is brought forward instead.
+    fn save_as(
+        &mut self,
+        id: EntityId,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ix) = self.tabs.index_of_path(&path)
+            && self.tabs.get(ix).map(|tab| tab.document.editor_id()) != Some(id)
+        {
+            self.activate_tab(ix, window, cx);
+            window.push_notification(
+                Notification::warning(format!("\"{}\" is already open", file_name(&path))),
+                cx,
+            );
+            return;
+        }
+        self.save_editor(id, path, window, cx);
     }
 
     /// Saves every edited tab that still points at a file on disk. Untitled and
@@ -1131,10 +1164,10 @@ impl TeakApp {
             report(done.as_ref(), true, self, window, cx);
             return;
         };
-        let text = tab
-            .document
-            .format
-            .encode(&tab.document.editor.read(cx).text().to_string());
+        // Kept to tell, once the write lands, whether typing changed the
+        // buffer meanwhile. Cloning the rope shares its nodes.
+        let written = tab.document.editor.read(cx).text().clone();
+        let text = tab.document.format.encode(&written.to_string());
         let filename = file_name(&path);
 
         cx.spawn_in(window, async move |this, cx| {
@@ -1147,7 +1180,11 @@ impl TeakApp {
             this.update_in(cx, |this, window, cx| {
                 let saved = match result {
                     Ok(()) => {
-                        this.finish_save(id, path.clone(), cx);
+                        let unchanged = this
+                            .tabs
+                            .find(id)
+                            .is_some_and(|tab| *tab.document.editor.read(cx).text() == written);
+                        this.finish_save(id, path.clone(), unchanged, cx);
                         this.reload_settings_if(&path, window, cx);
                         true
                     }
@@ -1166,7 +1203,15 @@ impl TeakApp {
         .detach();
     }
 
-    pub(super) fn finish_save(&mut self, id: EntityId, path: PathBuf, cx: &mut Context<Self>) {
+    /// Records a landed write. `unchanged` is false when the buffer was edited
+    /// while the write ran, so the tab stays dirty with the newer text.
+    pub(super) fn finish_save(
+        &mut self,
+        id: EntityId,
+        path: PathBuf,
+        unchanged: bool,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(tab) = self
             .tabs
             .iter_mut()
@@ -1187,7 +1232,7 @@ impl TeakApp {
                 ..tab.document.format
             };
             tab.document.synced_with_disk(modified_time(&path), format);
-            tab.document.dirty = false;
+            tab.document.dirty = !unchanged;
         }
         self.note_recent(path, cx);
         self.reload_tree(cx);
@@ -1530,7 +1575,6 @@ impl TeakApp {
         cx: &mut Context<Self>,
     ) {
         let name = file_name(&path);
-        let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let description = format!("Rename \"{name}\"");
 
         self.prompt_for_name(
@@ -1542,41 +1586,53 @@ impl TeakApp {
             },
             window,
             cx,
-            move |this, new_name, window, cx| {
-                if !is_valid_entry_name(&new_name) {
-                    window.push_notification(
-                        Notification::error(format!("Invalid name \"{new_name}\"")),
-                        cx,
-                    );
-                    return;
-                }
-                let new_path = parent.join(&new_name);
-                if new_path == path {
-                    return;
-                }
-                if new_path.exists() {
-                    window.push_notification(
-                        Notification::error(format!("\"{new_name}\" already exists")),
-                        cx,
-                    );
-                    return;
-                }
-
-                match std::fs::rename(&path, &new_path) {
-                    Ok(()) => {
-                        this.after_rename(&path, &new_path, cx);
-                        window.push_notification(
-                            Notification::success(format!("Renamed to {new_name}")),
-                            cx,
-                        );
-                    }
-                    Err(error) => window.push_notification(
-                        Notification::error(format!("Could not rename: {error}")),
-                        cx,
-                    ),
-                }
-            },
+            move |this, new_name, window, cx| this.rename_to(&path, new_name, window, cx),
         );
+    }
+
+    /// Renames `path` to `new_name` within its folder.
+    fn rename_to(
+        &mut self,
+        path: &Path,
+        new_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        if !is_valid_entry_name(&new_name) {
+            window.push_notification(
+                Notification::error(format!("Invalid name \"{new_name}\"")),
+                cx,
+            );
+            return;
+        }
+        let new_path = parent.join(&new_name);
+        if new_path == path {
+            return;
+        }
+        // A case-only rename names the same file on a case-insensitive
+        // volume, so it is not taken. Hard links to one file share an inode
+        // too, which is why the names must also differ only by case.
+        let case_only = new_name.to_lowercase() == file_name(path).to_lowercase();
+        if new_path.exists() && !(case_only && same_file(path, &new_path)) {
+            window.push_notification(
+                Notification::error(format!("\"{new_name}\" already exists")),
+                cx,
+            );
+            return;
+        }
+
+        match std::fs::rename(path, &new_path) {
+            Ok(()) => {
+                self.after_rename(path, &new_path, cx);
+                window
+                    .push_notification(Notification::success(format!("Renamed to {new_name}")), cx);
+            }
+            Err(error) => window.push_notification(
+                Notification::error(format!("Could not rename: {error}")),
+                cx,
+            ),
+        }
     }
 
     /// Prompts for the destination path, pre-filled with a non-colliding
@@ -2395,6 +2451,191 @@ mod tests {
 
         assert!(!docs.join("inner").exists(), "nothing was copied");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn tab_dirty(app: &gpui_kit::Entity<TeakApp>, cx: &mut TestAppContext, path: &Path) -> bool {
+        cx.update(|cx| {
+            let app = app.read(cx);
+            app.tabs
+                .find(tab_id(&app.tabs, path))
+                .unwrap()
+                .document
+                .dirty
+        })
+    }
+
+    /// Typing while a write is in flight keeps the tab dirty: the disk holds
+    /// the older text, so closing must still ask.
+    #[gpui_kit::test]
+    async fn typing_during_a_save_keeps_the_tab_dirty(cx: &mut TestAppContext) {
+        let path = temp_path("dirty-during-write");
+        std::fs::write(&path, "before\n").unwrap();
+        let (handle, app) = open_app(cx);
+        open_edited(cx, handle, &app, &path, "first\n");
+
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let id = tab_id(&this.tabs, &path);
+                this.save_editor(id, path.clone(), window, cx);
+                // The write has not run yet; this edit lands after its snapshot.
+                let editor = this.tabs.find(id).unwrap().document.editor.clone();
+                editor.update(cx, |state, cx| state.set_value("second\n", window, cx));
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\n");
+        assert!(
+            tab_dirty(&app, cx, &path),
+            "the newer text is still unsaved"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A save that lands with the buffer untouched leaves the tab clean.
+    #[gpui_kit::test]
+    async fn a_save_with_no_edits_meanwhile_cleans_the_tab(cx: &mut TestAppContext) {
+        let path = temp_path("clean-after-write");
+        std::fs::write(&path, "before\n").unwrap();
+        let (handle, app) = open_app(cx);
+        open_edited(cx, handle, &app, &path, "after\n");
+
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let id = tab_id(&this.tabs, &path);
+                this.save_editor(id, path.clone(), window, cx);
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "after\n");
+        assert!(!tab_dirty(&app, cx, &path));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The mtime a tab records is the one taken before its bytes were read, so
+    /// a write between the read and the tab opening is still noticed.
+    #[gpui_kit::test]
+    async fn a_write_during_the_open_is_seen_as_a_later_version(cx: &mut TestAppContext) {
+        let path = temp_path("mtime-before-read");
+        std::fs::write(&path, "read\n").unwrap();
+        let (handle, app) = open_app(cx);
+        let content = super::read_file(&path).unwrap();
+
+        std::fs::write(&path, "outside\n").unwrap();
+        let later = SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.add_file_tab(path.clone(), content, false, window, cx)
+            });
+        })
+        .unwrap();
+
+        let recorded = cx.update(|cx| {
+            let app = app.read(cx);
+            app.tabs
+                .find(tab_id(&app.tabs, &path))
+                .unwrap()
+                .document
+                .disk_modified
+        });
+        assert!(disk_moved_on(recorded, super::modified_time(&path)));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Changing only the case of a name renames the file, and its tab follows.
+    #[gpui_kit::test]
+    async fn a_case_only_rename_goes_through(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("teak-case-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let lower = dir.join("foo.txt");
+        std::fs::write(&lower, "a").unwrap();
+        let (handle, app) = open_app(cx);
+        open_edited(cx, handle, &app, &lower, "a");
+
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.rename_to(&lower, "Foo.txt".to_string(), window, cx)
+            });
+        })
+        .unwrap();
+
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["Foo.txt"]);
+        let upper = dir.join("Foo.txt");
+        assert_eq!(
+            tab_text(&app, cx, &upper).as_deref(),
+            Some("a"),
+            "the tab follows the new name"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Renaming onto a different file that already has the name is refused.
+    #[gpui_kit::test]
+    async fn a_rename_onto_another_file_is_refused(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("teak-rename-taken-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let from = dir.join("a.txt");
+        let taken = dir.join("b.txt");
+        std::fs::write(&from, "a").unwrap();
+        std::fs::write(&taken, "b").unwrap();
+        let (handle, app) = open_app(cx);
+
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.rename_to(&from, "b.txt".to_string(), window, cx)
+            });
+        })
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&from).unwrap(), "a");
+        assert_eq!(std::fs::read_to_string(&taken).unwrap(), "b");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Save As onto a file another tab shows brings that tab forward and
+    /// writes nothing, so the two buffers never fight over one file.
+    #[gpui_kit::test]
+    async fn save_as_onto_an_open_file_activates_its_tab(cx: &mut TestAppContext) {
+        let open = temp_path("save-as-open");
+        let other = temp_path("save-as-other");
+        std::fs::write(&open, "open\n").unwrap();
+        std::fs::write(&other, "other\n").unwrap();
+        let (handle, app) = open_app(cx);
+        open_edited(cx, handle, &app, &open, "open\n");
+        open_edited(cx, handle, &app, &other, "changed\n");
+
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let id = tab_id(&this.tabs, &other);
+                this.save_as(id, open.clone(), window, cx);
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        assert_eq!(std::fs::read_to_string(&open).unwrap(), "open\n");
+        cx.update(|cx| {
+            let app = app.read(cx);
+            assert_eq!(app.active().unwrap().document.path(), Some(open.as_path()));
+            assert!(app.tabs.is_open(&other), "the saved tab keeps its own path");
+        });
+        let _ = std::fs::remove_file(&open);
+        let _ = std::fs::remove_file(&other);
     }
 
     fn temp_path(name: &str) -> PathBuf {

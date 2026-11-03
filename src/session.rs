@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -167,7 +167,19 @@ pub(crate) fn session_path() -> Option<PathBuf> {
 }
 
 pub(crate) fn load_session() -> Option<SessionState> {
-    parse_session(&std::fs::read_to_string(session_path()?).ok()?)
+    load_session_from(&session_path()?)
+}
+
+/// Reads the session at `path`. A file that exists but does not parse is moved
+/// aside to `session.json.bak` first, since the next write would replace it
+/// with a fresh session and lose whatever it held.
+fn load_session_from(path: &Path) -> Option<SessionState> {
+    let bytes = std::fs::read(path).ok()?;
+    let parsed = std::str::from_utf8(&bytes).ok().and_then(parse_session);
+    if parsed.is_none() {
+        let _ = std::fs::rename(path, path.with_file_name("session.json.bak"));
+    }
+    parsed
 }
 
 /// Parses either the current session shape or the older flat one. The check for
@@ -189,6 +201,40 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    /// A session file that does not parse is kept aside instead of being
+    /// replaced by the next write.
+    #[test]
+    fn an_unreadable_session_is_backed_up() {
+        let dir = std::env::temp_dir().join(format!("teak-session-bak-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.json");
+        std::fs::write(&path, "{ not json").unwrap();
+
+        assert!(load_session_from(&path).is_none());
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("session.json.bak")).unwrap(),
+            "{ not json"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A good file is read in place and left alone.
+    #[test]
+    fn a_readable_session_stays_put() {
+        let dir = std::env::temp_dir().join(format!("teak-session-ok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.json");
+        std::fs::write(&path, r#"{ "windows": [] }"#).unwrap();
+
+        assert!(load_session_from(&path).is_some());
+        assert!(path.exists());
+        assert!(!dir.join("session.json.bak").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     fn window(path: &str) -> WindowSession {
         WindowSession {

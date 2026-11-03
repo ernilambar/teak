@@ -555,7 +555,11 @@ impl TeakApp {
         cx: &mut Context<Self>,
     ) {
         match content {
-            FileContent::Text { text, format } => {
+            FileContent::Text {
+                text,
+                format,
+                modified,
+            } => {
                 let name = file_name(&path);
                 let large = text.len() > LARGE_FILE_BYTES;
                 let language = if large {
@@ -578,6 +582,7 @@ impl TeakApp {
                     && let Some(tab) = self.tabs.get_mut(ix)
                 {
                     tab.document.format = format;
+                    tab.document.disk_modified = modified;
                     // Keeps a save from turning highlighting back on.
                     tab.document.language_override = large;
                 }

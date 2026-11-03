@@ -338,6 +338,18 @@ pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
     trash::delete(path).map_err(|error| error.to_string())
 }
 
+/// True when `a` and `b` are the same directory entry, however they are
+/// spelled: `foo.txt` and `Foo.txt` on a case-insensitive volume. Symlinks are
+/// not followed, so a link and its target are different entries.
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
 /// Copies a file, or a directory tree, to `to`. Directories are created and
 /// filled recursively.
 pub(crate) fn copy_entry(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -391,6 +403,28 @@ pub(crate) fn duplicate_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Case variants of one entry are the same file; a symlink to it and a
+    /// different file are not.
+    #[test]
+    fn same_file_matches_one_entry_only() {
+        let root = std::env::temp_dir().join(format!("app-same-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("foo.txt");
+        std::fs::write(&file, "a").unwrap();
+        std::fs::write(root.join("bar.txt"), "b").unwrap();
+        std::os::unix::fs::symlink(&file, root.join("link.txt")).unwrap();
+
+        assert!(same_file(&file, &file));
+        assert!(!same_file(&file, &root.join("bar.txt")));
+        assert!(
+            !same_file(&file, &root.join("link.txt")),
+            "links are not followed"
+        );
+        assert!(!same_file(&file, &root.join("missing.txt")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn format_size_picks_unit() {
