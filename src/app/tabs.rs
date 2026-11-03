@@ -287,16 +287,15 @@ impl TabSet {
     /// case-insensitive volume — still finds it, so one file never gets two
     /// buffers that overwrite each other.
     pub(super) fn index_of_path(&self, path: &Path) -> Option<usize> {
-        let spelled = |tab: &OpenTab| tab.document.path() == Some(path);
-        let reached = |tab: &OpenTab| {
-            tab.document
-                .path()
-                .is_some_and(|open| crate::paths::same_target(open, path))
-        };
         self.tabs
             .iter()
-            .position(spelled)
-            .or_else(|| self.tabs.iter().position(reached))
+            .position(|tab| tab.document.path() == Some(path))
+            .or_else(|| {
+                let id = crate::paths::file_id(path)?;
+                self.tabs
+                    .iter()
+                    .position(|tab| tab.document.file_id() == Some(id))
+            })
     }
 
     /// True when `path` already has a tab, so opening it again must only

@@ -15,7 +15,7 @@ use gpui_kit::*;
 use crate::language::{editor_language_id, language_for};
 use crate::paths::{
     copy_entry, duplicate_name, file_name, is_valid_entry_name, move_to_trash, remap_prefix,
-    same_file,
+    resolve_new, same_file,
 };
 use crate::watcher::Change;
 use crate::windows::{WindowSeed, cascaded_frame};
@@ -184,21 +184,23 @@ pub(super) fn read_file(path: &Path) -> std::io::Result<FileContent> {
 /// write that fails part-way (a full disk) leaves the old file whole.
 ///
 /// The temporary file sits beside the symlink's target, not the link, so the
-/// link survives, and it takes the old file's permissions. A read-only file is
-/// refused as a direct write would be, since the rename alone would replace it.
-/// When the folder refuses a new file, the bytes are written in place instead.
-/// Ownership and extended attributes are not carried over, and a hard-linked
-/// file becomes a separate copy.
+/// link survives (a dangling one too), and it takes the old file's mode. A file
+/// this user may not write is refused, as a direct write would be, since the
+/// rename alone would replace it. The bytes are written in place instead when
+/// a rename would change more than the contents: the file belongs to another
+/// owner or group, it has hard links, or the folder refuses a new file.
+/// Extended attributes are not carried over.
 fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let permissions = std::fs::metadata(&target)
-        .ok()
-        .map(|meta| meta.permissions());
-    if permissions
-        .as_ref()
-        .is_some_and(|permissions| permissions.readonly())
-    {
-        return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    use std::os::unix::fs::MetadataExt as _;
+
+    let target = resolve_link(path);
+    let existing = std::fs::metadata(&target).ok();
+    if existing.is_some() {
+        // Opening for writing does not truncate; it only asks the question.
+        std::fs::OpenOptions::new().write(true).open(&target)?;
+    }
+    if existing.as_ref().is_some_and(|meta| meta.nlink() > 1) {
+        return std::fs::write(&target, bytes);
     }
     let temp = target.with_file_name(format!(".{}.teak-save", file_name(&target)));
 
@@ -209,9 +211,15 @@ fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     {
         return std::fs::write(&target, bytes);
     }
+    if let (Ok(()), Some(old), Ok(new)) = (&written, &existing, std::fs::metadata(&temp))
+        && (old.uid() != new.uid() || old.gid() != new.gid())
+    {
+        let _ = std::fs::remove_file(&temp);
+        return std::fs::write(&target, bytes);
+    }
     let replaced = written
-        .and_then(|()| match permissions {
-            Some(permissions) => std::fs::set_permissions(&temp, permissions),
+        .and_then(|()| match &existing {
+            Some(meta) => std::fs::set_permissions(&temp, meta.permissions()),
             None => Ok(()),
         })
         .and_then(|()| std::fs::rename(&temp, &target));
@@ -219,6 +227,20 @@ fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&temp);
     }
     replaced
+}
+
+/// The file `path` stands for: its fully resolved target, or, for a symlink
+/// whose target does not exist yet, the path the link points at.
+fn resolve_link(path: &Path) -> PathBuf {
+    if let Ok(resolved) = std::fs::canonicalize(path) {
+        return resolved;
+    }
+    match std::fs::read_link(path) {
+        Ok(link) => path
+            .parent()
+            .map_or_else(|| link.clone(), |parent| parent.join(&link)),
+        Err(_) => path.to_path_buf(),
+    }
 }
 
 /// Tells `done`, if there is one, how a save ended.
@@ -633,14 +655,44 @@ impl TeakApp {
     /// file is recognized the next time it is opened; `notes.txt` becomes
     /// `notes.txt.teak-workspace` rather than losing the name that was typed.
     fn save_workspace_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let path = if workspace_file::is_workspace_path(&path) {
-            path
-        } else {
-            let mut name = path.into_os_string();
-            name.push(".");
-            name.push(workspace_file::EXTENSION);
-            PathBuf::from(name)
-        };
+        if workspace_file::is_workspace_path(&path) {
+            self.write_workspace_file(path, window, cx);
+            return;
+        }
+        let mut name = path.into_os_string();
+        name.push(".");
+        name.push(workspace_file::EXTENSION);
+        let path = PathBuf::from(name);
+        if !path.exists() {
+            self.write_workspace_file(path, window, cx);
+            return;
+        }
+
+        // The save panel asked about the name as typed, not this one, so a
+        // file already holding it is not replaced without asking.
+        let name = file_name(&path);
+        let entity = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let entity = entity.clone();
+            let path = path.clone();
+            alert
+                .confirm()
+                .title("Replace Workspace?")
+                .description(format!("\"{name}\" already exists. Replace it?"))
+                .ok_text("Replace")
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text("Cancel")
+                .on_ok(move |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.write_workspace_file(path.clone(), window, cx)
+                    });
+                    true
+                })
+        });
+    }
+
+    /// Writes the workspace file at exactly `path` and binds the window to it.
+    fn write_workspace_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         match workspace_file::save(&path, self.workspace.roots()) {
             Ok(()) => {
                 self.workspace_file = Some(path.clone());
@@ -683,8 +735,14 @@ impl TeakApp {
                 .ok_text("Save All and Continue")
                 .cancel_text("Cancel")
                 .on_ok(move |_, window, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.save_all_then(action, target.clone(), window, cx);
+                    // Closing this dialog closes the topmost one, so a prompt a
+                    // save opens must wait until this one is gone.
+                    let entity = entity.clone();
+                    let target = target.clone();
+                    window.defer(cx, move |window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.save_all_then(action, target, window, cx);
+                        });
                     });
                     true
                 })
@@ -731,10 +789,13 @@ impl TeakApp {
         cx: &mut Context<Self>,
     ) {
         if self.any_dirty() {
-            window.push_notification(
-                Notification::warning("Some files need a path before they can be saved."),
-                cx,
-            );
+            // A saveable tab still dirty was edited while its write ran.
+            let message = if self.saveable_dirty_tabs().is_empty() {
+                "Some files need a path before they can be saved."
+            } else {
+                "Some files changed while saving. Save them and try again."
+            };
+            window.push_notification(Notification::warning(message), cx);
             return;
         }
         action(self, target, window, cx);
@@ -952,10 +1013,8 @@ impl TeakApp {
 
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(path))) = receiver.await {
-                this.update_in(cx, |this, window, cx| {
-                    this.save_editor(id, path, window, cx)
-                })
-                .ok();
+                this.update_in(cx, |this, window, cx| this.save_as(id, path, window, cx))
+                    .ok();
             }
         })
         .detach();
@@ -1106,8 +1165,15 @@ impl TeakApp {
                 .ok_variant(ButtonVariant::Danger)
                 .cancel_text("Cancel")
                 .on_ok(move |_, window, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.save_over_changes(id, path.clone(), done.clone(), window, cx)
+                    // Saving can open the File Changed prompt, which must wait
+                    // for this dialog to close or that close would take it.
+                    let entity = entity.clone();
+                    let path = path.clone();
+                    let done = done.clone();
+                    window.defer(cx, move |window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.save_over_changes(id, path, done, window, cx)
+                        });
                     });
                     true
                 })
@@ -1296,16 +1362,21 @@ impl TeakApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The event may name the file another way than its tab does.
         let Some(tab) = self
             .tabs
-            .iter()
-            .find(|tab| tab.document.path.as_deref() == Some(path))
+            .index_of_path(path)
+            .and_then(|ix| self.tabs.get(ix))
         else {
             return;
         };
         if tab.raster {
             return;
         }
+        let Some(path) = tab.document.path.clone() else {
+            return;
+        };
+        let path = path.as_path();
         let id = tab.document.editor_id();
         let dirty = tab.document.dirty;
         let disk_modified = tab.document.disk_modified;
@@ -1736,8 +1807,9 @@ impl TeakApp {
             );
             return;
         }
-        // Copying a folder into itself would copy the copy as it grows.
-        if path.is_dir() && destination.starts_with(path) {
+        // Copying a folder into itself would copy the copy as it grows. Both
+        // sides are resolved, so `..`, a symlink or another case cannot hide it.
+        if path.is_dir() && resolve_new(&destination).starts_with(resolve_new(path)) {
             window.push_notification(
                 Notification::error("Cannot duplicate a folder into itself".to_string()),
                 cx,
@@ -2487,14 +2559,23 @@ mod tests {
         std::fs::write(docs.join("a.txt"), "a").unwrap();
         let (handle, app) = open_app(cx);
 
-        cx.update_window(handle, |_, window, cx| {
-            app.update(cx, |this, cx| {
-                this.duplicate_to(&docs, "docs/inner".to_string(), window, cx)
-            });
-        })
-        .unwrap();
+        std::os::unix::fs::symlink(&docs, dir.join("link")).unwrap();
 
-        assert!(!docs.join("inner").exists(), "nothing was copied");
+        // Spelled plainly, through `..`, through a symlink, and in another case.
+        for typed in [
+            "docs/inner",
+            "docs/../docs/inner",
+            "link/inner",
+            "Docs/inner",
+        ] {
+            cx.update_window(handle, |_, window, cx| {
+                app.update(cx, |this, cx| {
+                    this.duplicate_to(&docs, typed.to_string(), window, cx)
+                });
+            })
+            .unwrap();
+            assert!(!docs.join("inner").exists(), "{typed}: nothing was copied");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2829,6 +2910,93 @@ mod tests {
             let app = app.read(cx);
             assert_eq!(app.active().unwrap().document.path(), Some(link.as_path()));
         });
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A file with another hard link is written in place, so every link still
+    /// names the saved contents.
+    #[test]
+    fn a_replacing_write_keeps_hard_links_together() {
+        let dir = fresh_dir("replace-hardlink");
+        let file = dir.join("a.txt");
+        let twin = dir.join("b.txt");
+        std::fs::write(&file, "old").unwrap();
+        std::fs::hard_link(&file, &twin).unwrap();
+
+        super::write_replacing(&file, b"new").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&twin).unwrap(), "new");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Saving through a link whose target is gone recreates the target and
+    /// keeps the link, as a direct write through it would.
+    #[test]
+    fn a_replacing_write_through_a_dangling_link_keeps_the_link() {
+        let dir = fresh_dir("replace-dangling");
+        let target = dir.join("target.txt");
+        let link = dir.join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        super::write_replacing(&link, b"new").unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An outside edit reported under the target's name reloads the tab that
+    /// opened the file through a symlink.
+    #[gpui_kit::test]
+    async fn an_event_under_another_spelling_reloads_the_tab(cx: &mut TestAppContext) {
+        let dir = fresh_dir("event-symlink");
+        let target = dir.join("target.txt");
+        let link = dir.join("link.txt");
+        std::fs::write(&target, "old\n").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let (handle, app) = open_app(cx);
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| this.request_open(link.clone(), window, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        std::fs::write(&target, "new\n").unwrap();
+        let later = SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&target)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        handle_change(cx, handle, &app, &target, Change::Changed);
+
+        assert_eq!(tab_text(&app, cx, &link).as_deref(), Some("new\n"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A workspace file the save panel never asked about is not replaced
+    /// without a confirmation.
+    #[gpui_kit::test]
+    async fn save_workspace_as_asks_before_replacing_the_renamed_file(cx: &mut TestAppContext) {
+        let dir = fresh_dir("workspace-replace");
+        let existing = dir.join("notes.txt.teak-workspace");
+        std::fs::write(&existing, "keep").unwrap();
+        let (handle, app) = open_app(cx);
+
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.save_workspace_file(dir.join("notes.txt"), window, cx)
+            });
+        })
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&existing).unwrap(), "keep");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

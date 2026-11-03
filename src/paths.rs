@@ -350,14 +350,46 @@ pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// True when `a` and `b` reach the same file once symlinks are followed: a
-/// link and its target, or two spellings of one path.
-pub(crate) fn same_target(a: &Path, b: &Path) -> bool {
+/// The device and inode of the file `path` reaches once symlinks are
+/// followed, which two spellings of one file share: a link and its target, or
+/// another case on a case-insensitive volume.
+pub(crate) fn file_id(path: &Path) -> Option<(u64, u64)> {
     use std::os::unix::fs::MetadataExt as _;
 
-    match (std::fs::metadata(a), std::fs::metadata(b)) {
-        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
-        _ => false,
+    std::fs::metadata(path)
+        .ok()
+        .map(|meta| (meta.dev(), meta.ino()))
+}
+
+/// `path` as the file system will resolve it, for a path that may not exist
+/// yet: `.` and `..` are folded, then the deepest folder that exists is
+/// canonicalized, which follows symlinks and takes the case on disk, and the
+/// missing rest is put back on.
+pub(crate) fn resolve_new(path: &Path) -> PathBuf {
+    let mut lexical = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                lexical.pop();
+            }
+            other => lexical.push(other.as_os_str()),
+        }
+    }
+    let mut missing = Vec::new();
+    let mut existing = lexical.as_path();
+    loop {
+        if let Ok(mut resolved) = std::fs::canonicalize(existing) {
+            resolved.extend(missing.iter().rev());
+            return resolved;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return lexical,
+        }
     }
 }
 
@@ -415,6 +447,31 @@ pub(crate) fn duplicate_name(path: &Path) -> String {
 mod tests {
     use super::*;
 
+    /// A destination is resolved the way the copy will reach it, whatever its
+    /// spelling, even where it does not exist yet.
+    #[test]
+    fn resolve_new_follows_dots_links_and_case() {
+        let root = std::env::temp_dir().join(format!("app-resolve-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Docs")).unwrap();
+        std::os::unix::fs::symlink(root.join("Docs"), root.join("link")).unwrap();
+        let docs = std::fs::canonicalize(root.join("Docs")).unwrap();
+
+        assert_eq!(
+            resolve_new(&root.join("Docs/../Docs/inner")),
+            docs.join("inner")
+        );
+        assert_eq!(
+            resolve_new(&root.join("link/inner/deeper")),
+            docs.join("inner/deeper")
+        );
+        assert_eq!(resolve_new(&root.join("gone/../Docs/x")), docs.join("x"));
+        if root.join("docs").exists() {
+            assert_eq!(resolve_new(&root.join("docs/inner")), docs.join("inner"));
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// Case variants of one entry are the same file; a symlink to it and a
     /// different file are not.
     #[test]
@@ -435,12 +492,11 @@ mod tests {
         );
         assert!(!same_file(&file, &root.join("missing.txt")));
 
-        assert!(
-            same_target(&file, &root.join("link.txt")),
-            "links are followed"
-        );
-        assert!(!same_target(&file, &root.join("bar.txt")));
-        assert!(!same_target(&file, &root.join("missing.txt")));
+        let id = file_id(&file);
+        assert!(id.is_some());
+        assert_eq!(file_id(&root.join("link.txt")), id, "links are followed");
+        assert_ne!(file_id(&root.join("bar.txt")), id);
+        assert_eq!(file_id(&root.join("missing.txt")), None);
         std::fs::remove_dir_all(root).unwrap();
     }
 

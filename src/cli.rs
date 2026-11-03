@@ -49,7 +49,7 @@ absolute() {
         /*) printf '%s\n' "$1" ;;
         *)
             local dir
-            if dir=$(cd -- "$(dirname -- "$1")" 2>/dev/null && pwd); then
+            if dir=$(CDPATH= cd -- "$(dirname -- "$1")" 2>/dev/null && pwd); then
                 printf '%s/%s\n' "$dir" "$(basename -- "$1")"
             else
                 printf '%s/%s\n' "$PWD" "$1"
@@ -266,6 +266,11 @@ mod tests {
     /// Runs the launcher with a stand-in `open` that records its arguments, from
     /// `cwd`, and returns what `open` was given.
     fn run_launcher(cwd: &Path, args: &[&str]) -> Vec<String> {
+        run_launcher_with(cwd, args, &[])
+    }
+
+    /// [`run_launcher`] with extra environment variables.
+    fn run_launcher_with(cwd: &Path, args: &[&str], env: &[(&str, &Path)]) -> Vec<String> {
         let bin = cwd.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let log = cwd.join("open.log");
@@ -294,6 +299,7 @@ mod tests {
             .current_dir(cwd)
             .env("PATH", path)
             .env_remove("PWD")
+            .envs(env.iter().copied())
             .status()
             .unwrap();
         assert!(status.success());
@@ -325,6 +331,30 @@ mod tests {
         assert_eq!(given[5], "/abs/b.txt", "an absolute path is left alone");
         assert!(Path::new(&given[6]).is_absolute(), "a file not made yet");
         assert!(given[6].ends_with("/new.txt"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A `CDPATH` in the user's shell never redirects a relative path to
+    /// another folder of the same name.
+    #[test]
+    fn the_launcher_ignores_cdpath() {
+        let dir = std::env::temp_dir().join(format!("teak-launcher-cdpath-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("work/notes")).unwrap();
+        std::fs::create_dir_all(dir.join("elsewhere/notes")).unwrap();
+        std::fs::write(dir.join("work/notes/a.txt"), "").unwrap();
+
+        let given = run_launcher_with(
+            &dir.join("work"),
+            &["-n", "notes/a.txt"],
+            &[("CDPATH", &dir.join("elsewhere"))],
+        );
+
+        assert_eq!(given.len(), 5, "one path, on one line: {given:?}");
+        assert_eq!(
+            PathBuf::from(&given[4]).canonicalize().unwrap(),
+            dir.join("work/notes/a.txt").canonicalize().unwrap()
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
