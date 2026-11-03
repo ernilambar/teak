@@ -350,6 +350,17 @@ pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// True when `a` and `b` reach the same file once symlinks are followed: a
+/// link and its target, or two spellings of one path.
+pub(crate) fn same_target(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
 /// Copies a file, or a directory tree, to `to`. Directories are created and
 /// filled recursively.
 pub(crate) fn copy_entry(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -423,6 +434,13 @@ mod tests {
             "links are not followed"
         );
         assert!(!same_file(&file, &root.join("missing.txt")));
+
+        assert!(
+            same_target(&file, &root.join("link.txt")),
+            "links are followed"
+        );
+        assert!(!same_target(&file, &root.join("bar.txt")));
+        assert!(!same_target(&file, &root.join("missing.txt")));
         std::fs::remove_dir_all(root).unwrap();
     }
 

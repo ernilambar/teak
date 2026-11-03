@@ -2805,6 +2805,33 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A file opened through a symlink and then directly gets one tab, so the
+    /// two spellings never hold separate buffers.
+    #[gpui_kit::test]
+    async fn a_file_opened_through_a_symlink_shares_its_tab(cx: &mut TestAppContext) {
+        let dir = fresh_dir("open-symlink");
+        let target = dir.join("target.txt");
+        let link = dir.join("link.txt");
+        std::fs::write(&target, "text\n").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let (handle, app) = open_app(cx);
+
+        for path in [link.clone(), target.clone()] {
+            cx.update_window(handle, |_, window, cx| {
+                app.update(cx, |this, cx| this.request_open(path, window, cx));
+            })
+            .unwrap();
+            cx.run_until_parked();
+        }
+
+        assert_eq!(tab_count(&app, cx), 1);
+        cx.update(|cx| {
+            let app = app.read(cx);
+            assert_eq!(app.active().unwrap().document.path(), Some(link.as_path()));
+        });
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     fn temp_path(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("app-reload-{name}-{}", std::process::id()));
         let _ = std::fs::remove_file(&path);

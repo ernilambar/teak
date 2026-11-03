@@ -507,7 +507,10 @@ impl WindowSeed {
     /// Re-reads the workspace file a restored window was bound to, so folders
     /// edited outside teak are what the file says now. A file that has gone
     /// drops the binding silently: the window reopens as a plain folder window
-    /// with the folders and tabs the session had.
+    /// with the folders and tabs the session had. A file that is still there
+    /// but cannot be read or parsed keeps the binding and the session's
+    /// folders, and reports why, so a typo in a hand edit is not taken for a
+    /// deleted workspace.
     fn refresh_workspace_folders(&mut self) {
         let Some(path) = self.workspace.clone() else {
             return;
@@ -518,6 +521,9 @@ impl WindowSeed {
                     session.roots = folders.clone();
                 }
                 self.roots = folders;
+            }
+            Err(message) if !matches!(path.try_exists(), Ok(false)) => {
+                self.workspace_error = Some(message);
             }
             Err(_) => {
                 self.workspace = None;
@@ -1009,6 +1015,38 @@ mod tests {
         assert!(
             seed.workspace_error.is_none(),
             "a workspace that moved away is not an error"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_restored_window_keeps_a_binding_whose_file_does_not_parse() {
+        let dir = std::env::temp_dir().join(format!("teak-restore-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("saved")).unwrap();
+        let file = dir.join("work.teak-workspace");
+        std::fs::write(&file, r#"{ "folders": ["#).unwrap();
+
+        let seed = WindowSeed::restored(
+            Settings::default(),
+            WindowSession {
+                workspace: Some(file.clone()),
+                roots: vec![dir.join("saved")],
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(seed.workspace, Some(file.clone()), "the binding stays");
+        assert_eq!(seed.session.as_ref().unwrap().workspace, Some(file));
+        assert_eq!(
+            seed.roots,
+            [dir.join("saved")],
+            "the session's folders stay"
+        );
+        assert!(
+            seed.workspace_error.is_some(),
+            "the parse error is reported"
         );
 
         std::fs::remove_dir_all(dir).unwrap();
