@@ -124,12 +124,20 @@ in headless environments.
   ligatures from `calt`, so "off" cannot unjoin them: only the AAT pair (type 36,
   selector 1) does, and `FontFeatures` cannot express an AAT pair. A real off switch for
   those faces therefore needs a `gpui-fast-apple` change, not a teak one.
+  `editor.cursor_width` (points, 1–4, default 2) and `editor.cursor_blink` (on by
+  default) are application-wide, not per tab: the width is the `vendor/gpui-base` caret
+  global and the blink policy is the theme's, so they also reach the palette, Quick Open
+  and the search field. Both are applied by `theme::apply_cursor`, from startup, from
+  every theme apply, and from `apply_editor_options_to_all` when the overlay changes one.
 - `vendor/gpui-base` is gpui-base with `patches/gpui-base.patch` applied, wired in through
-  `[patch.crates-io]`. It adds `selected_ranges()` (read every selection); upstream
-  `add_selection` covers adding them. The patch is that one method and nothing else:
-  changed-line bars come from gpui-base's own `GutterDecorationCollection`, created per
-  document and fed byte ranges from `git::gutter_ranges` by `app/mod.rs`, which also
-  supplies the colors.
+  `[patch.crates-io]`. The patch is two things and nothing else: `selected_ranges()` (read
+  every selection; upstream `add_selection` covers adding them), and the application-wide
+  caret width (`input::cursor_width` / `set_cursor_width`), which upstream hardcodes at one
+  pixel. Changed-line bars come from gpui-base's own `GutterDecorationCollection`, created
+  per document and fed byte ranges from `git::gutter_ranges` by `app/mod.rs`, which also
+  supplies the colors. The caret width is a global of its own rather than a `Theme` field,
+  because the styled layer replaces that theme wholesale on every projection;
+  `theme::apply_cursor` is what sets it, from `editor.cursor_width`.
   Never edit `vendor/` without regenerating the patch: `./scripts/vendor-gpui-base.sh
   --diff`. After bumping `gpui-kit`, run `cargo fetch`, then
   `./scripts/vendor-gpui-base.sh <version>` with the gpui-base version from `Cargo.lock`;

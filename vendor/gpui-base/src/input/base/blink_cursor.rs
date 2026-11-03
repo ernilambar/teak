@@ -1,11 +1,35 @@
-use gpui::{App, Context, Pixels, Subscription, Task, px};
+use gpui::{App, Context, Global, Pixels, Subscription, Task, px};
 use instant::Duration;
 use web_time::Instant;
 
 static INTERVAL: Duration = Duration::from_millis(500);
 static PAUSE_DELAY: Duration = Duration::from_millis(300);
 
+/// Width of a caret nothing has widened. Local patch: upstream hardcodes this
+/// and offers no way to change it.
 pub(super) const CURSOR_WIDTH: Pixels = px(1.);
+
+/// Application-wide caret width, in logical pixels.
+///
+/// Local patch (patches/gpui-base.patch): upstream has no per-application
+/// caret width. Kept out of [`crate::Theme`] on purpose, because a theme
+/// projection replaces that value wholesale, while this outlives theme edits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CaretWidth(Pixels);
+
+impl Global for CaretWidth {}
+
+/// The caret width every input draws with: [`CURSOR_WIDTH`] unless set.
+pub fn cursor_width(cx: &App) -> Pixels {
+    cx.try_global::<CaretWidth>()
+        .map(|width| width.0)
+        .unwrap_or(CURSOR_WIDTH)
+}
+
+/// Widens every caret in the application to `width` logical pixels.
+pub fn set_cursor_width(width: Pixels, cx: &mut App) {
+    cx.set_global(CaretWidth(width.max(CURSOR_WIDTH)));
+}
 
 /// Application-wide caret visibility policy.
 ///

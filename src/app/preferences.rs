@@ -27,11 +27,12 @@ use gpui_kit::*;
 use crate::settings::{
     DEFAULT_CURSOR_SURROUNDING_LINES, DEFAULT_DARK_SCHEME, DEFAULT_FONT_WEIGHT, DEFAULT_ICON_STYLE,
     DEFAULT_LIGHT_SCHEME, DEFAULT_SIDEBAR_POSITION, DEFAULT_TAB_SIZE, DEFAULT_THEME,
-    EditorSettings, MAX_FONT_SIZE, MAX_UI_FONT_SIZE, MIN_FONT_SIZE, MIN_UI_FONT_SIZE,
-    save_color_scheme_dark, save_color_scheme_light, save_cursor_surrounding_lines,
-    save_font_family, save_font_size, save_font_weight, save_hard_tabs, save_icon_color,
-    save_show_whitespace, save_sidebar_position, save_soft_wrap, save_tab_icons, save_tab_size,
-    save_theme, save_ui_font_family, save_ui_font_size,
+    EditorSettings, MAX_CURSOR_WIDTH, MAX_FONT_SIZE, MAX_UI_FONT_SIZE, MIN_CURSOR_WIDTH,
+    MIN_FONT_SIZE, MIN_UI_FONT_SIZE, save_color_scheme_dark, save_color_scheme_light,
+    save_cursor_surrounding_lines, save_cursor_width, save_font_family, save_font_size,
+    save_font_weight, save_hard_tabs, save_icon_color, save_show_whitespace, save_sidebar_position,
+    save_soft_wrap, save_tab_icons, save_tab_size, save_theme, save_ui_font_family,
+    save_ui_font_size,
 };
 
 use super::TeakApp;
@@ -461,6 +462,43 @@ impl TeakApp {
             editor.ligatures(),
             |e| &mut e.ligatures,
         );
+        // gpui-base draws a one-pixel caret unless the app widens it, and that
+        // hairline is easy to lose on a retina display. Two points is four
+        // device pixels there, and the width the app ships with.
+        let cursor_width_is_set = editor.cursor_width.is_some();
+        let cursor_width = editor.cursor_width().round() as usize;
+        let cursor_width_reset_weak = weak.clone();
+        let cursor_width_item = SettingItem::new(
+            "Cursor Width",
+            window_number_input(
+                "cursor-width-field",
+                cursor_width,
+                NumberFieldOptions {
+                    min: f64::from(MIN_CURSOR_WIDTH),
+                    max: f64::from(MAX_CURSOR_WIDTH),
+                    step: 1.0,
+                },
+                weak.clone(),
+                Rc::new(|this, width, window, cx| this.set_editor_cursor_width(width, window, cx)),
+            )
+            .on_reset(
+                move |_cx| cursor_width_is_set,
+                move |window, cx| {
+                    cursor_width_reset_weak
+                        .update(cx, |this, cx| this.reset_cursor_width(window, cx))
+                        .ok();
+                },
+            ),
+        )
+        .description("Caret stroke width in points, for every caret in the app.");
+        let cursor_blink_item = flag_item(
+            "Blink Cursor",
+            "Blink the caret. Off keeps it solid.",
+            "cursor-blink-switch",
+            "cursor_blink",
+            editor.cursor_blink(),
+            |e| &mut e.cursor_blink,
+        );
         let cursor_lines_is_set = editor.cursor_surrounding_lines.is_some();
         let cursor_lines = editor
             .cursor_surrounding_lines
@@ -727,6 +765,8 @@ impl TeakApp {
                         indent_guides_item,
                         folding_item,
                         scroll_beyond_item,
+                        cursor_width_item,
+                        cursor_blink_item,
                         cursor_surrounding_lines_item,
                     ]),
                     SettingGroup::new().title("Editing").items(vec![
@@ -970,6 +1010,31 @@ impl TeakApp {
         cx.notify();
     }
 
+    /// Sets the caret width in whole points, clamped to the range the field
+    /// offers. The width is application-wide, so this also reaches the palette
+    /// and search inputs.
+    fn set_editor_cursor_width(
+        &mut self,
+        width: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let width = (width as f32).clamp(MIN_CURSOR_WIDTH, MAX_CURSOR_WIDTH);
+        self.settings.values.editor.cursor_width = Some(width);
+        self.apply_editor_options_to_all(window, cx);
+        self.after_setting_write(save_cursor_width(Some(width)), window, cx);
+        cx.notify();
+    }
+
+    /// Clears the caret width so [`crate::settings::DEFAULT_CURSOR_WIDTH`]
+    /// applies again.
+    fn reset_cursor_width(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.values.editor.cursor_width = None;
+        self.apply_editor_options_to_all(window, cx);
+        self.after_setting_write(save_cursor_width(None), window, cx);
+        cx.notify();
+    }
+
     /// Clears the scroll margin so the engine picks it again: one line on a
     /// short viewport, three otherwise. No typed value reproduces that, which is
     /// why this setting resets to unset rather than to a number.
@@ -1091,6 +1156,32 @@ mod tests {
             );
         })
         .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// The cursor settings are application-wide, so changing them must reach the
+    /// engine rather than a single editor: the caret width lands on gpui-base's
+    /// global and the blink policy on the theme.
+    #[gpui_kit::test]
+    async fn cursor_options_reach_the_engine(cx: &mut TestAppContext) {
+        let (handle, app) = open_app(cx);
+
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.settings.values.editor.cursor_width = Some(3.);
+                app.settings.values.editor.cursor_blink = Some(false);
+                app.apply_editor_options_to_all(window, cx);
+            });
+        })
+        .unwrap();
+
+        cx.update(|cx| {
+            assert_eq!(gpui_kit::base::input::cursor_width(cx), gpui_kit::px(3.));
+            assert_eq!(
+                gpui_kit::component::Theme::global(cx).cursor_blink,
+                gpui_kit::base::input::CursorBlink::steady()
+            );
+        });
         cx.run_until_parked();
     }
 }

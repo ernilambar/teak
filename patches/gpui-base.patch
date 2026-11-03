@@ -1,3 +1,86 @@
+diff --git a/src/input/base/blink_cursor.rs b/src/input/base/blink_cursor.rs
+index 2929754..734d37f 100644
+--- a/src/input/base/blink_cursor.rs
++++ b/src/input/base/blink_cursor.rs
+@@ -1,12 +1,36 @@
+-use gpui::{App, Context, Pixels, Subscription, Task, px};
++use gpui::{App, Context, Global, Pixels, Subscription, Task, px};
+ use instant::Duration;
+ use web_time::Instant;
+ 
+ static INTERVAL: Duration = Duration::from_millis(500);
+ static PAUSE_DELAY: Duration = Duration::from_millis(300);
+ 
++/// Width of a caret nothing has widened. Local patch: upstream hardcodes this
++/// and offers no way to change it.
+ pub(super) const CURSOR_WIDTH: Pixels = px(1.);
+ 
++/// Application-wide caret width, in logical pixels.
++///
++/// Local patch (patches/gpui-base.patch): upstream has no per-application
++/// caret width. Kept out of [`crate::Theme`] on purpose, because a theme
++/// projection replaces that value wholesale, while this outlives theme edits.
++#[derive(Clone, Copy, Debug, PartialEq)]
++struct CaretWidth(Pixels);
++
++impl Global for CaretWidth {}
++
++/// The caret width every input draws with: [`CURSOR_WIDTH`] unless set.
++pub fn cursor_width(cx: &App) -> Pixels {
++    cx.try_global::<CaretWidth>()
++        .map(|width| width.0)
++        .unwrap_or(CURSOR_WIDTH)
++}
++
++/// Widens every caret in the application to `width` logical pixels.
++pub fn set_cursor_width(width: Pixels, cx: &mut App) {
++    cx.set_global(CaretWidth(width.max(CURSOR_WIDTH)));
++}
++
+ /// Application-wide caret visibility policy.
+ ///
+ /// The default blinks every 500 ms without an idle timeout.
+diff --git a/src/input/base/element.rs b/src/input/base/element.rs
+index 975bafe..b3a0c6c 100644
+--- a/src/input/base/element.rs
++++ b/src/input/base/element.rs
+@@ -808,6 +808,9 @@ impl<M: InputModeKind> TextElement<M> {
+         cx: &mut App,
+     ) -> (Vec<CursorRenderInfo>, Point<Pixels>, Option<usize>, bool) {
+         let state = self.state.read(cx);
++        // Local patch: a caret may be wider than one pixel, and the margins that
++        // keep it inside the viewport follow that width.
++        let cursor_width = crate::input::cursor_width(cx);
+ 
+         let line_height = last_layout.line_height;
+         let visible_range = &last_layout.visible_range;
+@@ -934,7 +937,7 @@ impl<M: InputModeKind> TextElement<M> {
+                         let safety_margin = match last_layout.text_align {
+                             TextAlign::Left => RIGHT_MARGIN,
+                             TextAlign::Right => px(0.),
+-                            TextAlign::Center => CURSOR_WIDTH,
++                            TextAlign::Center => cursor_width,
+                         };
+                         scroll_offset.x = if scroll_offset.x + cursor_pos.x
+                             > (bounds.size.width - line_number_width - safety_margin)
+@@ -994,7 +997,7 @@ impl<M: InputModeKind> TextElement<M> {
+                         cursor_x,
+                         bounds.top() + cursor_pos.y + ((line_height - cursor_height) / 2.),
+                     ),
+-                    size(CURSOR_WIDTH, cursor_height),
++                    size(cursor_width, cursor_height),
+                 ),
+                 is_active,
+             });
+@@ -1013,7 +1016,7 @@ impl<M: InputModeKind> TextElement<M> {
+             info.bounds.origin.x += scroll_offset.x;
+             // Right-aligned text keeps the caret inside the viewport edge.
+             if last_layout.text_align == TextAlign::Right {
+-                info.bounds.origin.x = info.bounds.origin.x.min(bounds.right() - CURSOR_WIDTH);
++                info.bounds.origin.x = info.bounds.origin.x.min(bounds.right() - cursor_width);
+             }
+         }
+         scroll_offset.y =
 diff --git a/src/input/base/state.rs b/src/input/base/state.rs
 index 051acab..2ea2c7e 100644
 --- a/src/input/base/state.rs
@@ -17,3 +100,16 @@ index 051acab..2ea2c7e 100644
      /// Add `range` as an additional selection, keeping the existing ones —
      /// the programmatic equivalent of Alt-clicking another cursor into the
      /// text.
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index 2dc7fd0..74259ac 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -85,7 +85,7 @@ pub(crate) fn init(cx: &mut App) {
+ 
+ pub use crate::number_input::{NumberInputEvent, NumberStep};
+ pub use base::{InputBase, InputContextMenuCapabilities, InputStyles};
+-pub use blink_cursor::CursorBlink;
++pub use blink_cursor::{CursorBlink, cursor_width, set_cursor_width};
+ pub use cursor::Selection;
+ pub use decorations::{
+     GutterDecoration, GutterDecorationCollection, OverviewRulerDecoration,

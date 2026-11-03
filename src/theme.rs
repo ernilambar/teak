@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::LazyLock;
 
+use gpui_kit::base::input::{CursorBlink, set_cursor_width};
 use gpui_kit::component::{Theme, ThemeConfig, ThemeMode, ThemeRegistry, ThemeSet};
 use gpui_kit::*;
 
@@ -101,6 +102,7 @@ pub(crate) fn apply(settings: &Settings, window: Option<&mut Window>, cx: &mut A
     };
     apply_scheme(name, mode, window, cx);
     apply_ui_font(settings, cx);
+    apply_cursor(settings, cx);
 
     crate::markdown::apply_emphasis(
         cx,
@@ -125,6 +127,20 @@ fn apply_ui_font(settings: &Settings, cx: &mut App) {
         theme.font_family = family;
         theme.font_size = px(size);
     });
+}
+
+/// Projects the caret options: the width onto gpui-base's caret global, which
+/// the engine otherwise hardcodes at one pixel, and the blink policy onto the
+/// theme. Both are application-wide, so this runs wherever the theme is applied
+/// and again whenever either setting changes.
+pub(crate) fn apply_cursor(settings: &Settings, cx: &mut App) {
+    set_cursor_width(px(settings.editor.cursor_width()), cx);
+    let blink = if settings.editor.cursor_blink() {
+        CursorBlink::default()
+    } else {
+        CursorBlink::steady()
+    };
+    Theme::update(cx, |theme| theme.cursor_blink = blink);
 }
 
 /// The bundled color schemes. Embedded so the default light and dark palettes
