@@ -108,6 +108,15 @@ pub(crate) struct SessionStore {
 }
 
 impl SessionStore {
+    /// A store that starts from the tab sets the last session parked, so the
+    /// first write after launch does not drop them.
+    fn new(workspaces: BTreeMap<PathBuf, WorkspaceSession>) -> Self {
+        Self {
+            workspaces,
+            ..Self::default()
+        }
+    }
+
     fn set_window(&mut self, id: u64, window: WindowSession) {
         self.windows.insert(id, window);
     }
@@ -188,13 +197,17 @@ pub(crate) struct AppServices {
 }
 
 impl AppServices {
-    /// Creates the shared entities. `recent` seeds the Open Recent menu from
-    /// the session that was just loaded.
-    pub(crate) fn new(cx: &mut App, recent: Vec<PathBuf>) -> Self {
+    /// Creates the shared entities. `recent` seeds the Open Recent menu and
+    /// `workspaces` the parked tab sets, both from the session just loaded.
+    pub(crate) fn new(
+        cx: &mut App,
+        recent: Vec<PathBuf>,
+        workspaces: BTreeMap<PathBuf, WorkspaceSession>,
+    ) -> Self {
         Self {
             registry: cx.new(|_| WindowRegistry::default()),
             recent: cx.new(|_| RecentFiles::new(recent)),
-            session: cx.new(|_| SessionStore::default()),
+            session: cx.new(|_| SessionStore::new(workspaces)),
         }
     }
 
@@ -694,6 +707,7 @@ pub(crate) fn open_app_window(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
     use gpui_kit::{AppContext as _, Bounds, TestAppContext, WindowBounds, point, px, size};
@@ -919,6 +933,29 @@ mod tests {
         assert_eq!(store.parked(Path::new("/w/other.teak-workspace")), None);
     }
 
+    /// The tab sets a previous launch parked come back with the services, so
+    /// switching to that workspace restores them and the next write keeps them.
+    #[gpui_kit::test]
+    async fn parked_sets_from_the_last_session_survive_a_relaunch(cx: &mut TestAppContext) {
+        let workspace = PathBuf::from("/w/work.teak-workspace");
+        let parked = WorkspaceSession {
+            tabs: vec![PathBuf::from("/w/work/a.rs")],
+            active_tab: None,
+            expanded: Vec::new(),
+        };
+        let saved = BTreeMap::from([(workspace.clone(), parked.clone())]);
+        let services = cx.update(|cx| AppServices::new(cx, Vec::new(), saved));
+
+        cx.update(|cx| {
+            assert_eq!(services.parked_workspace(&workspace, cx), Some(parked));
+            assert_eq!(
+                services.session.read(cx).state().workspaces.len(),
+                1,
+                "the next write carries the parked set"
+            );
+        });
+    }
+
     #[test]
     fn a_restored_window_reloads_the_folders_its_workspace_file_declares() {
         let dir =
@@ -985,7 +1022,7 @@ mod tests {
             gpui_kit::init(cx);
             crate::keymap::bind_keys(cx);
         });
-        let services = cx.update(|cx| AppServices::new(cx, Vec::new()));
+        let services = cx.update(|cx| AppServices::new(cx, Vec::new(), BTreeMap::new()));
         let (first, first_app) = cx
             .update(|cx| open_app_window(cx, &services, WindowSeed::blank(Settings::default())))
             .unwrap();

@@ -1,4 +1,6 @@
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -31,6 +33,10 @@ type WorkspaceTarget = (PathBuf, Vec<PathBuf>);
 /// An action that waits for the tabs to be saved: a method on the app plus the
 /// workspace it should act on, if any.
 type GuardedAction = fn(&mut TeakApp, Option<WorkspaceTarget>, &mut Window, &mut Context<TeakApp>);
+
+/// Told how one save ended: `true` when the file was written, `false` when a
+/// prompt was cancelled or the write failed.
+type SaveDone = Rc<dyn Fn(bool, &mut TeakApp, &mut Window, &mut Context<TeakApp>)>;
 
 /// A file read for a new tab: text for the editor, or a raster image to view.
 pub(super) enum FileContent {
@@ -159,6 +165,19 @@ pub(super) fn read_file(path: &Path) -> std::io::Result<FileContent> {
             let (text, format) = TextFormat::decode(&bytes)?;
             Ok(FileContent::Text { text, format })
         }
+    }
+}
+
+/// Tells `done`, if there is one, how a save ended.
+fn report(
+    done: Option<&SaveDone>,
+    saved: bool,
+    this: &mut TeakApp,
+    window: &mut Window,
+    cx: &mut Context<TeakApp>,
+) {
+    if let Some(done) = done {
+        done(saved, this, window, cx);
     }
 }
 
@@ -608,21 +627,60 @@ impl TeakApp {
                 .cancel_text("Cancel")
                 .on_ok(move |_, window, cx| {
                     entity.update(cx, |this, cx| {
-                        this.save_all_editors(window, cx);
-                        if this.any_dirty() {
-                            window.push_notification(
-                                Notification::warning(
-                                    "Some files need a path before they can be saved.",
-                                ),
-                                cx,
-                            );
-                            return;
-                        }
-                        action(this, target.clone(), window, cx);
+                        this.save_all_then(action, target.clone(), window, cx);
                     });
                     true
                 })
         });
+    }
+
+    /// Saves every edited tab, then runs `action` once the last write has
+    /// landed. A cancelled prompt or a failed write stops the action; so does
+    /// a tab that cannot be saved (Untitled, deleted on disk), with a warning.
+    fn save_all_then(
+        &mut self,
+        action: GuardedAction,
+        target: Option<WorkspaceTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let targets = self.saveable_dirty_tabs();
+        if targets.is_empty() {
+            self.continue_if_clean(action, target, window, cx);
+            return;
+        }
+
+        let pending = Rc::new(Cell::new(targets.len()));
+        let failed = Rc::new(Cell::new(false));
+        let done: SaveDone = Rc::new(move |saved, this, window, cx| {
+            failed.set(failed.get() || !saved);
+            pending.set(pending.get() - 1);
+            if pending.get() == 0 && !failed.get() {
+                this.continue_if_clean(action, target.clone(), window, cx);
+            }
+        });
+        for (id, path) in targets {
+            self.save_editor_then(id, path, Some(done.clone()), window, cx);
+        }
+    }
+
+    /// Runs `action` unless a tab is still dirty, which after a Save All means
+    /// it had nowhere to be written.
+    fn continue_if_clean(
+        &mut self,
+        action: GuardedAction,
+        target: Option<WorkspaceTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.any_dirty() {
+            window.push_notification(
+                Notification::warning("Some files need a path before they can be saved."),
+                cx,
+            );
+            return;
+        }
+        action(self, target, window, cx);
     }
 
     /// Switches this window to the workspace in `target`. The tabs it was
@@ -900,8 +958,14 @@ impl TeakApp {
     /// The Save All body, shared with the workspace switch and close guards so
     /// every path that closes tabs saves the same set.
     fn save_all_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let targets: Vec<(EntityId, PathBuf)> = self
-            .tabs
+        for (id, path) in self.saveable_dirty_tabs() {
+            self.save_editor(id, path, window, cx);
+        }
+    }
+
+    /// The edited tabs that still point at a file on disk.
+    fn saveable_dirty_tabs(&self) -> Vec<(EntityId, PathBuf)> {
+        self.tabs
             .iter()
             .filter(|tab| tab.document.dirty)
             .filter_map(|tab| {
@@ -911,11 +975,7 @@ impl TeakApp {
                     .map(|path| (tab.document.editor_id(), path))
             })
             .filter(|(_, path)| path.exists())
-            .collect();
-
-        for (id, path) in targets {
-            self.save_editor(id, path, window, cx);
-        }
+            .collect()
     }
 
     pub(super) fn save_editor(
@@ -925,18 +985,28 @@ impl TeakApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.find(id) else {
+        self.save_editor_then(id, path, None, window, cx);
+    }
+
+    /// [`Self::save_editor`], reporting how the save ended to `done`.
+    fn save_editor_then(
+        &mut self,
+        id: EntityId,
+        path: PathBuf,
+        done: Option<SaveDone>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A raster tab's editor is empty; writing it would wipe the image.
+        let Some(tab) = self.tabs.find(id).filter(|tab| !tab.raster) else {
+            report(done.as_ref(), true, self, window, cx);
             return;
         };
-        // A raster tab's editor is empty; writing it would wipe the image.
-        if tab.raster {
-            return;
-        }
 
         // Writing back a file that was not valid UTF-8 replaces its bad bytes
         // for good, so ask first. Saving a copy elsewhere loses nothing.
         if !tab.document.would_lose_bytes_to(&path) {
-            self.save_over_changes(id, path, window, cx);
+            self.save_over_changes(id, path, done, window, cx);
             return;
         }
 
@@ -944,7 +1014,10 @@ impl TeakApp {
         let entity = cx.entity();
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             let entity = entity.clone();
+            let cancel_entity = entity.clone();
             let path = path.clone();
+            let done = done.clone();
+            let cancel_done = done.clone();
             alert
                 .confirm()
                 .title("Not Valid UTF-8")
@@ -956,7 +1029,13 @@ impl TeakApp {
                 .cancel_text("Cancel")
                 .on_ok(move |_, window, cx| {
                     entity.update(cx, |this, cx| {
-                        this.save_over_changes(id, path.clone(), window, cx)
+                        this.save_over_changes(id, path.clone(), done.clone(), window, cx)
+                    });
+                    true
+                })
+                .on_cancel(move |_, window, cx| {
+                    cancel_entity.update(cx, |this, cx| {
+                        report(cancel_done.as_ref(), false, this, window, cx)
                     });
                     true
                 })
@@ -968,21 +1047,25 @@ impl TeakApp {
         &mut self,
         id: EntityId,
         path: PathBuf,
+        done: Option<SaveDone>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(tab) = self.tabs.find(id) else {
+            report(done.as_ref(), true, self, window, cx);
             return;
         };
 
         // Saving over the tab's own file after another program changed it
         // would silently discard that change, and a file deleted on disk would
-        // be silently recreated, so ask first.
+        // be silently recreated, so ask first. A change the user chose to keep
+        // their edits over still asks: that choice kept the buffer, it did not
+        // agree to overwrite the file.
         let current = modified_time(&path);
-        let changed_on_disk =
-            tab.document.path() == Some(path.as_path()) && tab.document.moved_on_disk(current);
+        let changed_on_disk = tab.document.path() == Some(path.as_path())
+            && disk_moved_on(tab.document.disk_modified, current);
         if !changed_on_disk {
-            self.write_editor(id, path, window, cx);
+            self.write_editor(id, path, done, window, cx);
             return;
         }
 
@@ -991,7 +1074,10 @@ impl TeakApp {
         let entity = cx.entity();
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             let entity = entity.clone();
+            let cancel_entity = entity.clone();
             let path = path.clone();
+            let done = done.clone();
+            let cancel_done = done.clone();
             let (title, description, ok_text) = if deleted {
                 (
                     "File Deleted",
@@ -1014,7 +1100,13 @@ impl TeakApp {
                 .cancel_text("Cancel")
                 .on_ok(move |_, window, cx| {
                     entity.update(cx, |this, cx| {
-                        this.write_editor(id, path.clone(), window, cx)
+                        this.write_editor(id, path.clone(), done.clone(), window, cx)
+                    });
+                    true
+                })
+                .on_cancel(move |_, window, cx| {
+                    cancel_entity.update(cx, |this, cx| {
+                        report(cancel_done.as_ref(), false, this, window, cx)
                     });
                     true
                 })
@@ -1026,14 +1118,17 @@ impl TeakApp {
         &mut self,
         id: EntityId,
         path: PathBuf,
+        done: Option<SaveDone>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(editor) = self.tabs.find(id).map(|tab| tab.document.editor.clone()) else {
+            report(done.as_ref(), true, self, window, cx);
             return;
         };
         self.tidy_for_save(&editor, window, cx);
         let Some(tab) = self.tabs.find(id) else {
+            report(done.as_ref(), true, self, window, cx);
             return;
         };
         let text = tab
@@ -1049,17 +1144,22 @@ impl TeakApp {
                 .spawn(async move { std::fs::write(write_path, text) })
                 .await;
 
-            this.update_in(cx, |this, window, cx| match result {
-                Ok(()) => {
-                    this.finish_save(id, path.clone(), cx);
-                    this.reload_settings_if(&path, window, cx);
-                }
-                Err(error) => {
-                    window.push_notification(
-                        Notification::error(format!("Could not save {filename}: {error}")),
-                        cx,
-                    );
-                }
+            this.update_in(cx, |this, window, cx| {
+                let saved = match result {
+                    Ok(()) => {
+                        this.finish_save(id, path.clone(), cx);
+                        this.reload_settings_if(&path, window, cx);
+                        true
+                    }
+                    Err(error) => {
+                        window.push_notification(
+                            Notification::error(format!("Could not save {filename}: {error}")),
+                            cx,
+                        );
+                        false
+                    }
+                };
+                report(done.as_ref(), saved, this, window, cx);
             })
             .ok();
         })
@@ -1502,69 +1602,76 @@ impl TeakApp {
             },
             window,
             cx,
-            move |this, value, window, cx| {
-                let Some(parent) = path.parent() else {
-                    return;
-                };
-                let typed = PathBuf::from(value);
-                let destination = if typed.is_absolute() {
-                    typed
-                } else {
-                    parent.join(typed)
-                };
-
-                if destination == path {
-                    return;
-                }
-                if destination.exists() {
-                    window.push_notification(
-                        Notification::error(format!(
-                            "\"{}\" already exists",
-                            file_name(&destination)
-                        )),
-                        cx,
-                    );
-                    return;
-                }
-                if let Some(parent) = destination.parent()
-                    && !parent.is_dir()
-                    && let Err(error) = std::fs::create_dir_all(parent)
-                {
-                    window.push_notification(
-                        Notification::error(format!(
-                            "Could not create {}: {error}",
-                            parent.display()
-                        )),
-                        cx,
-                    );
-                    return;
-                }
-
-                match copy_entry(&path, &destination) {
-                    Ok(()) => {
-                        if let Some(parent) = destination.parent() {
-                            this.workspace.expand(parent.to_path_buf());
-                        }
-                        let name = file_name(&destination);
-                        this.workspace.set_selected(Some(destination));
-                        this.reload_tree(cx);
-                        this.save_session(cx);
-                        cx.notify();
-                        window.push_notification(
-                            Notification::success(format!("Duplicated as {name}")),
-                            cx,
-                        );
-                    }
-                    Err(error) => window.push_notification(
-                        Notification::error(format!(
-                            "Could not duplicate {}: {error}",
-                            file_name(&path)
-                        )),
-                        cx,
-                    ),
-                }
-            },
+            move |this, value, window, cx| this.duplicate_to(&path, value, window, cx),
         );
+    }
+
+    /// Copies `path` to `value`, a path typed in the Duplicate prompt that is
+    /// resolved against `path`'s folder when relative.
+    fn duplicate_to(
+        &mut self,
+        path: &Path,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(parent) = path.parent() else {
+            return;
+        };
+        let typed = PathBuf::from(value);
+        let destination = if typed.is_absolute() {
+            typed
+        } else {
+            parent.join(typed)
+        };
+
+        if destination == path {
+            return;
+        }
+        if destination.exists() {
+            window.push_notification(
+                Notification::error(format!("\"{}\" already exists", file_name(&destination))),
+                cx,
+            );
+            return;
+        }
+        // Copying a folder into itself would copy the copy as it grows.
+        if path.is_dir() && destination.starts_with(path) {
+            window.push_notification(
+                Notification::error("Cannot duplicate a folder into itself".to_string()),
+                cx,
+            );
+            return;
+        }
+        if let Some(parent) = destination.parent()
+            && !parent.is_dir()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            window.push_notification(
+                Notification::error(format!("Could not create {}: {error}", parent.display())),
+                cx,
+            );
+            return;
+        }
+
+        match copy_entry(path, &destination) {
+            Ok(()) => {
+                if let Some(parent) = destination.parent() {
+                    self.workspace.expand(parent.to_path_buf());
+                }
+                let name = file_name(&destination);
+                self.workspace.set_selected(Some(destination));
+                self.reload_tree(cx);
+                self.save_session(cx);
+                cx.notify();
+                window
+                    .push_notification(Notification::success(format!("Duplicated as {name}")), cx);
+            }
+            Err(error) => window.push_notification(
+                Notification::error(format!("Could not duplicate {}: {error}", file_name(path))),
+                cx,
+            ),
+        }
     }
 
     /// Prompts for the destination path, pre-filled with the current path, and
@@ -2151,6 +2258,143 @@ mod tests {
             classify_disk_change(false, Some(old), Some(new), new),
             DiskChange::Reload
         );
+    }
+
+    /// Opens `path` in a tab and replaces its buffer with `text`, leaving the
+    /// tab dirty, as typing would.
+    fn open_edited(
+        cx: &mut TestAppContext,
+        handle: gpui_kit::AnyWindowHandle,
+        app: &gpui_kit::Entity<TeakApp>,
+        path: &Path,
+        text: &str,
+    ) {
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let content = super::read_file(path).unwrap();
+                this.add_file_tab(path.to_path_buf(), content, false, window, cx);
+                let id = tab_id(&this.tabs, path);
+                let editor = this.tabs.find(id).unwrap().document.editor.clone();
+                editor.update(cx, |state, cx| {
+                    state.set_value(text.to_string(), window, cx)
+                });
+                this.set_dirty(id, true, cx);
+            });
+        })
+        .unwrap();
+    }
+
+    fn save_all_then_close_workspace(
+        cx: &mut TestAppContext,
+        handle: gpui_kit::AnyWindowHandle,
+        app: &gpui_kit::Entity<TeakApp>,
+    ) {
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.save_all_then(TeakApp::close_workspace, None, window, cx)
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+
+    fn tab_count(app: &gpui_kit::Entity<TeakApp>, cx: &mut TestAppContext) -> usize {
+        cx.update(|cx| app.read(cx).tabs.iter().count())
+    }
+
+    /// Save All and Continue waits for the writes, then runs its action.
+    #[gpui_kit::test]
+    async fn save_all_and_continue_runs_once_the_writes_land(cx: &mut TestAppContext) {
+        let path = temp_path("save-all-continue");
+        std::fs::write(&path, "before\n").unwrap();
+        let (handle, app) = open_app(cx);
+        open_edited(cx, handle, &app, &path, "after\n");
+
+        save_all_then_close_workspace(cx, handle, &app);
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "after\n");
+        assert_eq!(tab_count(&app, cx), 0, "the guarded action ran");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A write that fails stops the action, so the unsaved tab stays open.
+    #[gpui_kit::test]
+    async fn save_all_and_continue_stops_when_a_write_fails(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let path = temp_path("save-all-fails");
+        std::fs::write(&path, "before\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let (handle, app) = open_app(cx);
+        open_edited(cx, handle, &app, &path, "after\n");
+
+        save_all_then_close_workspace(cx, handle, &app);
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "before\n");
+        assert_eq!(tab_count(&app, cx), 1, "the action did not run");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Keeping the buffer over an outside change does not agree to overwrite
+    /// it: the save still asks, so nothing is written until the user confirms.
+    #[gpui_kit::test]
+    async fn saving_over_a_dismissed_change_still_asks(cx: &mut TestAppContext) {
+        let path = temp_path("dismissed-save");
+        std::fs::write(&path, "original\n").unwrap();
+        let (handle, app) = open_app(cx);
+        open_edited(cx, handle, &app, &path, "mine\n");
+
+        std::fs::write(&path, "outside\n").unwrap();
+        let later = SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                let id = tab_id(&this.tabs, &path);
+                let tab = this
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.document.editor_id() == id);
+                tab.unwrap().document.dismissed_disk_change = super::modified_time(&path);
+                this.save_editor(id, path.clone(), window, cx);
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "outside\n",
+            "the outside change is not overwritten without asking"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Duplicating a folder into its own subtree is refused before anything is
+    /// copied, as Move refuses it.
+    #[gpui_kit::test]
+    async fn duplicating_a_folder_into_itself_is_refused(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("teak-dup-self-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let docs = dir.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("a.txt"), "a").unwrap();
+        let (handle, app) = open_app(cx);
+
+        cx.update_window(handle, |_, window, cx| {
+            app.update(cx, |this, cx| {
+                this.duplicate_to(&docs, "docs/inner".to_string(), window, cx)
+            });
+        })
+        .unwrap();
+
+        assert!(!docs.join("inner").exists(), "nothing was copied");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn temp_path(name: &str) -> PathBuf {

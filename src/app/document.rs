@@ -133,13 +133,6 @@ impl Document {
         self.format = format;
     }
 
-    /// True when `current` is a later version than the one last read, and the
-    /// user has not already waved that version away.
-    pub(super) fn moved_on_disk(&self, current: Option<SystemTime>) -> bool {
-        super::files::disk_moved_on(self.disk_modified, current)
-            && self.dismissed_disk_change != current
-    }
-
     /// True when saving this document would overwrite bytes the editor could
     /// not decode, which only matters while it still names that same path.
     pub(super) fn would_lose_bytes_to(&self, path: &Path) -> bool {
@@ -150,7 +143,7 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::time::{Duration, SystemTime};
+    use std::time::SystemTime;
 
     use gpui_kit::component::input::EditorState;
     use gpui_kit::{AppContext as _, TestAppContext};
@@ -173,24 +166,6 @@ mod tests {
             TextFormat::default(),
             editor,
         )
-    }
-
-    /// A newer on-disk version asks once; the dismissal silences only that one.
-    #[gpui_kit::test]
-    async fn moved_on_disk_reports_a_newer_version_once(cx: &mut TestAppContext) {
-        let mut doc = document(cx, None);
-        doc.disk_modified = Some(SystemTime::UNIX_EPOCH);
-        let newer = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
-
-        assert!(!doc.moved_on_disk(Some(SystemTime::UNIX_EPOCH)));
-        assert!(doc.moved_on_disk(Some(newer)));
-
-        doc.dismissed_disk_change = Some(newer);
-        assert!(!doc.moved_on_disk(Some(newer)), "the same change asks once");
-        assert!(
-            doc.moved_on_disk(Some(newer + Duration::from_secs(60))),
-            "a later change asks again"
-        );
     }
 
     /// A synced document forgets the deletion and dismissal of the version it
