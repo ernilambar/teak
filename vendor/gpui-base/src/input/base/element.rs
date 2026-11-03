@@ -808,6 +808,9 @@ impl<M: InputModeKind> TextElement<M> {
         cx: &mut App,
     ) -> (Vec<CursorRenderInfo>, Point<Pixels>, Option<usize>, bool) {
         let state = self.state.read(cx);
+        // Local patch: a caret may be wider than one pixel, and the margins that
+        // keep it inside the viewport follow that width.
+        let cursor_width = crate::input::cursor_width(cx);
 
         let line_height = last_layout.line_height;
         let visible_range = &last_layout.visible_range;
@@ -882,7 +885,9 @@ impl<M: InputModeKind> TextElement<M> {
             )
         };
 
-        let cursor_height = 0.85 * line_height;
+        // The caret spans the whole line box, as VS Code's does: at 85% of it the
+        // bar reads as short next to the same font size in a browser editor.
+        let cursor_height = line_height;
 
         for selection in state.selections.iter() {
             let is_active = selection.id == active_id;
@@ -934,7 +939,7 @@ impl<M: InputModeKind> TextElement<M> {
                         let safety_margin = match last_layout.text_align {
                             TextAlign::Left => RIGHT_MARGIN,
                             TextAlign::Right => px(0.),
-                            TextAlign::Center => CURSOR_WIDTH,
+                            TextAlign::Center => cursor_width,
                         };
                         scroll_offset.x = if scroll_offset.x + cursor_pos.x
                             > (bounds.size.width - line_number_width - safety_margin)
@@ -994,7 +999,7 @@ impl<M: InputModeKind> TextElement<M> {
                         cursor_x,
                         bounds.top() + cursor_pos.y + ((line_height - cursor_height) / 2.),
                     ),
-                    size(CURSOR_WIDTH, cursor_height),
+                    size(cursor_width, cursor_height),
                 ),
                 is_active,
             });
@@ -1013,7 +1018,7 @@ impl<M: InputModeKind> TextElement<M> {
             info.bounds.origin.x += scroll_offset.x;
             // Right-aligned text keeps the caret inside the viewport edge.
             if last_layout.text_align == TextAlign::Right {
-                info.bounds.origin.x = info.bounds.origin.x.min(bounds.right() - CURSOR_WIDTH);
+                info.bounds.origin.x = info.bounds.origin.x.min(bounds.right() - cursor_width);
             }
         }
         scroll_offset.y =

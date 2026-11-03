@@ -25,6 +25,14 @@ pub(crate) const DEFAULT_TAB_SIZE: usize = 4;
 /// gpui-base's own default, so the settings overlay offers the value the engine
 /// would pick on its own.
 pub(crate) const DEFAULT_CURSOR_SURROUNDING_LINES: usize = 3;
+/// Caret width in logical pixels when `editor.cursor_width` is unset. Two points
+/// is four device pixels on a retina display, which reads as clearly as a
+/// block cursor's edge instead of the hairline gpui-base draws by default.
+pub(crate) const DEFAULT_CURSOR_WIDTH: f32 = 2.;
+/// Narrowest caret `editor.cursor_width` accepts: the engine's own hairline.
+pub(crate) const MIN_CURSOR_WIDTH: f32 = 1.;
+/// Widest caret `editor.cursor_width` accepts, before it starts hiding glyphs.
+pub(crate) const MAX_CURSOR_WIDTH: f32 = 4.;
 /// Theme used when `ui.theme` is unset. Kept as a plain string so settings.rs
 /// stays free of GPUI types.
 pub(crate) const DEFAULT_THEME: &str = "dark";
@@ -207,6 +215,11 @@ pub(crate) struct EditorSettings {
     pub(crate) ensure_final_newline: Option<bool>,
     /// `None` keeps the engine's default margin.
     pub(crate) cursor_surrounding_lines: Option<usize>,
+    /// Caret stroke width in logical pixels. `None` keeps
+    /// [`DEFAULT_CURSOR_WIDTH`].
+    pub(crate) cursor_width: Option<f32>,
+    /// Whether the caret blinks. `None` keeps the engine's blinking default.
+    pub(crate) cursor_blink: Option<bool>,
 }
 
 impl EditorSettings {
@@ -225,6 +238,19 @@ impl EditorSettings {
     /// font joins into one glyph has no caret position between its characters.
     pub(crate) fn ligatures(&self) -> bool {
         self.ligatures.unwrap_or(false)
+    }
+
+    /// Caret width in logical pixels, held inside the range the settings overlay
+    /// offers so a hand-edited file cannot draw a caret over the text.
+    pub(crate) fn cursor_width(&self) -> f32 {
+        self.cursor_width
+            .map(|width| width.clamp(MIN_CURSOR_WIDTH, MAX_CURSOR_WIDTH))
+            .unwrap_or(DEFAULT_CURSOR_WIDTH)
+    }
+
+    /// Whether the caret blinks. On unless turned off.
+    pub(crate) fn cursor_blink(&self) -> bool {
+        self.cursor_blink.unwrap_or(true)
     }
 
     pub(crate) fn soft_wrap(&self) -> bool {
@@ -415,6 +441,8 @@ pub(crate) fn defaults_document(
             trim_trailing_whitespace: Some(editor.trim_trailing_whitespace()),
             ensure_final_newline: Some(editor.ensure_final_newline()),
             cursor_surrounding_lines: Some(DEFAULT_CURSOR_SURROUNDING_LINES),
+            cursor_width: Some(editor.cursor_width()),
+            cursor_blink: Some(editor.cursor_blink()),
         },
         ui: UiSettings {
             theme: Some(ui.theme().to_string()),
@@ -609,6 +637,16 @@ pub(crate) fn save_cursor_surrounding_lines(lines: Option<usize>) -> Result<Stri
         "editor",
         "cursor_surrounding_lines",
         lines.map(|lines| serde_json::json!(lines)),
+    )
+}
+
+/// Records the caret width (`editor.cursor_width`); `None` removes the override
+/// so [`DEFAULT_CURSOR_WIDTH`] applies again.
+pub(crate) fn save_cursor_width(width: Option<f32>) -> Result<String, String> {
+    save_setting(
+        "editor",
+        "cursor_width",
+        width.map(|width| serde_json::json!(width)),
     )
 }
 
@@ -835,6 +873,58 @@ mod tests {
         assert!(!settings.editor.trim_trailing_whitespace());
         assert!(!settings.editor.ensure_final_newline());
         assert_eq!(settings.editor.cursor_surrounding_lines, None);
+        assert_eq!(settings.editor.cursor_width, None);
+        assert_eq!(settings.editor.cursor_width(), DEFAULT_CURSOR_WIDTH);
+        assert_eq!(settings.editor.cursor_blink, None);
+        assert!(settings.editor.cursor_blink());
+    }
+
+    #[test]
+    fn cursor_width_is_clamped_to_the_offered_range() {
+        let mut settings = Settings::default();
+
+        settings.editor.cursor_width = Some(0.5);
+        assert_eq!(settings.editor.cursor_width(), MIN_CURSOR_WIDTH);
+
+        settings.editor.cursor_width = Some(9.);
+        assert_eq!(settings.editor.cursor_width(), MAX_CURSOR_WIDTH);
+
+        settings.editor.cursor_width = Some(3.);
+        assert_eq!(settings.editor.cursor_width(), 3.);
+
+        settings.editor.cursor_blink = Some(false);
+        assert!(!settings.editor.cursor_blink());
+    }
+
+    #[test]
+    fn cursor_options_round_trip_through_set_setting() {
+        let json = set_setting(
+            r#"{"editor": {"font_size": 15}}"#,
+            "editor",
+            "cursor_width",
+            Some(serde_json::json!(3.)),
+        )
+        .unwrap();
+        let json = set_setting(
+            &json,
+            "editor",
+            "cursor_blink",
+            Some(serde_json::Value::Bool(false)),
+        )
+        .unwrap();
+        let settings = parse_settings(&json).unwrap();
+
+        // Re-parsing proves both keys match their fields: an unknown key would be
+        // rejected rather than silently ignored.
+        assert_eq!(settings.editor.cursor_width, Some(3.));
+        assert!(!settings.editor.cursor_blink());
+        assert_eq!(settings.editor.font_size(), Some(15.));
+
+        // Clearing the width drops the override so the default applies again.
+        let cleared = set_setting(&json, "editor", "cursor_width", None).unwrap();
+        let settings = parse_settings(&cleared).unwrap();
+        assert_eq!(settings.editor.cursor_width, None);
+        assert_eq!(settings.editor.cursor_width(), DEFAULT_CURSOR_WIDTH);
     }
 
     #[test]
@@ -892,6 +982,8 @@ mod tests {
             parsed.editor.cursor_surrounding_lines,
             Some(DEFAULT_CURSOR_SURROUNDING_LINES)
         );
+        assert_eq!(parsed.editor.cursor_width(), editor.cursor_width());
+        assert_eq!(parsed.editor.cursor_blink(), editor.cursor_blink());
         assert_eq!(parsed.ui.theme(), ui.theme());
         assert_eq!(parsed.ui.light_scheme(), ui.light_scheme());
         assert_eq!(parsed.ui.dark_scheme(), ui.dark_scheme());

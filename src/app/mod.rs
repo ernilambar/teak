@@ -1201,6 +1201,9 @@ impl TeakApp {
                 state.set_cursor_surrounding_lines(editor.cursor_surrounding_lines, window, cx);
             });
         }
+        // The caret width and blink belong to the application, not to a tab, so
+        // they are applied once here rather than per editor.
+        crate::theme::apply_cursor(&self.settings.values, cx);
     }
 
     fn on_install_cli(&mut self, _: &InstallCli, window: &mut Window, cx: &mut Context<Self>) {
