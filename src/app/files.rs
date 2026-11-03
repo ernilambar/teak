@@ -180,6 +180,47 @@ pub(super) fn read_file(path: &Path) -> std::io::Result<FileContent> {
     }
 }
 
+/// Writes `bytes` to `path` through a temporary file renamed into place, so a
+/// write that fails part-way (a full disk) leaves the old file whole.
+///
+/// The temporary file sits beside the symlink's target, not the link, so the
+/// link survives, and it takes the old file's permissions. A read-only file is
+/// refused as a direct write would be, since the rename alone would replace it.
+/// When the folder refuses a new file, the bytes are written in place instead.
+/// Ownership and extended attributes are not carried over, and a hard-linked
+/// file becomes a separate copy.
+fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let permissions = std::fs::metadata(&target)
+        .ok()
+        .map(|meta| meta.permissions());
+    if permissions
+        .as_ref()
+        .is_some_and(|permissions| permissions.readonly())
+    {
+        return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    }
+    let temp = target.with_file_name(format!(".{}.teak-save", file_name(&target)));
+
+    let written = std::fs::write(&temp, bytes);
+    if written
+        .as_ref()
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
+    {
+        return std::fs::write(&target, bytes);
+    }
+    let replaced = written
+        .and_then(|()| match permissions {
+            Some(permissions) => std::fs::set_permissions(&temp, permissions),
+            None => Ok(()),
+        })
+        .and_then(|()| std::fs::rename(&temp, &target));
+    if replaced.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    replaced
+}
+
 /// Tells `done`, if there is one, how a save ended.
 fn report(
     done: Option<&SaveDone>,
@@ -588,13 +629,17 @@ impl TeakApp {
     }
 
     /// Builds the workspace file and binds the window to it. A name the save
-    /// pane returned without an extension gets one, so the file is recognized
-    /// the next time it is opened.
+    /// pane returned without the workspace extension gets it appended, so the
+    /// file is recognized the next time it is opened; `notes.txt` becomes
+    /// `notes.txt.teak-workspace` rather than losing the name that was typed.
     fn save_workspace_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let path = if workspace_file::is_workspace_path(&path) {
             path
         } else {
-            path.with_extension(workspace_file::EXTENSION)
+            let mut name = path.into_os_string();
+            name.push(".");
+            name.push(workspace_file::EXTENSION);
+            PathBuf::from(name)
         };
         match workspace_file::save(&path, self.workspace.roots()) {
             Ok(()) => {
@@ -1174,7 +1219,7 @@ impl TeakApp {
             let write_path = path.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { std::fs::write(write_path, text) })
+                .spawn(async move { write_replacing(&write_path, &text) })
                 .await;
 
             this.update_in(cx, |this, window, cx| {
@@ -2636,6 +2681,128 @@ mod tests {
         });
         let _ = std::fs::remove_file(&open);
         let _ = std::fs::remove_file(&other);
+    }
+
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("teak-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    fn set_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// A save replaces the file whole, keeps its mode and leaves no temporary
+    /// file behind.
+    #[test]
+    fn a_replacing_write_keeps_the_mode_and_leaves_no_temp_file() {
+        let dir = fresh_dir("replace-mode");
+        let file = dir.join("a.sh");
+        std::fs::write(&file, "old").unwrap();
+        set_mode(&file, 0o750);
+
+        super::write_replacing(&file, b"new").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "new");
+        assert_eq!(mode(&file), 0o750);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temp file");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Saving through a symlink writes its target and keeps the link.
+    #[test]
+    fn a_replacing_write_through_a_symlink_keeps_the_link() {
+        let dir = fresh_dir("replace-link");
+        let target = dir.join("target.txt");
+        let link = dir.join("link.txt");
+        std::fs::write(&target, "old").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        super::write_replacing(&link, b"new").unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A write that cannot finish leaves the original bytes alone.
+    #[test]
+    fn a_failed_replacing_write_leaves_the_original() {
+        let dir = fresh_dir("replace-fail");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "old").unwrap();
+        // A folder where the temporary file would go makes that write fail.
+        std::fs::create_dir(dir.join(".a.txt.teak-save")).unwrap();
+
+        assert!(super::write_replacing(&file, b"new").is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A read-only file is refused, as a direct write to it would be.
+    #[test]
+    fn a_replacing_write_refuses_a_read_only_file() {
+        let dir = fresh_dir("replace-readonly");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "old").unwrap();
+        set_mode(&file, 0o444);
+
+        assert!(super::write_replacing(&file, b"new").is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
+        set_mode(&file, 0o644);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A folder that refuses new files still lets a writable file be saved, in
+    /// place.
+    #[test]
+    fn a_replacing_write_falls_back_in_a_locked_folder() {
+        let dir = fresh_dir("replace-locked");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "old").unwrap();
+        set_mode(&dir, 0o555);
+
+        let result = super::write_replacing(&file, b"new");
+
+        set_mode(&dir, 0o755);
+        result.unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "new");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Save Workspace As keeps the name that was typed and appends the
+    /// extension, so an existing file of that name is never touched.
+    #[gpui_kit::test]
+    async fn save_workspace_as_appends_the_extension(cx: &mut TestAppContext) {
+        let dir = fresh_dir("workspace-ext");
+        let typed = dir.join("notes.txt");
+        std::fs::write(&typed, "keep").unwrap();
+        let (handle, app) = open_app(cx);
+
+        for path in [typed.clone(), dir.join("work")] {
+            cx.update_window(handle, |_, window, cx| {
+                app.update(cx, |this, cx| this.save_workspace_file(path, window, cx));
+            })
+            .unwrap();
+        }
+
+        assert_eq!(std::fs::read_to_string(&typed).unwrap(), "keep");
+        assert!(dir.join("notes.txt.teak-workspace").is_file());
+        assert!(dir.join("work.teak-workspace").is_file());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn temp_path(name: &str) -> PathBuf {
